@@ -322,6 +322,79 @@ fn main() {
                 }
             },
         },
+        Commands::Attachment(commands::AttachmentSubcommand { command }) => match command {
+            commands::AttachmentCommands::Add { path, mime } => {
+                match service.add_attachment(&cli.space, &path, &mime) {
+                    Ok(att_ref) => {
+                        if cli.json {
+                            println!("{}", json!({ "ref": att_ref.to_string() }));
+                        } else {
+                            println!("{att_ref}");
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("Add attachment error: {e}");
+                        exit(5);
+                    }
+                }
+            }
+
+            commands::AttachmentCommands::Extract { r_ref } => {
+                let parsed_ref = match ResourceRef::parse(&r_ref) {
+                    Ok(r) => r,
+                    Err(e) => {
+                        eprintln!("Invalid resource ref format '{r_ref}': {e}");
+                        exit(2);
+                    }
+                };
+
+                match service.run_extraction(&cli.space, &parsed_ref) {
+                    Ok(segments) => {
+                        if cli.json {
+                            println!(
+                                "{}",
+                                json!({
+                                    "attachment_ref": r_ref,
+                                    "segments_count": segments.len()
+                                })
+                            );
+                        } else {
+                            println!("Extracted {} segments for {r_ref}.", segments.len());
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("Extract attachment error: {e}");
+                        exit(5);
+                    }
+                }
+            }
+
+            commands::AttachmentCommands::Segments { r_ref } => {
+                let parsed_ref = match ResourceRef::parse(&r_ref) {
+                    Ok(r) => r,
+                    Err(e) => {
+                        eprintln!("Invalid resource ref format '{r_ref}': {e}");
+                        exit(2);
+                    }
+                };
+
+                match service.query_segments(&parsed_ref) {
+                    Ok(segments) => {
+                        if cli.json {
+                            println!("{}", serde_json::to_string(&segments).unwrap());
+                        } else {
+                            for seg in segments {
+                                println!("[{}-{}] {}", seg.offset_start, seg.offset_end, seg.text);
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("Query segments error: {e}");
+                        exit(5);
+                    }
+                }
+            }
+        },
 
         Commands::Mcp(McpSubcommand {
             command: McpCommands::Serve,

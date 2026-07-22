@@ -206,6 +206,45 @@ impl McpServer {
                                 "required": ["id", "kind", "path"],
                                 "additionalProperties": false
                             }
+                        },
+                        {
+                            "name": "attachment_add",
+                            "description": "Add an attachment file to space",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "space": { "type": "string" },
+                                    "path": { "type": "string" },
+                                    "mime": { "type": "string" }
+                                },
+                                "required": ["path"],
+                                "additionalProperties": false
+                            }
+                        },
+                        {
+                            "name": "attachment_extract",
+                            "description": "Run text/metadata extraction job on attachment ref",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "space": { "type": "string" },
+                                    "ref": { "type": "string" }
+                                },
+                                "required": ["ref"],
+                                "additionalProperties": false
+                            }
+                        },
+                        {
+                            "name": "query_segments",
+                            "description": "Query extracted text segments for attachment ref",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "ref": { "type": "string" }
+                                },
+                                "required": ["ref"],
+                                "additionalProperties": false
+                            }
                         }
                     ]
                 }
@@ -435,6 +474,60 @@ impl McpServer {
                 match service.add_source(space_path, config) {
                     Ok(_) => Ok(json!({ "added": true }).to_string()),
                     Err(e) => Err((format!("Internal source_add error: {e}"), true)),
+                }
+            }
+            "attachment_add" => {
+                let space_str = args.get("space").and_then(|s| s.as_str()).unwrap_or(".");
+                let space_path = std::path::Path::new(space_str);
+
+                let path_str = args
+                    .get("path")
+                    .and_then(|p| p.as_str())
+                    .ok_or_else(|| ("Invalid params: missing 'path'".to_string(), false))?;
+                let default_mime = args
+                    .get("mime")
+                    .and_then(|m| m.as_str())
+                    .unwrap_or("application/octet-stream");
+
+                let file_path = std::path::Path::new(path_str);
+                match service.add_attachment(space_path, file_path, default_mime) {
+                    Ok(att_ref) => Ok(json!({ "ref": att_ref.to_string() }).to_string()),
+                    Err(e) => Err((format!("Internal attachment_add error: {e}"), true)),
+                }
+            }
+
+            "attachment_extract" => {
+                let space_str = args.get("space").and_then(|s| s.as_str()).unwrap_or(".");
+                let space_path = std::path::Path::new(space_str);
+
+                let ref_str = args
+                    .get("ref")
+                    .and_then(|r| r.as_str())
+                    .ok_or_else(|| ("Invalid params: missing 'ref'".to_string(), false))?;
+                let r_ref = ResourceRef::parse(ref_str)
+                    .map_err(|e| (format!("Invalid resource ref '{ref_str}': {e}"), false))?;
+
+                match service.run_extraction(space_path, &r_ref) {
+                    Ok(segments) => Ok(json!({
+                        "attachment_ref": ref_str,
+                        "segments_count": segments.len()
+                    })
+                    .to_string()),
+                    Err(e) => Err((format!("Internal attachment_extract error: {e}"), true)),
+                }
+            }
+
+            "query_segments" => {
+                let ref_str = args
+                    .get("ref")
+                    .and_then(|r| r.as_str())
+                    .ok_or_else(|| ("Invalid params: missing 'ref'".to_string(), false))?;
+                let r_ref = ResourceRef::parse(ref_str)
+                    .map_err(|e| (format!("Invalid resource ref '{ref_str}': {e}"), false))?;
+
+                match service.query_segments(&r_ref) {
+                    Ok(segments) => Ok(serde_json::to_string(&segments).unwrap()),
+                    Err(e) => Err((format!("Internal query_segments error: {e}"), true)),
                 }
             }
             _ => Err((format!("Unknown tool: {name}"), false)),

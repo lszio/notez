@@ -46,6 +46,8 @@ pub enum Commands {
     Task(TaskSubcommand),
     /// Source management commands (federation)
     Source(SourceSubcommand),
+    /// Attachment operations and extraction jobs
+    Attachment(AttachmentSubcommand),
 
     /// MCP stdio server commands
     Mcp(McpSubcommand),
@@ -119,6 +121,29 @@ pub enum TaskCommands {
         #[arg(long, default_value = "2026-07-22 Wed 16:00")]
         timestamp: String,
     },
+}
+#[derive(Args, Debug)]
+pub struct AttachmentSubcommand {
+    #[command(subcommand)]
+    pub command: AttachmentCommands,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum AttachmentCommands {
+    /// Add an attachment file to space
+    Add {
+        #[arg(long)]
+        path: PathBuf,
+
+        #[arg(long, default_value = "application/octet-stream")]
+        mime: String,
+    },
+
+    /// Run text/metadata extraction on an attachment
+    Extract { r_ref: String },
+
+    /// Query extracted text segments for an attachment
+    Segments { r_ref: String },
 }
 #[derive(Args, Debug)]
 pub struct SourceSubcommand {
