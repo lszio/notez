@@ -10,6 +10,7 @@ use ulid::Ulid;
 pub enum ResourceKind {
     Document,
     Heading,
+    Attachment,
 }
 
 impl ResourceKind {
@@ -17,6 +18,7 @@ impl ResourceKind {
         match self {
             ResourceKind::Document => "document",
             ResourceKind::Heading => "heading",
+            ResourceKind::Attachment => "attachment",
         }
     }
 }
@@ -53,6 +55,7 @@ impl ResourceRef {
         let kind = match kind_str {
             "document" => ResourceKind::Document,
             "heading" => ResourceKind::Heading,
+            "attachment" => ResourceKind::Attachment,
             _ => return Err(ResourceRefError::UnknownKind(kind_str.to_string())),
         };
         let id =

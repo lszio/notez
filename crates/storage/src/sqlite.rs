@@ -13,6 +13,14 @@ pub enum StorageError {
     #[error("Invalid data: {0}")]
     InvalidData(String),
 }
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct SegmentRecord {
+    pub id: String,
+    pub attachment_ref: String,
+    pub text: String,
+    pub offset_start: usize,
+    pub offset_end: usize,
+}
 
 pub struct SqliteProjection {
     conn: Connection,
@@ -57,9 +65,66 @@ impl SqliteProjection {
             CREATE INDEX IF NOT EXISTS idx_resources_kind ON resources(kind);
             CREATE INDEX IF NOT EXISTS idx_resources_title ON resources(title);
             CREATE INDEX IF NOT EXISTS idx_relations_source ON relations(source_id);
+
+            CREATE TABLE IF NOT EXISTS segments (
+                id TEXT PRIMARY KEY,
+                attachment_ref TEXT NOT NULL,
+                text TEXT NOT NULL,
+                offset_start INTEGER NOT NULL,
+                offset_end INTEGER NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_segments_attachment ON segments(attachment_ref);
             ",
         )?;
         Ok(())
+    }
+    pub fn insert_segments(&mut self, segments: &[SegmentRecord]) -> Result<(), StorageError> {
+        let tx = self.conn.transaction()?;
+        {
+            let mut stmt = tx.prepare(
+                "INSERT OR REPLACE INTO segments (id, attachment_ref, text, offset_start, offset_end)
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
+            )?;
+            for seg in segments {
+                stmt.execute(params![
+                    seg.id,
+                    seg.attachment_ref,
+                    seg.text,
+                    seg.offset_start as i64,
+                    seg.offset_end as i64,
+                ])?;
+            }
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    pub fn query_segments(&self, attachment_ref: &str) -> Result<Vec<SegmentRecord>, StorageError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, attachment_ref, text, offset_start, offset_end
+             FROM segments WHERE attachment_ref = ?1 ORDER BY offset_start ASC",
+        )?;
+        let rows = stmt.query_map(params![attachment_ref], |row| {
+            let id: String = row.get(0)?;
+            let attachment_ref: String = row.get(1)?;
+            let text: String = row.get(2)?;
+            let offset_start: i64 = row.get(3)?;
+            let offset_end: i64 = row.get(4)?;
+            Ok(SegmentRecord {
+                id,
+                attachment_ref,
+                text,
+                offset_start: offset_start as usize,
+                offset_end: offset_end as usize,
+            })
+        })?;
+
+        let mut results = Vec::new();
+        for r in rows {
+            results.push(r?);
+        }
+        Ok(results)
     }
 }
 impl ProjectionStore for SqliteProjection {
