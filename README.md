@@ -6,18 +6,20 @@ Notez is a local-first, Org-mode-first knowledge federation engine written in Ru
 
 1. **Files are authoritative:** Native Org and Markdown files are the single source of truth. SQLite databases, knowledge graphs, and projections are completely disposable and rebuildable from original files.
 2. **Org & Markdown support:** Org TODO states, properties, headings, and ID links, plus Markdown frontmatter, HTML comment heading IDs, and WikiLinks (`[[...]]`).
-3. **Unified resource algebra:** All document nodes and headings use stable `ResourceRef` identifiers (`document:<ULID>` and `heading:<ULID>`). Paths and titles are not identities.
+3. **Unified resource algebra:** All document nodes, headings, and attachments use stable `ResourceRef` identifiers (`document:<ULID>`, `heading:<ULID>`, `attachment:<ULID>`). Paths and titles are not identities.
 4. **Rebuildable projection:** Deleting `.notez/index.sqlite` is always safe after stopping Notez; running `notez space rebuild` or `notez source sync` reconstructs the projection byte-for-byte.
 
 ## Workspace Layout
 
 ```text
 crates/
-├── domain/       Resource algebra, types, selectors, rules, and projection traits
-├── document/     Lossless Org and Markdown scanners (preserves raw content)
-├── storage/      Disposable SQLite projection store
+├── domain/       Resource algebra, types, selectors, rules, communities, and projection traits
+├── document/     Lossless Org and Markdown scanners and security guards
+├── storage/      Disposable SQLite projection store and Content-Addressed BlobStore
+├── artifact/     Attachment extractors, segment slicer, recipe engine, and SKILL.md exporter
 ├── source/       SourceAdapters (Native, Git, Obsidian Vaults)
-├── application/  Application service (scan_native, scan_federation, query, resolve, read, rebuild)
+├── sync/         Manifests, object store, 3-way merge engine, and folder transport
+├── application/  Application service (scan, query, resolve, read, attachment, sync, doctor)
 ├── cli/          CLI entry point (`notez`)
 └── mcp/          Model Context Protocol stdio server
 ```
@@ -29,6 +31,22 @@ cargo build --release
 ```
 
 The published binary is `target/release/notez`.
+
+## Acceptance Test Suites
+
+Run the full end-to-end release acceptance suite:
+
+```bash
+bash scripts/acceptance-release.sh
+```
+
+Sub-acceptance scripts:
+- `scripts/acceptance-core.sh`
+- `scripts/acceptance-rules.sh`
+- `scripts/acceptance-federation.sh`
+- `scripts/acceptance-attachments.sh`
+- `scripts/acceptance-artifacts.sh`
+- `scripts/acceptance-sync.sh`
 
 ## CLI Usage
 
@@ -88,6 +106,17 @@ Atomic Org TODO state transition with CLOSED timestamp and LOGBOOK entry:
 ```bash
 notez --space /path/to/space task transition heading:01J00000000000000000000001 --to DONE
 ```
+
+### Attachment Operations & Text Extraction
+
+Add attachments, run text/metadata extraction jobs, and query extracted segments:
+
+```bash
+notez --space /path/to/space attachment add --path /path/to/file.txt --mime text/plain
+notez --space /path/to/space attachment extract attachment:01J00000000000000000000001
+notez --space /path/to/space attachment segments attachment:01J00000000000000000000001 --json
+```
+
 ### Community Management
 
 Create and list communities bound by selectors:
@@ -112,6 +141,17 @@ Export a standalone `SKILL.md` package containing prompt directives and referenc
 ```bash
 notez --space /path/to/space skill export --community dev_comm --description "DevSync Prompt Skill" --out /path/to/skill
 ```
+
+### Source Management (Federation)
+
+Mount external sources such as Obsidian Vaults or Git repositories:
+
+```bash
+notez --space /path/to/space source add --id vault_src --kind obsidian --path /path/to/vault --read-only
+notez --space /path/to/space source list --json
+notez --space /path/to/space source sync --json
+```
+
 ### Folder Synchronization
 
 Synchronize notes offline between devices via a shared folder (`heads/`, `manifests/`, `objects/`, `tombstones/`):
@@ -122,14 +162,21 @@ notez --space /path/to/space_b sync pull --actor device_b --folder /path/to/shar
 notez --space /path/to/space_b sync conflicts --json
 ```
 
-### Source Management (Federation)
+### Space Doctor & Diagnostics
 
-Mount external sources such as Obsidian Vaults or Git repositories:
+Run space integrity checks (broken links, missing files, corrupt indexes):
 
 ```bash
-notez --space /path/to/space source add --id vault_src --kind obsidian --path /path/to/vault --read-only
-notez --space /path/to/space source list --json
-notez --space /path/to/space source sync --json
+notez --space /path/to/space space doctor --json
+```
+
+### Job Management & Artifact Freshness
+
+List background jobs and check artifact freshness:
+
+```bash
+notez --space /path/to/space job list --json
+notez --space /path/to/space artifact stale --json
 ```
 
 ### Rebuild Projection Index
@@ -142,7 +189,7 @@ notez --space /path/to/space space rebuild
 
 ### MCP Stdio Server
 
-Exposes query, resolve, read, inspect, agenda, task transition, and source management tools over stdio using newline-delimited JSON-RPC:
+Exposes query, resolve, read, inspect, agenda, task transition, attachment, community, derive, skill export, source management, and sync tools over stdio using newline-delimited JSON-RPC:
 
 ```bash
 notez --space /path/to/space mcp serve
