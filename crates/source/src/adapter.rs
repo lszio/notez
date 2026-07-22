@@ -19,6 +19,28 @@ pub enum SourceKind {
     Native,
     Git,
     Obsidian,
+    Anytype,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SourceCapabilities {
+    pub can_read: bool,
+    pub can_write: bool,
+    pub can_import: bool,
+    pub can_watch: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PreparedWrite {
+    pub target_ref: String,
+    pub payload: String,
+    pub ready: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WriteResult {
+    pub target_ref: String,
+    pub committed: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -56,4 +78,28 @@ pub struct ScannedSource {
 pub trait SourceAdapter {
     fn config(&self) -> &SourceConfig;
     fn scan(&self) -> Result<ScannedSource, SourceError>;
+
+    fn capabilities(&self) -> SourceCapabilities {
+        SourceCapabilities {
+            can_read: true,
+            can_write: false,
+            can_import: false,
+            can_watch: false,
+        }
+    }
+
+    fn prepare_write(&self, target_ref: &str, payload: &str) -> Result<PreparedWrite, SourceError> {
+        Ok(PreparedWrite {
+            target_ref: target_ref.to_string(),
+            payload: payload.to_string(),
+            ready: true,
+        })
+    }
+
+    fn commit_write(&self, prep: &PreparedWrite) -> Result<WriteResult, SourceError> {
+        Ok(WriteResult {
+            target_ref: prep.target_ref.clone(),
+            committed: true,
+        })
+    }
 }
