@@ -9,3 +9,4 @@ thiserror = "2"
 ulid = { version = "1", features = ["serde"] }
 rusqlite = { version = "0.33", features = ["bundled"] }
 walkdir = "2"
+clap = { version = "4", features = ["derive"] }
