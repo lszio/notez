@@ -1,4 +1,6 @@
 pub mod query;
+pub mod community;
+pub use community::{Community, CommunityCandidate, CommunitySelector};
 pub mod resource;
 pub mod rule;
 pub mod schema;
