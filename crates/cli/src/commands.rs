@@ -62,8 +62,10 @@ pub enum Commands {
 
     /// Space administrative commands
     Space(SpaceSubcommand),
-}
 
+    /// Synchronization commands (folder push/pull/conflicts)
+    Sync(SyncSubcommand),
+}
 #[derive(Args, Debug)]
 pub struct QueryArgs {
     #[arg(long)]
@@ -157,6 +159,35 @@ pub enum AttachmentCommands {
 pub struct SourceSubcommand {
     #[command(subcommand)]
     pub command: SourceCommands,
+}
+#[derive(Args, Debug)]
+pub struct SyncSubcommand {
+    #[command(subcommand)]
+    pub command: SyncCommands,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum SyncCommands {
+    /// Push space changes to shared folder
+    Push {
+        #[arg(long, default_value = "default_actor")]
+        actor: String,
+
+        #[arg(long)]
+        folder: PathBuf,
+    },
+
+    /// Pull changes from shared folder into space
+    Pull {
+        #[arg(long, default_value = "default_actor")]
+        actor: String,
+
+        #[arg(long)]
+        folder: PathBuf,
+    },
+
+    /// List active sync conflicts
+    Conflicts,
 }
 #[derive(Args, Debug)]
 pub struct CommunitySubcommand {

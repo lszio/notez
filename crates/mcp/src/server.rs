@@ -290,6 +290,45 @@ impl McpServer {
                                 "required": ["community", "out"],
                                 "additionalProperties": false
                             }
+                        },
+                        {
+                            "name": "sync_push",
+                            "description": "Push space changes to shared folder",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "space": { "type": "string" },
+                                    "actor": { "type": "string" },
+                                    "folder": { "type": "string" }
+                                },
+                                "required": ["folder"],
+                                "additionalProperties": false
+                            }
+                        },
+                        {
+                            "name": "sync_pull",
+                            "description": "Pull changes from shared folder into space",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "space": { "type": "string" },
+                                    "actor": { "type": "string" },
+                                    "folder": { "type": "string" }
+                                },
+                                "required": ["folder"],
+                                "additionalProperties": false
+                            }
+                        },
+                        {
+                            "name": "sync_conflicts",
+                            "description": "List active sync conflicts in space",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "space": { "type": "string" }
+                                },
+                                "additionalProperties": false
+                            }
                         }
                     ]
                 }
@@ -665,6 +704,57 @@ impl McpServer {
                     Err(e) => Err((format!("Internal export_skill error: {e}"), true)),
                 }
             }
+            "sync_push" => {
+                let space_str = args.get("space").and_then(|s| s.as_str()).unwrap_or(".");
+                let space_path = std::path::Path::new(space_str);
+                let actor = args
+                    .get("actor")
+                    .and_then(|a| a.as_str())
+                    .unwrap_or("mcp_actor");
+                let folder_str = args
+                    .get("folder")
+                    .and_then(|f| f.as_str())
+                    .ok_or_else(|| ("Invalid params: missing 'folder'".to_string(), false))?;
+                let folder_path = std::path::Path::new(folder_str);
+
+                match service.sync_push(actor, space_path, folder_path) {
+                    Ok(report) => Ok(json!({
+                        "pushed_files": report.pushed_files,
+                        "pushed_objects": report.pushed_objects
+                    })
+                    .to_string()),
+                    Err(e) => Err((format!("Internal sync_push error: {e}"), true)),
+                }
+            }
+
+            "sync_pull" => {
+                let space_str = args.get("space").and_then(|s| s.as_str()).unwrap_or(".");
+                let space_path = std::path::Path::new(space_str);
+                let actor = args
+                    .get("actor")
+                    .and_then(|a| a.as_str())
+                    .unwrap_or("mcp_actor");
+                let folder_str = args
+                    .get("folder")
+                    .and_then(|f| f.as_str())
+                    .ok_or_else(|| ("Invalid params: missing 'folder'".to_string(), false))?;
+                let folder_path = std::path::Path::new(folder_str);
+
+                match service.sync_pull(actor, space_path, folder_path) {
+                    Ok(report) => Ok(json!({
+                        "pulled_files": report.pulled_files,
+                        "merged_files": report.merged_files,
+                        "conflicts_count": report.conflicts.len()
+                    })
+                    .to_string()),
+                    Err(e) => Err((format!("Internal sync_pull error: {e}"), true)),
+                }
+            }
+
+            "sync_conflicts" => match service.list_conflicts() {
+                Ok(conflicts) => Ok(serde_json::to_string(&conflicts).unwrap()),
+                Err(e) => Err((format!("Internal sync_conflicts error: {e}"), true)),
+            },
             _ => Err((format!("Unknown tool: {name}"), false)),
         }
     }

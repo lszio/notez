@@ -487,6 +487,71 @@ fn main() {
                 exit(5);
             }
         },
+        Commands::Sync(commands::SyncSubcommand { command }) => match command {
+            commands::SyncCommands::Push { actor, folder } => {
+                match service.sync_push(&actor, &cli.space, &folder) {
+                    Ok(report) => {
+                        if cli.json {
+                            println!(
+                                "{}",
+                                json!({
+                                    "pushed_files": report.pushed_files,
+                                    "pushed_objects": report.pushed_objects
+                                })
+                            );
+                        } else {
+                            println!("Pushed {} files to shared folder.", report.pushed_files);
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("Sync push error: {e}");
+                        exit(5);
+                    }
+                }
+            }
+
+            commands::SyncCommands::Pull { actor, folder } => {
+                match service.sync_pull(&actor, &cli.space, &folder) {
+                    Ok(report) => {
+                        if cli.json {
+                            println!(
+                                "{}",
+                                json!({
+                                    "pulled_files": report.pulled_files,
+                                    "merged_files": report.merged_files,
+                                    "conflicts_count": report.conflicts.len()
+                                })
+                            );
+                        } else {
+                            println!(
+                                "Pulled {} files, merged {}.",
+                                report.pulled_files, report.merged_files
+                            );
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("Sync pull error: {e}");
+                        exit(5);
+                    }
+                }
+            }
+
+            commands::SyncCommands::Conflicts => match service.list_conflicts() {
+                Ok(conflicts) => {
+                    if cli.json {
+                        println!("{}", serde_json::to_string(&conflicts).unwrap());
+                    } else {
+                        for c in conflicts {
+                            println!("Conflict in {}: {}", c.logical_path, c.conflict_text);
+                        }
+                    }
+                }
+                Err(e) => {
+                    eprintln!("Sync conflicts error: {e}");
+                    exit(5);
+                }
+            },
+        },
 
         Commands::Mcp(McpSubcommand {
             command: McpCommands::Serve,
