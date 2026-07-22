@@ -552,6 +552,39 @@ fn main() {
                 }
             },
         },
+        Commands::Job(commands::JobSubcommand {
+            command: commands::JobCommands::List,
+        }) => match service.list_jobs() {
+            Ok(jobs) => {
+                if cli.json {
+                    println!("{}", serde_json::to_string(&jobs).unwrap());
+                } else {
+                    for j in jobs {
+                        println!("Job {} ({}) -> {}", j.job_id, j.job_type, j.status);
+                    }
+                }
+            }
+            Err(e) => {
+                eprintln!("List jobs error: {e}");
+                exit(5);
+            }
+        },
+
+        Commands::Artifact(commands::ArtifactSubcommand {
+            command: commands::ArtifactCommands::Stale,
+        }) => match service.check_artifact_freshness(&cli.space) {
+            Ok(stale_report) => {
+                if cli.json {
+                    println!("{}", serde_json::to_string(&stale_report).unwrap());
+                } else {
+                    println!("Artifact Freshness: {}", stale_report.status);
+                }
+            }
+            Err(e) => {
+                eprintln!("Artifact freshness check error: {e}");
+                exit(5);
+            }
+        },
 
         Commands::Mcp(McpSubcommand {
             command: McpCommands::Serve,
@@ -564,31 +597,50 @@ fn main() {
             }
         }
 
-        Commands::Space(SpaceSubcommand {
-            command: SpaceCommands::Rebuild,
-        }) => match service.rebuild(&cli.space) {
-            Ok(report) => {
-                if cli.json {
-                    println!(
-                        "{}",
-                        json!({
-                            "rebuilt": true,
-                            "scanned_files": report.scanned_files,
-                            "scanned_resources": report.scanned_resources,
-                            "scanned_relations": report.scanned_relations,
-                        })
-                    );
-                } else {
-                    println!(
-                        "Rebuilt index: {} files, {} resources, {} relations.",
-                        report.scanned_files, report.scanned_resources, report.scanned_relations
-                    );
+        Commands::Space(SpaceSubcommand { command }) => match command {
+            SpaceCommands::Rebuild => match service.rebuild(&cli.space) {
+                Ok(report) => {
+                    if cli.json {
+                        println!(
+                            "{}",
+                            json!({
+                                "rebuilt": true,
+                                "scanned_files": report.scanned_files,
+                                "scanned_resources": report.scanned_resources,
+                                "scanned_relations": report.scanned_relations,
+                            })
+                        );
+                    } else {
+                        println!(
+                            "Rebuilt index: {} files, {} resources, {} relations.",
+                            report.scanned_files,
+                            report.scanned_resources,
+                            report.scanned_relations
+                        );
+                    }
                 }
-            }
-            Err(e) => {
-                eprintln!("Rebuild error: {e}");
-                exit(5);
-            }
+                Err(e) => {
+                    eprintln!("Rebuild error: {e}");
+                    exit(5);
+                }
+            },
+
+            SpaceCommands::Doctor => match service.space_doctor(&cli.space) {
+                Ok(report) => {
+                    if cli.json {
+                        println!("{}", serde_json::to_string(&report).unwrap());
+                    } else {
+                        println!("Space Doctor Status: {}", report.status);
+                        for issue in report.issues {
+                            println!("[{}] {}: {}", issue.severity, issue.code, issue.message);
+                        }
+                    }
+                }
+                Err(e) => {
+                    eprintln!("Space doctor error: {e}");
+                    exit(5);
+                }
+            },
         },
     }
 }

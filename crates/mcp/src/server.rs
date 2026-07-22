@@ -329,6 +329,39 @@ impl McpServer {
                                 },
                                 "additionalProperties": false
                             }
+                        },
+                        {
+                            "name": "space_doctor",
+                            "description": "Run space integrity diagnostics",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "space": { "type": "string" }
+                                },
+                                "additionalProperties": false
+                            }
+                        },
+                        {
+                            "name": "job_list",
+                            "description": "List background jobs and tasks",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "space": { "type": "string" }
+                                },
+                                "additionalProperties": false
+                            }
+                        },
+                        {
+                            "name": "artifact_stale",
+                            "description": "Check artifact freshness against source files",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "space": { "type": "string" }
+                                },
+                                "additionalProperties": false
+                            }
                         }
                     ]
                 }
@@ -755,6 +788,28 @@ impl McpServer {
                 Ok(conflicts) => Ok(serde_json::to_string(&conflicts).unwrap()),
                 Err(e) => Err((format!("Internal sync_conflicts error: {e}"), true)),
             },
+            "space_doctor" => {
+                let space_str = args.get("space").and_then(|s| s.as_str()).unwrap_or(".");
+                let space_path = std::path::Path::new(space_str);
+                match service.space_doctor(space_path) {
+                    Ok(report) => Ok(serde_json::to_string(&report).unwrap()),
+                    Err(e) => Err((format!("Internal space_doctor error: {e}"), true)),
+                }
+            }
+
+            "job_list" => match service.list_jobs() {
+                Ok(jobs) => Ok(serde_json::to_string(&jobs).unwrap()),
+                Err(e) => Err((format!("Internal job_list error: {e}"), true)),
+            },
+
+            "artifact_stale" => {
+                let space_str = args.get("space").and_then(|s| s.as_str()).unwrap_or(".");
+                let space_path = std::path::Path::new(space_str);
+                match service.check_artifact_freshness(space_path) {
+                    Ok(report) => Ok(serde_json::to_string(&report).unwrap()),
+                    Err(e) => Err((format!("Internal artifact_stale error: {e}"), true)),
+                }
+            }
             _ => Err((format!("Unknown tool: {name}"), false)),
         }
     }

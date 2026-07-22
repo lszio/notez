@@ -56,6 +56,11 @@ pub enum Commands {
 
     /// Agent Skill export commands
     Skill(SkillSubcommand),
+    /// Job and background task management
+    Job(JobSubcommand),
+
+    /// Derived artifact management
+    Artifact(ArtifactSubcommand),
 
     /// MCP stdio server commands
     Mcp(McpSubcommand),
@@ -109,11 +114,6 @@ pub struct McpSubcommand {
 pub enum McpCommands {
     /// Start MCP stdio server
     Serve,
-}
-#[derive(Subcommand, Debug)]
-pub enum SpaceCommands {
-    /// Rebuild SQLite projection for the space
-    Rebuild,
 }
 #[derive(Args, Debug)]
 pub struct TaskSubcommand {
@@ -188,6 +188,38 @@ pub enum SyncCommands {
 
     /// List active sync conflicts
     Conflicts,
+}
+#[derive(Subcommand, Debug)]
+pub enum SpaceCommands {
+    /// Rebuild SQLite projection for the space
+    Rebuild,
+
+    /// Run space integrity diagnostics (space doctor)
+    Doctor,
+}
+
+#[derive(Args, Debug)]
+pub struct JobSubcommand {
+    #[command(subcommand)]
+    pub command: JobCommands,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum JobCommands {
+    /// List background tasks and jobs
+    List,
+}
+
+#[derive(Args, Debug)]
+pub struct ArtifactSubcommand {
+    #[command(subcommand)]
+    pub command: ArtifactCommands,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum ArtifactCommands {
+    /// Check artifact freshness against source files
+    Stale,
 }
 #[derive(Args, Debug)]
 pub struct CommunitySubcommand {
