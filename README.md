@@ -88,6 +88,30 @@ Atomic Org TODO state transition with CLOSED timestamp and LOGBOOK entry:
 ```bash
 notez --space /path/to/space task transition heading:01J00000000000000000000001 --to DONE
 ```
+### Community Management
+
+Create and list communities bound by selectors:
+
+```bash
+notez --space /path/to/space community create --id dev_comm --name "DevSync" --title-contains "sync"
+notez --space /path/to/space community list --json
+```
+
+### Derive Recipe Artifacts
+
+Derive `summary`, `llms.txt`, `context-pack`, or `skill-ir` artifacts:
+
+```bash
+notez --space /path/to/space derive --community dev_comm --recipe summary --json
+```
+
+### Agent Skill Export
+
+Export a standalone `SKILL.md` package containing prompt directives and references:
+
+```bash
+notez --space /path/to/space skill export --community dev_comm --description "DevSync Prompt Skill" --out /path/to/skill
+```
 
 ### Source Management (Federation)
 

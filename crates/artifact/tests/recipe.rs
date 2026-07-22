@@ -1,4 +1,4 @@
-use artifact::recipe::{DerivedArtifact, Recipe, RecipeEvaluator, RecipeKind};
+use artifact::recipe::{Recipe, RecipeEvaluator, RecipeKind};
 use domain::{Resource, ResourceKind, ResourceRef};
 use std::collections::BTreeMap;
 
@@ -43,7 +43,11 @@ fn recipe_derivation_summary_llms_txt_and_context_pack() {
     };
     let artifact_llms = RecipeEvaluator::evaluate(&recipe_llms, &resources).unwrap();
     assert!(artifact_llms.content.contains("# LLMs.txt Entry"));
-    assert!(artifact_llms.content.contains("heading:01J00000000000000000000010"));
+    assert!(
+        artifact_llms
+            .content
+            .contains("heading:01J00000000000000000000010")
+    );
 
     let recipe_cp = Recipe {
         name: "context-pack".to_string(),

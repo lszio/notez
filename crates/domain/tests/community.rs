@@ -1,4 +1,4 @@
-use domain::community::{Community, CommunityCandidate, CommunitySelector};
+use domain::community::Community;
 use domain::{Resource, ResourceKind, ResourceRef, Selector};
 use std::collections::BTreeMap;
 

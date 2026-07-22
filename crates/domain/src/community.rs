@@ -25,16 +25,16 @@ impl Community {
                 continue;
             }
 
-            if let Some(ref kind) = self.selector.kind {
-                if res.kind != *kind {
-                    continue;
-                }
+            if let Some(ref kind) = self.selector.kind
+                && res.kind != *kind
+            {
+                continue;
             }
 
-            if let Some(ref sub) = self.selector.title_contains {
-                if !res.title.to_lowercase().contains(&sub.to_lowercase()) {
-                    continue;
-                }
+            if let Some(ref sub) = self.selector.title_contains
+                && !res.title.to_lowercase().contains(&sub.to_lowercase())
+            {
+                continue;
             }
 
             if !self.selector.exact_refs.is_empty()
