@@ -1,5 +1,5 @@
 use application::ApplicationService;
-use domain::{ResourceKind, ResourceRef};
+use domain::ResourceRef;
 use std::fs;
 use storage::SqliteProjection;
 

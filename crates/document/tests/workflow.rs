@@ -23,7 +23,9 @@ fn parse_workflow_profile_and_apply_transition() {
         transition.closed_timestamp,
         Some("2026-07-22 Wed 14:00".to_string())
     );
-    assert!(transition
-        .logbook_entry
-        .contains("- State \"DONE\"       from \"NEXT\""));
+    assert!(
+        transition
+            .logbook_entry
+            .contains("- State \"DONE\"       from \"NEXT\"")
+    );
 }

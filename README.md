@@ -63,6 +63,29 @@ Fetch full resource metadata and properties:
 ```bash
 notez --space /path/to/space read heading:01J00000000000000000000001 --json
 ```
+### Inspect Rule Traces
+
+Inspect classification, derivation, and validation traces for a resource ref:
+
+```bash
+notez --space /path/to/space inspect heading:01J00000000000000000000001 --rules --json
+```
+
+### Agenda View
+
+Query scheduled or deadline items across space:
+
+```bash
+notez --space /path/to/space agenda --json
+```
+
+### Task State Transition
+
+Atomic Org TODO state transition with CLOSED timestamp and LOGBOOK entry:
+
+```bash
+notez --space /path/to/space task transition heading:01J00000000000000000000001 --to DONE
+```
 
 ### Rebuild Projection Index
 
