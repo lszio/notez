@@ -29,7 +29,10 @@ See [[Obsidian Vault]] and [[id:01J00000000000000000000902][Target Link]].
     );
     assert_eq!(doc.kind, ResourceKind::Document);
     assert_eq!(doc.title, "Markdown Architecture");
-    assert_eq!(doc.properties.get("type").map(|s| s.as_str()), Some("project"));
+    assert_eq!(
+        doc.properties.get("type").map(|s| s.as_str()),
+        Some("project")
+    );
 
     let heading = &scanned.resources[1];
     assert_eq!(

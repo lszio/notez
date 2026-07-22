@@ -4,19 +4,20 @@ Notez is a local-first, Org-mode-first knowledge federation engine written in Ru
 
 ## Core Principles
 
-1. **Files are authoritative:** Native Org files are the single source of truth. SQLite databases, knowledge graphs, and projections are completely disposable and rebuildable from original files.
-2. **Org-mode first:** Org TODO states, properties, headings, and ID links are core domain primitives.
+1. **Files are authoritative:** Native Org and Markdown files are the single source of truth. SQLite databases, knowledge graphs, and projections are completely disposable and rebuildable from original files.
+2. **Org & Markdown support:** Org TODO states, properties, headings, and ID links, plus Markdown frontmatter, HTML comment heading IDs, and WikiLinks (`[[...]]`).
 3. **Unified resource algebra:** All document nodes and headings use stable `ResourceRef` identifiers (`document:<ULID>` and `heading:<ULID>`). Paths and titles are not identities.
-4. **Rebuildable projection:** Deleting `.notez/index.sqlite` is always safe after stopping Notez; running `notez space rebuild` reconstructs the projection byte-for-byte.
+4. **Rebuildable projection:** Deleting `.notez/index.sqlite` is always safe after stopping Notez; running `notez space rebuild` or `notez source sync` reconstructs the projection byte-for-byte.
 
 ## Workspace Layout
 
 ```text
 crates/
-├── domain/       Resource algebra, types, selectors, and projection traits
-├── document/     Lossless Org scanner (preserves raw content and byte spans)
+├── domain/       Resource algebra, types, selectors, rules, and projection traits
+├── document/     Lossless Org and Markdown scanners (preserves raw content)
 ├── storage/      Disposable SQLite projection store
-├── application/  Application service (scan_native, query, resolve, read, rebuild)
+├── source/       SourceAdapters (Native, Git, Obsidian Vaults)
+├── application/  Application service (scan_native, scan_federation, query, resolve, read, rebuild)
 ├── cli/          CLI entry point (`notez`)
 └── mcp/          Model Context Protocol stdio server
 ```
@@ -33,7 +34,7 @@ The published binary is `target/release/notez`.
 
 ### Scan Native Space
 
-Scans `.org` documents into the SQLite projection store:
+Scans `.org` and `.md` documents into the SQLite projection store:
 
 ```bash
 notez --space /path/to/space scan
@@ -63,6 +64,7 @@ Fetch full resource metadata and properties:
 ```bash
 notez --space /path/to/space read heading:01J00000000000000000000001 --json
 ```
+
 ### Inspect Rule Traces
 
 Inspect classification, derivation, and validation traces for a resource ref:
@@ -87,6 +89,16 @@ Atomic Org TODO state transition with CLOSED timestamp and LOGBOOK entry:
 notez --space /path/to/space task transition heading:01J00000000000000000000001 --to DONE
 ```
 
+### Source Management (Federation)
+
+Mount external sources such as Obsidian Vaults or Git repositories:
+
+```bash
+notez --space /path/to/space source add --id vault_src --kind obsidian --path /path/to/vault --read-only
+notez --space /path/to/space source list --json
+notez --space /path/to/space source sync --json
+```
+
 ### Rebuild Projection Index
 
 Deletes index cache and rescans space from raw files:
@@ -97,7 +109,7 @@ notez --space /path/to/space space rebuild
 
 ### MCP Stdio Server
 
-Exposes query, resolve, read, and inspect tools over stdio using newline-delimited JSON-RPC:
+Exposes query, resolve, read, inspect, agenda, task transition, and source management tools over stdio using newline-delimited JSON-RPC:
 
 ```bash
 notez --space /path/to/space mcp serve

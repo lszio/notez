@@ -32,12 +32,11 @@ impl SourceAdapter for ObsidianSourceAdapter {
             {
                 continue;
             }
-            if path.is_file() {
-                if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
-                    if ext == "md" {
-                        entries.push(path.to_path_buf());
-                    }
-                }
+            if path.is_file()
+                && let Some(ext) = path.extension().and_then(|e| e.to_str())
+                && ext == "md"
+            {
+                entries.push(path.to_path_buf());
             }
         }
 

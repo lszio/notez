@@ -40,12 +40,11 @@ impl SourceAdapter for NativeSourceAdapter {
             {
                 continue;
             }
-            if path.is_file() {
-                if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
-                    if ext == "org" || ext == "md" {
-                        entries.push(path.to_path_buf());
-                    }
-                }
+            if path.is_file()
+                && let Some(ext) = path.extension().and_then(|e| e.to_str())
+                && (ext == "org" || ext == "md")
+            {
+                entries.push(path.to_path_buf());
             }
         }
 

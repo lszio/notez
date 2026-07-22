@@ -31,7 +31,11 @@ impl MarkdownScanner {
 
         let raw: Arc<str> = Arc::from(content_str.as_str());
 
-        let mut doc_title = path.file_stem().unwrap_or_default().to_string_lossy().to_string();
+        let mut doc_title = path
+            .file_stem()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_string();
         let mut doc_id_opt: Option<ResourceRef> = None;
         let mut doc_properties = BTreeMap::new();
 
@@ -39,7 +43,7 @@ impl MarkdownScanner {
         let mut line_idx = 0;
 
         // Parse YAML Frontmatter
-        if lines.first().map_or(false, |l| l.trim() == "---") {
+        if lines.first().is_some_and(|l| l.trim() == "---") {
             line_idx += 1;
             while line_idx < lines.len() {
                 let line = lines[line_idx].trim();
@@ -70,7 +74,8 @@ impl MarkdownScanner {
             }
         }
 
-        let doc_ref = doc_id_opt.unwrap_or_else(|| ResourceRef::new(ResourceKind::Document, Ulid::new()));
+        let doc_ref =
+            doc_id_opt.unwrap_or_else(|| ResourceRef::new(ResourceKind::Document, Ulid::new()));
 
         let doc_resource = Resource {
             r#ref: doc_ref,
@@ -100,24 +105,25 @@ impl MarkdownScanner {
                         let comment_part = &heading_text[comment_start..];
                         if let Some(comment_end) = comment_part.find("-->") {
                             let comment_body = &comment_part[4..comment_end].trim();
-                            if let Some((id_k, id_v)) = comment_body.split_once(':') {
-                                if id_k.trim().eq_ignore_ascii_case("id") {
-                                    let id_val = id_v.trim();
-                                    let full_ref = if id_val.contains(':') {
-                                        id_val.to_string()
-                                    } else {
-                                        format!("heading:{id_val}")
-                                    };
-                                    if let Ok(r_ref) = ResourceRef::parse(&full_ref) {
-                                        heading_id_opt = Some(r_ref);
-                                    }
+                            if let Some((id_k, id_v)) = comment_body.split_once(':')
+                                && id_k.trim().eq_ignore_ascii_case("id")
+                            {
+                                let id_val = id_v.trim();
+                                let full_ref = if id_val.contains(':') {
+                                    id_val.to_string()
+                                } else {
+                                    format!("heading:{id_val}")
+                                };
+                                if let Ok(r_ref) = ResourceRef::parse(&full_ref) {
+                                    heading_id_opt = Some(r_ref);
                                 }
                             }
                         }
                         heading_text = heading_text[..comment_start].trim().to_string();
                     }
 
-                    let h_ref = heading_id_opt.unwrap_or_else(|| ResourceRef::new(ResourceKind::Heading, Ulid::new()));
+                    let h_ref = heading_id_opt
+                        .unwrap_or_else(|| ResourceRef::new(ResourceKind::Heading, Ulid::new()));
                     current_source_ref = h_ref;
 
                     let mut props = BTreeMap::new();
