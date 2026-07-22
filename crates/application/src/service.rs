@@ -361,7 +361,14 @@ impl<S: ProjectionStore> ApplicationService<S> {
             .store_bytes(&bytes, default_mime)
             .map_err(ApplicationError::Io)?;
 
-        let att_ref = ResourceRef::new(domain::ResourceKind::Attachment, ulid::Ulid::new());
+        let att_ulid = if meta.hash.len() >= 32 {
+            u128::from_str_radix(&meta.hash[..32], 16)
+                .map(ulid::Ulid::from)
+                .unwrap_or_else(|_| ulid::Ulid::new())
+        } else {
+            ulid::Ulid::new()
+        };
+        let att_ref = ResourceRef::new(domain::ResourceKind::Attachment, att_ulid);
         let mut properties = std::collections::BTreeMap::new();
         properties.insert("hash".to_string(), meta.hash.clone());
         properties.insert("mime".to_string(), meta.mime_type.clone());

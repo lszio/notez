@@ -1,4 +1,3 @@
-use std::fs;
 use storage::blob::BlobStore;
 use tempfile::tempdir;
 

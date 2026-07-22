@@ -42,7 +42,7 @@ fn test_attachment_resource_and_segments_schema() {
         offset_end: 29,
     };
 
-    store.insert_segments(&[seg1.clone()]).unwrap();
+    store.insert_segments(std::slice::from_ref(&seg1)).unwrap();
 
     let segments = store.query_segments(&att_ref.to_string()).unwrap();
     assert_eq!(segments.len(), 1);
