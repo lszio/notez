@@ -41,14 +41,23 @@ impl SyncEngine {
         let mut pushed_manifests = 0;
         let mut pushed_objects = 0;
 
-        for entry in WalkDir::new(&self.device_space).into_iter().filter_map(Result::ok) {
+        for entry in WalkDir::new(&self.device_space)
+            .into_iter()
+            .filter_map(Result::ok)
+        {
             let path = entry.path();
             let rel_path = path.strip_prefix(&self.device_space).unwrap_or(path);
-            if rel_path.components().any(|c| c.as_os_str().to_string_lossy().starts_with('.')) {
+            if rel_path
+                .components()
+                .any(|c| c.as_os_str().to_string_lossy().starts_with('.'))
+            {
                 continue;
             }
             if path.is_file() {
-                let ext = path.extension().and_then(|e| e.to_str()).unwrap_or_default();
+                let ext = path
+                    .extension()
+                    .and_then(|e| e.to_str())
+                    .unwrap_or_default();
                 if ext == "org" || ext == "md" {
                     let payload = fs::read(path)?;
                     let hash = format!("{:x}", Sha256::digest(&payload));
@@ -97,7 +106,10 @@ impl SyncEngine {
             return Ok(PullReport::default());
         }
 
-        for entry in WalkDir::new(&manifests_dir).into_iter().filter_map(Result::ok) {
+        for entry in WalkDir::new(&manifests_dir)
+            .into_iter()
+            .filter_map(Result::ok)
+        {
             let path = entry.path();
             if path.is_file() && path.extension().is_some_and(|e| e == "json") {
                 let content = fs::read_to_string(path)?;
@@ -117,7 +129,12 @@ impl SyncEngine {
                             let local_text = fs::read_to_string(&local_file)?;
                             if local_text != incoming_text {
                                 let base_text = "";
-                                match ThreeWayMerger::merge(&manifest.logical_path, base_text, &local_text, &incoming_text) {
+                                match ThreeWayMerger::merge(
+                                    &manifest.logical_path,
+                                    base_text,
+                                    &local_text,
+                                    &incoming_text,
+                                ) {
                                     MergeResult::Clean(merged) => {
                                         fs::write(&local_file, merged)?;
                                         merged_files += 1;

@@ -115,6 +115,8 @@ impl ObjectStore {
 
     pub fn has_tombstone(&self, logical_path: &str) -> bool {
         let safe_name = logical_path.replace('/', "_");
-        self.tombstones_dir().join(format!("{safe_name}.json")).exists()
+        self.tombstones_dir()
+            .join(format!("{safe_name}.json"))
+            .exists()
     }
 }

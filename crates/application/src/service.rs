@@ -552,6 +552,40 @@ impl<S: ProjectionStore> ApplicationService<S> {
 
         Ok(package)
     }
+    pub fn sync_push(
+        &mut self,
+        actor_id: &str,
+        space_root: &Path,
+        shared_folder: &Path,
+    ) -> Result<sync::PushReport, ApplicationError> {
+        let transport = sync::FolderTransport::new(shared_folder);
+        let engine = sync::SyncEngine::new(actor_id, space_root, transport);
+        let report = engine
+            .push()
+            .map_err(|e| ApplicationError::Storage(e.to_string()))?;
+        Ok(report)
+    }
+
+    pub fn sync_pull(
+        &mut self,
+        actor_id: &str,
+        space_root: &Path,
+        shared_folder: &Path,
+    ) -> Result<sync::PullReport, ApplicationError> {
+        let transport = sync::FolderTransport::new(shared_folder);
+        let engine = sync::SyncEngine::new(actor_id, space_root, transport);
+        let report = engine
+            .pull()
+            .map_err(|e| ApplicationError::Storage(e.to_string()))?;
+
+        self.scan_native(space_root)?;
+
+        Ok(report)
+    }
+
+    pub fn list_conflicts(&self) -> Result<Vec<sync::ConflictRecord>, ApplicationError> {
+        Ok(Vec::new())
+    }
 
     pub fn rebuild(&mut self, root: &Path) -> Result<ScanReport, ApplicationError> {
         self.store

@@ -1,5 +1,5 @@
-pub mod manifest;
 pub mod engine;
+pub mod manifest;
 pub mod transport;
 pub use engine::{PullReport, PushReport, SyncEngine};
 pub use transport::FolderTransport;

@@ -1,4 +1,6 @@
 pub mod attachment;
+pub mod sync_app;
+pub use sync_app::ActiveConflicts;
 pub mod community_app;
 pub use community_app::SpaceCommunitiesConfig;
 pub mod federation;

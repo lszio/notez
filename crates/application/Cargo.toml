@@ -10,6 +10,7 @@ storage = { path = "../storage" }
 serde = { workspace = true }
 source = { path = "../source" }
 artifact = { path = "../artifact" }
+sync = { path = "../sync" }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
 ulid = { workspace = true }
