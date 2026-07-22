@@ -1,7 +1,7 @@
+use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
 use std::collections::BTreeMap;
 use std::fmt;
 use std::str::FromStr;
-use serde::{de, Deserialize, Deserializer, Serialize, Serializer};
 use thiserror::Error;
 use ulid::Ulid;
 
@@ -55,7 +55,8 @@ impl ResourceRef {
             "heading" => ResourceKind::Heading,
             _ => return Err(ResourceRefError::UnknownKind(kind_str.to_string())),
         };
-        let id = Ulid::from_str(ulid_str).map_err(|e| ResourceRefError::InvalidUlid(e.to_string()))?;
+        let id =
+            Ulid::from_str(ulid_str).map_err(|e| ResourceRefError::InvalidUlid(e.to_string()))?;
         Ok(Self { kind, id })
     }
 

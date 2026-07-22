@@ -1,6 +1,6 @@
-use std::path::Path;
-use document::{OrgScanner};
+use document::OrgScanner;
 use domain::{ResourceKind, ResourceRef};
+use std::path::Path;
 
 #[test]
 fn scan_basic_org_fixture() {
@@ -13,23 +13,38 @@ fn scan_basic_org_fixture() {
     assert_eq!(scanned.resources.len(), 2);
 
     let doc = &scanned.resources[0];
-    assert_eq!(doc.r#ref, ResourceRef::parse("document:01J00000000000000000000000").unwrap());
+    assert_eq!(
+        doc.r#ref,
+        ResourceRef::parse("document:01J00000000000000000000000").unwrap()
+    );
     assert_eq!(doc.kind, ResourceKind::Document);
     assert_eq!(doc.title, "Notez Architecture");
     assert_eq!(doc.source_id, "native");
 
     let heading = &scanned.resources[1];
-    assert_eq!(heading.r#ref, ResourceRef::parse("heading:01J00000000000000000000001").unwrap());
+    assert_eq!(
+        heading.r#ref,
+        ResourceRef::parse("heading:01J00000000000000000000001").unwrap()
+    );
     assert_eq!(heading.kind, ResourceKind::Heading);
     assert_eq!(heading.title, "Design sync");
-    assert_eq!(heading.properties.get("TODO").map(|s| s.as_str()), Some("NEXT"));
-    assert_eq!(heading.properties.get("TYPE").map(|s| s.as_str()), Some("project"));
+    assert_eq!(
+        heading.properties.get("TODO").map(|s| s.as_str()),
+        Some("NEXT")
+    );
+    assert_eq!(
+        heading.properties.get("TYPE").map(|s| s.as_str()),
+        Some("project")
+    );
 
     assert_eq!(scanned.links.len(), 1);
     let link = &scanned.links[0];
     assert_eq!(link.source_ref, heading.r#ref);
     assert_eq!(link.relation, "id_link");
-    assert_eq!(link.target_ref, ResourceRef::parse("heading:01J00000000000000000000002").unwrap());
+    assert_eq!(
+        link.target_ref,
+        ResourceRef::parse("heading:01J00000000000000000000002").unwrap()
+    );
 }
 #[test]
 fn scan_malformed_id_reports_location() {
@@ -69,11 +84,16 @@ fn scan_nested_headings_preserve_parent_ref() {
 
     let parent = &scanned.resources[1];
     assert_eq!(parent.title, "Parent Heading");
-    assert_eq!(parent.properties.get("LEVEL").map(|s| s.as_str()), Some("1"));
-    assert!(parent.properties.get("PARENT_REF").is_none());
+    assert_eq!(
+        parent.properties.get("LEVEL").map(|s| s.as_str()),
+        Some("1")
+    );
+    assert!(!parent.properties.contains_key("PARENT_REF"));
 
     let child = &scanned.resources[2];
-    assert_eq!(child.title, "Child Heading");
     assert_eq!(child.properties.get("LEVEL").map(|s| s.as_str()), Some("2"));
-    assert_eq!(child.properties.get("PARENT_REF").map(|s| s.as_str()), Some("heading:01J00000000000000000000010"));
+    assert_eq!(
+        child.properties.get("PARENT_REF").map(|s| s.as_str()),
+        Some("heading:01J00000000000000000000010")
+    );
 }

@@ -21,7 +21,8 @@ fn cli_scan_query_resolve_read_rebuild() {
     fs::write(
         &doc2,
         "#+title: Design sync notes\n#+ID: 01J00000000000000000000102\n",
-    ).unwrap();
+    )
+    .unwrap();
 
     let mut cmd = notez_cmd();
     cmd.arg("--space")
@@ -33,7 +34,8 @@ fn cli_scan_query_resolve_read_rebuild() {
         .stdout(predicates::str::contains("\"scanned_files\":2"));
 
     let mut cmd_q = notez_cmd();
-    cmd_q.arg("--space")
+    cmd_q
+        .arg("--space")
         .arg(space)
         .arg("--json")
         .arg("query")
@@ -46,7 +48,8 @@ fn cli_scan_query_resolve_read_rebuild() {
         .stdout(predicates::str::contains("Design sync"));
 
     let mut cmd_amb = notez_cmd();
-    cmd_amb.arg("--space")
+    cmd_amb
+        .arg("--space")
         .arg(space)
         .arg("resolve")
         .arg("Design sync")
@@ -54,7 +57,8 @@ fn cli_scan_query_resolve_read_rebuild() {
         .code(4);
 
     let mut cmd_nf = notez_cmd();
-    cmd_nf.arg("--space")
+    cmd_nf
+        .arg("--space")
         .arg(space)
         .arg("resolve")
         .arg("nonexistent_title_query")
@@ -62,17 +66,21 @@ fn cli_scan_query_resolve_read_rebuild() {
         .code(3);
 
     let mut cmd_res = notez_cmd();
-    cmd_res.arg("--space")
+    cmd_res
+        .arg("--space")
         .arg(space)
         .arg("--json")
         .arg("resolve")
         .arg("01J00000000000000000000101")
         .assert()
         .success()
-        .stdout(predicates::str::contains("heading:01J00000000000000000000101"));
+        .stdout(predicates::str::contains(
+            "heading:01J00000000000000000000101",
+        ));
 
     let mut cmd_read = notez_cmd();
-    cmd_read.arg("--space")
+    cmd_read
+        .arg("--space")
         .arg(space)
         .arg("--json")
         .arg("read")
@@ -82,7 +90,8 @@ fn cli_scan_query_resolve_read_rebuild() {
         .stdout(predicates::str::contains("\"title\":\"Design sync\""));
 
     let mut cmd_reb = notez_cmd();
-    cmd_reb.arg("--space")
+    cmd_reb
+        .arg("--space")
         .arg(space)
         .arg("space")
         .arg("rebuild")

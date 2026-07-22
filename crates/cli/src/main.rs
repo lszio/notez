@@ -5,9 +5,9 @@ use clap::Parser;
 use commands::{Cli, Commands, McpCommands, McpSubcommand, SpaceCommands, SpaceSubcommand};
 use domain::{ResourceKind, ResourceRef, Selector};
 use serde_json::json;
-use storage::SqliteProjection;
 use std::fs;
 use std::process::exit;
+use storage::SqliteProjection;
 
 fn main() {
     let cli = Cli::parse();
@@ -17,10 +17,10 @@ fn main() {
         None => cli.space.join(".notez/index.sqlite"),
     };
 
-    if let Some(parent) = db_path.parent() {
-        if !parent.exists() {
-            let _ = fs::create_dir_all(parent);
-        }
+    if let Some(parent) = db_path.parent()
+        && !parent.exists()
+    {
+        let _ = fs::create_dir_all(parent);
     }
 
     let store = match SqliteProjection::open(&db_path) {

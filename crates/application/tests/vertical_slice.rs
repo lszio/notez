@@ -1,7 +1,7 @@
 use application::{ApplicationService, ResolveResult};
 use domain::{ResourceKind, ResourceRef, Selector};
-use storage::SqliteProjection;
 use std::fs;
+use storage::SqliteProjection;
 
 #[test]
 fn vertical_slice_scan_query_resolve_rebuild() {
@@ -35,7 +35,9 @@ fn vertical_slice_scan_query_resolve_rebuild() {
     assert_eq!(scan_report.scanned_files, 2);
     assert_eq!(scan_report.scanned_resources, 3); // 2 docs + 1 heading
 
-    let page = service.query(&Selector::kind(ResourceKind::Heading).with_title_contains("sync")).unwrap();
+    let page = service
+        .query(&Selector::kind(ResourceKind::Heading).with_title_contains("sync"))
+        .unwrap();
     assert_eq!(page.items.len(), 1);
     assert_eq!(page.items[0].title, "Sync design heading");
 
@@ -43,7 +45,10 @@ fn vertical_slice_scan_query_resolve_rebuild() {
     let resolve_res = service.resolve("01J00000000000000000000011").unwrap();
     assert_eq!(resolve_res, ResolveResult::Found(heading_ref));
 
-    let read_res = service.read(&heading_ref).unwrap().expect("should read resource");
+    let read_res = service
+        .read(&heading_ref)
+        .unwrap()
+        .expect("should read resource");
     assert_eq!(read_res.title, "Sync design heading");
 
     // Delete database file to simulate loss of SQLite cache
@@ -54,7 +59,9 @@ fn vertical_slice_scan_query_resolve_rebuild() {
     let mut service2 = ApplicationService::new(store2);
     service2.rebuild(space_root).unwrap();
 
-    let page_rebuilt = service2.query(&Selector::kind(ResourceKind::Heading).with_title_contains("sync")).unwrap();
+    let page_rebuilt = service2
+        .query(&Selector::kind(ResourceKind::Heading).with_title_contains("sync"))
+        .unwrap();
     assert_eq!(page_rebuilt.items.len(), 1);
     assert_eq!(page_rebuilt.items[0].r#ref, heading_ref);
 }
@@ -68,7 +75,11 @@ fn scan_corrupt_org_preserves_valid_projection() {
     let db_path = dot_notez.join("index.sqlite");
 
     let valid_file = space_root.join("valid.org");
-    fs::write(&valid_file, "#+title: Valid\n#+ID: 01J00000000000000000000099\n").unwrap();
+    fs::write(
+        &valid_file,
+        "#+title: Valid\n#+ID: 01J00000000000000000000099\n",
+    )
+    .unwrap();
 
     let store = SqliteProjection::open(&db_path).unwrap();
     let mut service = ApplicationService::new(store);

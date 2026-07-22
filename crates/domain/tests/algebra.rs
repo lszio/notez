@@ -7,7 +7,10 @@ fn resource_refs_and_selectors_compose() {
     let selector = Selector::kind(ResourceKind::Heading).with_title_contains("sync");
     assert_eq!(selector.kind, Some(ResourceKind::Heading));
     assert_eq!(selector.title_contains.as_deref(), Some("sync"));
-    assert_eq!(Projection::summary().fields, vec!["ref", "title", "revision"]);
+    assert_eq!(
+        Projection::summary().fields,
+        vec!["ref", "title", "revision"]
+    );
 }
 #[test]
 fn invalid_resource_ref_parsing() {

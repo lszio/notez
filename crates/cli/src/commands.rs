@@ -24,17 +24,13 @@ pub enum Commands {
     Scan,
 
     /// Resolve a query string (ID, ref, locator, title)
-    Resolve {
-        query: String,
-    },
+    Resolve { query: String },
 
     /// Query resources from the space
     Query(QueryArgs),
 
     /// Read details of a specific resource ref
-    Read {
-        r_ref: String,
-    },
+    Read { r_ref: String },
     /// MCP stdio server commands
     Mcp(McpSubcommand),
 

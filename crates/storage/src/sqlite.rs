@@ -1,5 +1,5 @@
-use domain::{ProjectionStore, QueryPage, Resource, ResourceKind, ResourceRef, ResourceRelation, Selector};
-use rusqlite::{params, Connection, OptionalExtension};
+use domain::{ProjectionStore, QueryPage, Resource, ResourceRef, ResourceRelation, Selector};
+use rusqlite::{Connection, OptionalExtension, params};
 use std::collections::BTreeMap;
 use std::path::Path;
 use thiserror::Error;
@@ -72,8 +72,14 @@ impl ProjectionStore for SqliteProjection {
     ) -> Result<(), StorageError> {
         let tx = self.conn.transaction()?;
 
-        tx.execute("DELETE FROM resources WHERE source_id = ?1", params![source_id])?;
-        tx.execute("DELETE FROM relations WHERE source_id = ?1", params![source_id])?;
+        tx.execute(
+            "DELETE FROM resources WHERE source_id = ?1",
+            params![source_id],
+        )?;
+        tx.execute(
+            "DELETE FROM relations WHERE source_id = ?1",
+            params![source_id],
+        )?;
 
         {
             let mut stmt_res = tx.prepare(
@@ -134,11 +140,21 @@ impl ProjectionStore for SqliteProjection {
                 let locator: String = row.get(5)?;
                 let properties_json: String = row.get(6)?;
 
-                Ok((r_ref_str, kind_str, title, revision, source_id, locator, properties_json))
+                Ok((
+                    r_ref_str,
+                    kind_str,
+                    title,
+                    revision,
+                    source_id,
+                    locator,
+                    properties_json,
+                ))
             })
             .optional()?;
 
-        if let Some((r_ref_str, _kind_str, title, revision, source_id, locator, properties_json)) = row {
+        if let Some((r_ref_str, _kind_str, title, revision, source_id, locator, properties_json)) =
+            row
+        {
             let r_ref = ResourceRef::parse(&r_ref_str)
                 .map_err(|e| StorageError::InvalidData(format!("invalid ref in DB: {e}")))?;
             let properties: BTreeMap<String, String> = serde_json::from_str(&properties_json)?;
@@ -176,16 +192,17 @@ impl ProjectionStore for SqliteProjection {
                 if idx > 0 {
                     sql.push_str(", ");
                 }
-                sql.push_str("?");
+                sql.push('?');
                 query_params.push(Box::new(r.to_string()));
             }
-            sql.push_str(")");
+            sql.push(')');
         }
 
         sql.push_str(" ORDER BY ref ASC");
 
         let mut stmt = self.conn.prepare(&sql)?;
-        let param_refs: Vec<&dyn rusqlite::ToSql> = query_params.iter().map(|p| p.as_ref()).collect();
+        let param_refs: Vec<&dyn rusqlite::ToSql> =
+            query_params.iter().map(|p| p.as_ref()).collect();
 
         let rows = stmt.query_map(param_refs.as_slice(), |row| {
             let r_ref_str: String = row.get(0)?;
@@ -196,7 +213,14 @@ impl ProjectionStore for SqliteProjection {
             let locator: String = row.get(5)?;
             let properties_json: String = row.get(6)?;
 
-            Ok((r_ref_str, title, revision, source_id, locator, properties_json))
+            Ok((
+                r_ref_str,
+                title,
+                revision,
+                source_id,
+                locator,
+                properties_json,
+            ))
         })?;
 
         let mut items = Vec::new();

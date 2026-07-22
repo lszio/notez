@@ -1,0 +1,7 @@
+#+title: Sync details
+#+ID: 01J00000000000000000000302
+
+* TODO Review sync protocol
+:PROPERTIES:
+:ID: 01J00000000000000000000303
+:END:

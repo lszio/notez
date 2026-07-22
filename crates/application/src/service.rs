@@ -52,10 +52,13 @@ impl<S: ProjectionStore> ApplicationService<S> {
         for entry in WalkDir::new(root).into_iter().filter_map(Result::ok) {
             let path = entry.path();
             let rel_path = path.strip_prefix(root).unwrap_or(path);
-            if rel_path.components().any(|c| c.as_os_str().to_string_lossy().starts_with('.')) {
+            if rel_path
+                .components()
+                .any(|c| c.as_os_str().to_string_lossy().starts_with('.'))
+            {
                 continue;
             }
-            if path.is_file() && path.extension().map_or(false, |ext| ext == "org") {
+            if path.is_file() && path.extension().is_some_and(|ext| ext == "org") {
                 entries.push(path.to_path_buf());
             }
         }
@@ -89,23 +92,32 @@ impl<S: ProjectionStore> ApplicationService<S> {
     pub fn resolve(&self, query_str: &str) -> Result<ResolveResult, ApplicationError> {
         let trimmed = query_str.trim();
 
-        if let Ok(r_ref) = ResourceRef::parse(trimmed) {
-            if let Some(res) = self.store.get(&r_ref).map_err(|e| ApplicationError::Storage(e.to_string()))? {
-                return Ok(ResolveResult::Found(res.r#ref));
-            }
+        if let Ok(r_ref) = ResourceRef::parse(trimmed)
+            && let Some(res) = self
+                .store
+                .get(&r_ref)
+                .map_err(|e| ApplicationError::Storage(e.to_string()))?
+        {
+            return Ok(ResolveResult::Found(res.r#ref));
         }
 
         if trimmed.len() == 26 {
             let mut matched = Vec::new();
-            if let Ok(heading_ref) = ResourceRef::parse(&format!("heading:{trimmed}")) {
-                if let Some(res) = self.store.get(&heading_ref).map_err(|e| ApplicationError::Storage(e.to_string()))? {
-                    matched.push(res.r#ref);
-                }
+            if let Ok(heading_ref) = ResourceRef::parse(&format!("heading:{trimmed}"))
+                && let Some(res) = self
+                    .store
+                    .get(&heading_ref)
+                    .map_err(|e| ApplicationError::Storage(e.to_string()))?
+            {
+                matched.push(res.r#ref);
             }
-            if let Ok(doc_ref) = ResourceRef::parse(&format!("document:{trimmed}")) {
-                if let Some(res) = self.store.get(&doc_ref).map_err(|e| ApplicationError::Storage(e.to_string()))? {
-                    matched.push(res.r#ref);
-                }
+            if let Ok(doc_ref) = ResourceRef::parse(&format!("document:{trimmed}"))
+                && let Some(res) = self
+                    .store
+                    .get(&doc_ref)
+                    .map_err(|e| ApplicationError::Storage(e.to_string()))?
+            {
+                matched.push(res.r#ref);
             }
             if matched.len() == 1 {
                 return Ok(ResolveResult::Found(matched[0]));
@@ -140,15 +152,21 @@ impl<S: ProjectionStore> ApplicationService<S> {
     }
 
     pub fn query(&self, selector: &Selector) -> Result<QueryPage, ApplicationError> {
-        self.store.query(selector).map_err(|e| ApplicationError::Storage(e.to_string()))
+        self.store
+            .query(selector)
+            .map_err(|e| ApplicationError::Storage(e.to_string()))
     }
 
     pub fn read(&self, r_ref: &ResourceRef) -> Result<Option<Resource>, ApplicationError> {
-        self.store.get(r_ref).map_err(|e| ApplicationError::Storage(e.to_string()))
+        self.store
+            .get(r_ref)
+            .map_err(|e| ApplicationError::Storage(e.to_string()))
     }
 
     pub fn rebuild(&mut self, root: &Path) -> Result<ScanReport, ApplicationError> {
-        self.store.clear().map_err(|e| ApplicationError::Storage(e.to_string()))?;
+        self.store
+            .clear()
+            .map_err(|e| ApplicationError::Storage(e.to_string()))?;
         self.scan_native(root)
     }
 }

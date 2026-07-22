@@ -39,7 +39,11 @@ pub struct Projection {
 impl Projection {
     pub fn summary() -> Self {
         Self {
-            fields: vec!["ref".to_string(), "title".to_string(), "revision".to_string()],
+            fields: vec![
+                "ref".to_string(),
+                "title".to_string(),
+                "revision".to_string(),
+            ],
         }
     }
 }

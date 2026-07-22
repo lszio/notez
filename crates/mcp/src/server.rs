@@ -1,6 +1,6 @@
 use application::{ApplicationService, ResolveResult};
 use domain::{ProjectionStore, ResourceKind, ResourceRef, Selector};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::io::{BufRead, Write};
 use thiserror::Error;
 
@@ -33,7 +33,10 @@ impl McpServer {
             match req_value {
                 Ok(req) => {
                     let id = req.get("id").cloned();
-                    let method = req.get("method").and_then(|m| m.as_str()).unwrap_or_default();
+                    let method = req
+                        .get("method")
+                        .and_then(|m| m.as_str())
+                        .unwrap_or_default();
                     let params = req.get("params").cloned().unwrap_or(Value::Null);
 
                     if method == "notifications/initialized" {
@@ -147,7 +150,10 @@ impl McpServer {
             })),
 
             "tools/call" => {
-                let tool_name = params.get("name").and_then(|n| n.as_str()).unwrap_or_default();
+                let tool_name = params
+                    .get("name")
+                    .and_then(|n| n.as_str())
+                    .unwrap_or_default();
                 let args = params.get("arguments").cloned().unwrap_or(json!({}));
 
                 let tool_res = Self::call_tool(tool_name, args, service);
@@ -211,9 +217,10 @@ impl McpServer {
     ) -> Result<String, (String, bool)> {
         match name {
             "resolve" => {
-                let query = args.get("query").and_then(|q| q.as_str()).ok_or_else(|| {
-                    ("Invalid params: missing 'query'".to_string(), false)
-                })?;
+                let query = args
+                    .get("query")
+                    .and_then(|q| q.as_str())
+                    .ok_or_else(|| ("Invalid params: missing 'query'".to_string(), false))?;
                 match service.resolve(query) {
                     Ok(ResolveResult::Found(r_ref)) => {
                         Ok(json!({ "ref": r_ref.to_string() }).to_string())
@@ -223,7 +230,10 @@ impl McpServer {
                     }
                     Ok(ResolveResult::Ambiguous(refs)) => {
                         let str_refs: Vec<String> = refs.iter().map(|r| r.to_string()).collect();
-                        Err((format!("Ambiguous query '{query}': matches {str_refs:?}"), true))
+                        Err((
+                            format!("Ambiguous query '{query}': matches {str_refs:?}"),
+                            true,
+                        ))
                     }
                     Err(e) => Err((format!("Internal resolve error: {e}"), true)),
                 }
@@ -249,12 +259,12 @@ impl McpServer {
             }
 
             "read" => {
-                let ref_str = args.get("ref").and_then(|r| r.as_str()).ok_or_else(|| {
-                    ("Invalid params: missing 'ref'".to_string(), false)
-                })?;
-                let r_ref = ResourceRef::parse(ref_str).map_err(|e| {
-                    (format!("Invalid resource ref '{ref_str}': {e}"), false)
-                })?;
+                let ref_str = args
+                    .get("ref")
+                    .and_then(|r| r.as_str())
+                    .ok_or_else(|| ("Invalid params: missing 'ref'".to_string(), false))?;
+                let r_ref = ResourceRef::parse(ref_str)
+                    .map_err(|e| (format!("Invalid resource ref '{ref_str}': {e}"), false))?;
 
                 match service.read(&r_ref) {
                     Ok(Some(res)) => Ok(serde_json::to_string(&res).unwrap()),
@@ -263,16 +273,15 @@ impl McpServer {
                 }
             }
 
-            "inspect" => {
-                match service.query(&Selector::new()) {
-                    Ok(page) => Ok(json!({
-                        "status": "ok",
-                        "total_items": page.items.len(),
-                        "items": page.items
-                    }).to_string()),
-                    Err(e) => Err((format!("Internal inspect error: {e}"), true)),
-                }
-            }
+            "inspect" => match service.query(&Selector::new()) {
+                Ok(page) => Ok(json!({
+                    "status": "ok",
+                    "total_items": page.items.len(),
+                    "items": page.items
+                })
+                .to_string()),
+                Err(e) => Err((format!("Internal inspect error: {e}"), true)),
+            },
 
             _ => Err((format!("Unknown tool: {name}"), false)),
         }

@@ -1,9 +1,9 @@
+use domain::{Resource, ResourceKind, ResourceRef, ResourceRelation};
+use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
 use std::sync::Arc;
-use domain::{Resource, ResourceKind, ResourceRef, ResourceRelation};
-use sha2::{Digest, Sha256};
 use thiserror::Error;
 use ulid::Ulid;
 
@@ -52,21 +52,21 @@ impl OrgScanner {
 
         let raw: Arc<str> = Arc::from(content_str.as_str());
 
-        let mut doc_title = path.file_stem().unwrap_or_default().to_string_lossy().to_string();
+        let mut doc_title = path
+            .file_stem()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_string();
         let mut doc_id_opt: Option<(ResourceRef, usize, usize)> = None;
         let mut doc_properties = BTreeMap::new();
 
         struct PendingHeading {
             level: usize,
             title: String,
-            todo: Option<String>,
             properties: BTreeMap<String, String>,
             id_opt: Option<(ResourceRef, usize, usize)>,
-            start_line: usize,
         }
-
         let mut headings: Vec<PendingHeading> = Vec::new();
-        let mut in_drawer = false;
 
         let lines: Vec<&str> = raw.lines().collect();
         let mut line_idx = 0;
@@ -81,8 +81,14 @@ impl OrgScanner {
                     if key_upper == "TITLE" {
                         doc_title = val.to_string();
                     } else if key_upper == "ID" {
-                        let col = line.find(&val).unwrap_or(0) + 1;
-                        let r_ref = parse_id_val(&val, ResourceKind::Document, &path_str, line_idx + 1, col)?;
+                        let col = line.find(val).unwrap_or(0) + 1;
+                        let r_ref = parse_id_val(
+                            val,
+                            ResourceKind::Document,
+                            &path_str,
+                            line_idx + 1,
+                            col,
+                        )?;
                         doc_id_opt = Some((r_ref, line_idx + 1, col));
                     }
                     doc_properties.insert(key_upper, val.to_string());
@@ -102,41 +108,49 @@ impl OrgScanner {
                     headings.push(PendingHeading {
                         level: stars,
                         title,
-                        todo,
                         properties,
                         id_opt: None,
-                        start_line: line_idx + 1,
                     });
                 }
             } else if trimmed.eq_ignore_ascii_case(":PROPERTIES:") {
-                in_drawer = true;
                 line_idx += 1;
                 while line_idx < lines.len() {
                     let drawer_line = lines[line_idx].trim();
                     if drawer_line.eq_ignore_ascii_case(":END:") {
-                        in_drawer = false;
                         break;
                     }
-                    if drawer_line.starts_with(':') {
-                        if let Some((prop_key, prop_val)) = parse_property_line(drawer_line) {
-                            let key_upper = prop_key.to_uppercase();
-                            if let Some(cur_heading) = headings.last_mut() {
-                                if key_upper == "ID" {
-                                    let col = lines[line_idx].find(&prop_val).unwrap_or(0) + 1;
-                                    let r_ref = parse_id_val(&prop_val, ResourceKind::Heading, &path_str, line_idx + 1, col)?;
-                                    cur_heading.id_opt = Some((r_ref, line_idx + 1, col));
-                                } else {
-                                    cur_heading.properties.insert(key_upper, prop_val.to_string());
-                                }
+                    if drawer_line.starts_with(':')
+                        && let Some((prop_key, prop_val)) = parse_property_line(drawer_line)
+                    {
+                        let key_upper = prop_key.to_uppercase();
+                        if let Some(cur_heading) = headings.last_mut() {
+                            if key_upper == "ID" {
+                                let col = lines[line_idx].find(prop_val).unwrap_or(0) + 1;
+                                let r_ref = parse_id_val(
+                                    prop_val,
+                                    ResourceKind::Heading,
+                                    &path_str,
+                                    line_idx + 1,
+                                    col,
+                                )?;
+                                cur_heading.id_opt = Some((r_ref, line_idx + 1, col));
                             } else {
-                                if key_upper == "ID" {
-                                    let col = lines[line_idx].find(&prop_val).unwrap_or(0) + 1;
-                                    let r_ref = parse_id_val(&prop_val, ResourceKind::Document, &path_str, line_idx + 1, col)?;
-                                    doc_id_opt = Some((r_ref, line_idx + 1, col));
-                                } else {
-                                    doc_properties.insert(key_upper, prop_val.to_string());
-                                }
+                                cur_heading
+                                    .properties
+                                    .insert(key_upper, prop_val.to_string());
                             }
+                        } else if key_upper == "ID" {
+                            let col = lines[line_idx].find(prop_val).unwrap_or(0) + 1;
+                            let r_ref = parse_id_val(
+                                prop_val,
+                                ResourceKind::Document,
+                                &path_str,
+                                line_idx + 1,
+                                col,
+                            )?;
+                            doc_id_opt = Some((r_ref, line_idx + 1, col));
+                        } else {
+                            doc_properties.insert(key_upper, prop_val.to_string());
                         }
                     }
                     line_idx += 1;
@@ -204,15 +218,16 @@ impl OrgScanner {
         let mut current_source_ref = doc_ref;
         let mut heading_idx = 0;
 
-        for (idx, line) in raw.lines().enumerate() {
+        for line in raw.lines() {
             let trimmed = line.trim();
             if trimmed.starts_with('*') && trimmed.contains(' ') {
                 let stars = trimmed.chars().take_while(|c| *c == '*').count();
-                if stars > 0 && trimmed[stars..].starts_with(' ') {
-                    if heading_idx + 1 < resources.len() {
-                        heading_idx += 1;
-                        current_source_ref = resources[heading_idx].r#ref;
-                    }
+                if stars > 0
+                    && trimmed[stars..].starts_with(' ')
+                    && heading_idx + 1 < resources.len()
+                {
+                    heading_idx += 1;
+                    current_source_ref = resources[heading_idx].r#ref;
                 }
             }
 
@@ -247,11 +262,11 @@ fn parse_property_line(line: &str) -> Option<(&str, &str)> {
 
 fn parse_heading_title(text: &str) -> (Option<String>, String) {
     let mut parts = text.split_whitespace();
-    if let Some(first) = parts.next() {
-        if TODO_KEYWORDS.contains(&first) {
-            let rest = text[first.len()..].trim().to_string();
-            return (Some(first.to_string()), rest);
-        }
+    if let Some(first) = parts.next()
+        && TODO_KEYWORDS.contains(&first)
+    {
+        let rest = text[first.len()..].trim().to_string();
+        return (Some(first.to_string()), rest);
     }
     (None, text.to_string())
 }

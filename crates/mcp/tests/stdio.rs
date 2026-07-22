@@ -1,9 +1,9 @@
 use application::ApplicationService;
 use mcp::McpServer;
-use serde_json::{json, Value};
-use storage::SqliteProjection;
+use serde_json::{Value, json};
 use std::fs;
 use std::io::Cursor;
+use storage::SqliteProjection;
 
 #[test]
 fn mcp_stdio_jsonrpc_transcript() {
@@ -20,7 +20,7 @@ fn mcp_stdio_jsonrpc_transcript() {
     let mut service = ApplicationService::new(store);
     service.scan_native(space_root).unwrap();
 
-    let input_lines = vec![
+    let input_lines = [
         json!({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}}).to_string(),
         json!({"jsonrpc": "2.0", "id": 2, "method": "tools/list"}).to_string(),
         json!({"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {"name": "query", "arguments": {"kind": "heading", "title_contains": "sync"}}}).to_string(),
@@ -57,7 +57,9 @@ fn mcp_stdio_jsonrpc_transcript() {
 
     // Response 3: tools/call query
     assert_eq!(responses[2]["id"], 3);
-    let text = responses[2]["result"]["content"][0]["text"].as_str().unwrap();
+    let text = responses[2]["result"]["content"][0]["text"]
+        .as_str()
+        .unwrap();
     assert!(text.contains("Sync mcp heading"));
 
     // Response 4: tools/call resolve nonexistent -> isError: true
@@ -66,24 +68,32 @@ fn mcp_stdio_jsonrpc_transcript() {
 
     // Response 5: tools/call read heading:01J...
     assert_eq!(responses[4]["id"], 5);
-    let read_text = responses[4]["result"]["content"][0]["text"].as_str().unwrap();
+    let read_text = responses[4]["result"]["content"][0]["text"]
+        .as_str()
+        .unwrap();
     assert!(read_text.contains("Sync mcp heading"));
 
     // Response 6: tools/call inspect
     assert_eq!(responses[5]["id"], 6);
-    assert!(responses[5]["result"]["content"][0]["text"].as_str().unwrap().contains("items"));
+    assert!(
+        responses[5]["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("items")
+    );
 }
 #[test]
 fn mcp_stdio_malformed_json_recovery() {
-    let temp_dir = tempfile::tempdir().unwrap();
-    let space_root = temp_dir.path();
+    let _temp_dir = tempfile::tempdir().unwrap();
     let store = SqliteProjection::in_memory().unwrap();
     let mut service = ApplicationService::new(store);
 
-    let input_lines = vec![
+    let input_lines = [
         "{ invalid json line }",
         &json!({"jsonrpc": "2.0", "id": 42, "method": "initialize", "params": {}}).to_string(),
-    ].join("\n") + "\n";
+    ]
+    .join("\n")
+        + "\n";
 
     let reader = Cursor::new(input_lines);
     let mut output = Vec::new();
@@ -91,7 +101,10 @@ fn mcp_stdio_malformed_json_recovery() {
     McpServer::serve(reader, &mut output, &mut service).unwrap();
 
     let output_str = String::from_utf8(output).unwrap();
-    let lines: Vec<&str> = output_str.lines().filter(|l| !l.trim().is_empty()).collect();
+    let lines: Vec<&str> = output_str
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .collect();
     assert_eq!(lines.len(), 2);
 
     let parse_err: Value = serde_json::from_str(lines[0]).unwrap();
