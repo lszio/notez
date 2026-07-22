@@ -87,7 +87,8 @@ impl TypeRegistry {
                                 }
                             }
                             PropertyType::Duration => {
-                                if !val.ends_with('h') && !val.ends_with('m') && !val.ends_with('d') {
+                                if !val.ends_with('h') && !val.ends_with('m') && !val.ends_with('d')
+                                {
                                     return Err(ValidationError::InvalidPropertyType {
                                         field: field_name.clone(),
                                         expected: "duration".to_string(),

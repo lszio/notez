@@ -32,11 +32,15 @@ pub struct ScanReport {
 
 pub struct ApplicationService<S: ProjectionStore> {
     store: S,
+    rule_engine: domain::RuleEngine,
 }
 
 impl<S: ProjectionStore> ApplicationService<S> {
     pub fn new(store: S) -> Self {
-        Self { store }
+        Self {
+            store,
+            rule_engine: domain::RuleEngine::default_rules(),
+        }
     }
 
     pub fn store(&self) -> &S {
@@ -45,6 +49,16 @@ impl<S: ProjectionStore> ApplicationService<S> {
 
     pub fn store_mut(&mut self) -> &mut S {
         &mut self.store
+    }
+    pub fn inspect_rules(
+        &self,
+        r_ref: &ResourceRef,
+    ) -> Result<Option<domain::InspectResult>, ApplicationError> {
+        let res = self
+            .store
+            .get(r_ref)
+            .map_err(|e| ApplicationError::Storage(e.to_string()))?;
+        Ok(res.map(|r| self.rule_engine.evaluate(&r)))
     }
 
     pub fn scan_native(&mut self, root: &Path) -> Result<ScanReport, ApplicationError> {
