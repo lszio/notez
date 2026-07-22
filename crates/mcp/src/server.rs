@@ -245,6 +245,51 @@ impl McpServer {
                                 "required": ["ref"],
                                 "additionalProperties": false
                             }
+                        },
+                        {
+                            "name": "community_create",
+                            "description": "Create a community in space",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "space": { "type": "string" },
+                                    "id": { "type": "string" },
+                                    "name": { "type": "string" },
+                                    "kind": { "type": "string" },
+                                    "title_contains": { "type": "string" }
+                                },
+                                "required": ["id", "name"],
+                                "additionalProperties": false
+                            }
+                        },
+                        {
+                            "name": "derive_artifact",
+                            "description": "Derive a recipe artifact (summary, llms.txt, context-pack, skill-ir)",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "space": { "type": "string" },
+                                    "community": { "type": "string" },
+                                    "recipe": { "type": "string" }
+                                },
+                                "required": ["community", "recipe"],
+                                "additionalProperties": false
+                            }
+                        },
+                        {
+                            "name": "export_skill",
+                            "description": "Export a SKILL.md package for a community",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "space": { "type": "string" },
+                                    "community": { "type": "string" },
+                                    "description": { "type": "string" },
+                                    "out": { "type": "string" }
+                                },
+                                "required": ["community", "out"],
+                                "additionalProperties": false
+                            }
                         }
                     ]
                 }
@@ -528,6 +573,96 @@ impl McpServer {
                 match service.query_segments(&r_ref) {
                     Ok(segments) => Ok(serde_json::to_string(&segments).unwrap()),
                     Err(e) => Err((format!("Internal query_segments error: {e}"), true)),
+                }
+            }
+            "community_create" => {
+                let space_str = args.get("space").and_then(|s| s.as_str()).unwrap_or(".");
+                let space_path = std::path::Path::new(space_str);
+
+                let id = args
+                    .get("id")
+                    .and_then(|i| i.as_str())
+                    .ok_or_else(|| ("Invalid params: missing 'id'".to_string(), false))?;
+                let name = args
+                    .get("name")
+                    .and_then(|n| n.as_str())
+                    .ok_or_else(|| ("Invalid params: missing 'name'".to_string(), false))?;
+
+                let mut selector = Selector::new();
+                if let Some(kind_str) = args.get("kind").and_then(|k| k.as_str()) {
+                    match kind_str {
+                        "document" => selector.kind = Some(ResourceKind::Document),
+                        "heading" => selector.kind = Some(ResourceKind::Heading),
+                        "attachment" => selector.kind = Some(ResourceKind::Attachment),
+                        _ => return Err((format!("Unknown resource kind: {kind_str}"), false)),
+                    }
+                }
+                if let Some(title_sub) = args.get("title_contains").and_then(|t| t.as_str()) {
+                    selector.title_contains = Some(title_sub.to_string());
+                }
+
+                let comm = domain::community::Community {
+                    id: id.to_string(),
+                    name: name.to_string(),
+                    selector,
+                    pinned_members: vec![],
+                    excluded_members: vec![],
+                };
+
+                match service.create_community(space_path, comm) {
+                    Ok(_) => Ok(json!({ "created": true }).to_string()),
+                    Err(e) => Err((format!("Internal community_create error: {e}"), true)),
+                }
+            }
+
+            "derive_artifact" => {
+                let space_str = args.get("space").and_then(|s| s.as_str()).unwrap_or(".");
+                let space_path = std::path::Path::new(space_str);
+
+                let community_id = args
+                    .get("community")
+                    .and_then(|c| c.as_str())
+                    .ok_or_else(|| ("Invalid params: missing 'community'".to_string(), false))?;
+                let recipe_name = args
+                    .get("recipe")
+                    .and_then(|r| r.as_str())
+                    .ok_or_else(|| ("Invalid params: missing 'recipe'".to_string(), false))?;
+
+                match service.derive_artifact(space_path, community_id, recipe_name) {
+                    Ok(derived) => Ok(json!({
+                        "recipe": recipe_name,
+                        "content": derived.content
+                    })
+                    .to_string()),
+                    Err(e) => Err((format!("Internal derive_artifact error: {e}"), true)),
+                }
+            }
+
+            "export_skill" => {
+                let space_str = args.get("space").and_then(|s| s.as_str()).unwrap_or(".");
+                let space_path = std::path::Path::new(space_str);
+
+                let community_id = args
+                    .get("community")
+                    .and_then(|c| c.as_str())
+                    .ok_or_else(|| ("Invalid params: missing 'community'".to_string(), false))?;
+                let description = args
+                    .get("description")
+                    .and_then(|d| d.as_str())
+                    .unwrap_or("Exported Agent Skill");
+                let out_str = args
+                    .get("out")
+                    .and_then(|o| o.as_str())
+                    .ok_or_else(|| ("Invalid params: missing 'out'".to_string(), false))?;
+                let out_path = std::path::Path::new(out_str);
+
+                match service.export_skill(space_path, community_id, description, out_path) {
+                    Ok(package) => Ok(json!({
+                        "name": package.name,
+                        "path": package.package_path.to_string_lossy()
+                    })
+                    .to_string()),
+                    Err(e) => Err((format!("Internal export_skill error: {e}"), true)),
                 }
             }
             _ => Err((format!("Unknown tool: {name}"), false)),

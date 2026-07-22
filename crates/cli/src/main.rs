@@ -395,6 +395,98 @@ fn main() {
                 }
             }
         },
+        Commands::Community(commands::CommunitySubcommand { command }) => match command {
+            commands::CommunityCommands::Create {
+                id,
+                name,
+                kind,
+                title_contains,
+            } => {
+                let mut selector = Selector::new();
+                if let Some(k) = kind {
+                    let r_kind: ResourceKind = k.into();
+                    selector.kind = Some(r_kind);
+                }
+                if let Some(t) = title_contains {
+                    selector.title_contains = Some(t);
+                }
+
+                let comm = domain::community::Community {
+                    id,
+                    name,
+                    selector,
+                    pinned_members: vec![],
+                    excluded_members: vec![],
+                };
+
+                match service.create_community(&cli.space, comm) {
+                    Ok(_) => {
+                        if cli.json {
+                            println!("{}", json!({ "created": true }));
+                        } else {
+                            println!("Community created successfully.");
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("Create community error: {e}");
+                        exit(5);
+                    }
+                }
+            }
+
+            commands::CommunityCommands::List => match service.list_communities(&cli.space) {
+                Ok(communities) => {
+                    if cli.json {
+                        println!("{}", serde_json::to_string(&communities).unwrap());
+                    } else {
+                        for c in communities {
+                            println!("{} ({})", c.id, c.name);
+                        }
+                    }
+                }
+                Err(e) => {
+                    eprintln!("List communities error: {e}");
+                    exit(5);
+                }
+            },
+        },
+
+        Commands::Derive(commands::DeriveArgs { community, recipe }) => {
+            match service.derive_artifact(&cli.space, &community, &recipe) {
+                Ok(derived) => {
+                    if cli.json {
+                        println!("{}", serde_json::to_string(&derived).unwrap());
+                    } else {
+                        println!("{}", derived.content);
+                    }
+                }
+                Err(e) => {
+                    eprintln!("Derive artifact error: {e}");
+                    exit(5);
+                }
+            }
+        }
+
+        Commands::Skill(commands::SkillSubcommand {
+            command:
+                commands::SkillCommands::Export {
+                    community,
+                    description,
+                    out,
+                },
+        }) => match service.export_skill(&cli.space, &community, &description, &out) {
+            Ok(pkg) => {
+                if cli.json {
+                    println!("{}", serde_json::to_string(&pkg).unwrap());
+                } else {
+                    println!("Exported skill package to {:?}", pkg.package_path);
+                }
+            }
+            Err(e) => {
+                eprintln!("Skill export error: {e}");
+                exit(5);
+            }
+        },
 
         Commands::Mcp(McpSubcommand {
             command: McpCommands::Serve,

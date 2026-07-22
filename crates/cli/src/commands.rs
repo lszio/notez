@@ -48,6 +48,14 @@ pub enum Commands {
     Source(SourceSubcommand),
     /// Attachment operations and extraction jobs
     Attachment(AttachmentSubcommand),
+    /// Community management commands
+    Community(CommunitySubcommand),
+
+    /// Derive recipe artifacts (summary, llms.txt, context-pack, skill-ir)
+    Derive(DeriveArgs),
+
+    /// Agent Skill export commands
+    Skill(SkillSubcommand),
 
     /// MCP stdio server commands
     Mcp(McpSubcommand),
@@ -149,6 +157,62 @@ pub enum AttachmentCommands {
 pub struct SourceSubcommand {
     #[command(subcommand)]
     pub command: SourceCommands,
+}
+#[derive(Args, Debug)]
+pub struct CommunitySubcommand {
+    #[command(subcommand)]
+    pub command: CommunityCommands,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum CommunityCommands {
+    /// Create a community
+    Create {
+        #[arg(long)]
+        id: String,
+
+        #[arg(long)]
+        name: String,
+
+        #[arg(long)]
+        kind: Option<CliResourceKind>,
+
+        #[arg(long)]
+        title_contains: Option<String>,
+    },
+
+    /// List configured communities
+    List,
+}
+
+#[derive(Args, Debug)]
+pub struct DeriveArgs {
+    #[arg(long)]
+    pub community: String,
+
+    #[arg(long)]
+    pub recipe: String,
+}
+
+#[derive(Args, Debug)]
+pub struct SkillSubcommand {
+    #[command(subcommand)]
+    pub command: SkillCommands,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum SkillCommands {
+    /// Export SKILL.md package
+    Export {
+        #[arg(long)]
+        community: String,
+
+        #[arg(long, default_value = "Exported Skill Package")]
+        description: String,
+
+        #[arg(long)]
+        out: PathBuf,
+    },
 }
 
 #[derive(Subcommand, Debug)]
