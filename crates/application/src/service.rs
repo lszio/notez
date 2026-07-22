@@ -461,6 +461,97 @@ impl<S: ProjectionStore> ApplicationService<S> {
             .query_segments(&att_ref.to_string())
             .map_err(|e| ApplicationError::Storage(e.to_string()))
     }
+    pub fn create_community(
+        &self,
+        space_root: &Path,
+        community: domain::community::Community,
+    ) -> Result<(), ApplicationError> {
+        let mut cfg = crate::community_app::SpaceCommunitiesConfig::load(space_root)?;
+        cfg.communities.retain(|c| c.id != community.id);
+        cfg.communities.push(community);
+        cfg.save(space_root)?;
+        Ok(())
+    }
+
+    pub fn list_communities(
+        &self,
+        space_root: &Path,
+    ) -> Result<Vec<domain::community::Community>, ApplicationError> {
+        let cfg = crate::community_app::SpaceCommunitiesConfig::load(space_root)?;
+        Ok(cfg.communities)
+    }
+
+    pub fn derive_artifact(
+        &self,
+        space_root: &Path,
+        community_id: &str,
+        recipe_name: &str,
+    ) -> Result<artifact::DerivedArtifact, ApplicationError> {
+        let communities = self.list_communities(space_root)?;
+        let comm = communities
+            .iter()
+            .find(|c| c.id == community_id)
+            .ok_or_else(|| ApplicationError::NotFound(format!("community {community_id}")))?;
+
+        let page = self.query(&Selector::new())?;
+        let members: Vec<Resource> = comm
+            .filter_members(&page.items)
+            .into_iter()
+            .cloned()
+            .collect();
+
+        let recipe_kind = match recipe_name {
+            "summary" => artifact::RecipeKind::Summary,
+            "llms-txt" | "llms.txt" => artifact::RecipeKind::LlmsTxt,
+            "context-pack" => artifact::RecipeKind::ContextPack,
+            "skill-ir" => artifact::RecipeKind::SkillIr,
+            _ => {
+                return Err(ApplicationError::Document(document::DocumentError::Other(
+                    format!("unknown recipe: {recipe_name}"),
+                )));
+            }
+        };
+
+        let recipe = artifact::Recipe {
+            name: recipe_name.to_string(),
+            kind: recipe_kind,
+            token_budget: 4000,
+        };
+
+        let derived = artifact::RecipeEvaluator::evaluate(&recipe, &members).map_err(|e| {
+            ApplicationError::Document(document::DocumentError::Other(e.to_string()))
+        })?;
+
+        Ok(derived)
+    }
+
+    pub fn export_skill(
+        &self,
+        space_root: &Path,
+        community_id: &str,
+        description: &str,
+        export_path: &Path,
+    ) -> Result<artifact::SkillPackage, ApplicationError> {
+        let communities = self.list_communities(space_root)?;
+        let comm = communities
+            .iter()
+            .find(|c| c.id == community_id)
+            .ok_or_else(|| ApplicationError::NotFound(format!("community {community_id}")))?;
+
+        let page = self.query(&Selector::new())?;
+        let members: Vec<Resource> = comm
+            .filter_members(&page.items)
+            .into_iter()
+            .cloned()
+            .collect();
+
+        let skill_ir = artifact::SkillIr::compile(&comm.name, description, &members);
+
+        let package = artifact::SkillExporter::export(&skill_ir, export_path)
+            .map_err(ApplicationError::Io)?;
+
+        Ok(package)
+    }
 
     pub fn rebuild(&mut self, root: &Path) -> Result<ScanReport, ApplicationError> {
         self.store

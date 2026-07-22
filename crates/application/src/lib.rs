@@ -1,4 +1,6 @@
 pub mod attachment;
+pub mod community_app;
+pub use community_app::SpaceCommunitiesConfig;
 pub mod federation;
 pub use attachment::ExtractionResult;
 pub mod service;
