@@ -586,6 +586,47 @@ impl<S: ProjectionStore> ApplicationService<S> {
     pub fn list_conflicts(&self) -> Result<Vec<sync::ConflictRecord>, ApplicationError> {
         Ok(Vec::new())
     }
+    pub fn space_doctor(
+        &self,
+        space_root: &Path,
+    ) -> Result<crate::doctor::DoctorReport, ApplicationError> {
+        let mut issues = Vec::new();
+
+        let db_path = space_root.join(".notez/index.sqlite");
+        if !db_path.exists() {
+            issues.push(crate::doctor::DoctorIssue {
+                severity: "warning".to_string(),
+                code: "MISSING_INDEX".to_string(),
+                message: "SQLite index database does not exist. Run 'notez space rebuild'."
+                    .to_string(),
+            });
+        }
+
+        let page = self.query(&Selector::new())?;
+        for res in page.items {
+            let loc_path = Path::new(&res.locator);
+            if !loc_path.exists() {
+                issues.push(crate::doctor::DoctorIssue {
+                    severity: "error".to_string(),
+                    code: "MISSING_FILE".to_string(),
+                    message: format!(
+                        "Resource {} points to non-existent file: {}",
+                        res.r#ref, res.locator
+                    ),
+                });
+            }
+        }
+
+        let status = if issues.iter().any(|i| i.severity == "error") {
+            "unhealthy".to_string()
+        } else if !issues.is_empty() {
+            "degraded".to_string()
+        } else {
+            "healthy".to_string()
+        };
+
+        Ok(crate::doctor::DoctorReport { status, issues })
+    }
 
     pub fn rebuild(&mut self, root: &Path) -> Result<ScanReport, ApplicationError> {
         self.store

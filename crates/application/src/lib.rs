@@ -1,4 +1,6 @@
 pub mod attachment;
+pub mod doctor;
+pub use doctor::{DoctorIssue, DoctorReport};
 pub mod sync_app;
 pub use sync_app::ActiveConflicts;
 pub mod community_app;
