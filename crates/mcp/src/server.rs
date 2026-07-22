@@ -179,6 +179,33 @@ impl McpServer {
                                 "required": ["ref", "to"],
                                 "additionalProperties": false
                             }
+                        },
+                        {
+                            "name": "source_list",
+                            "description": "List configured sources in the space",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "space": { "type": "string" }
+                                },
+                                "additionalProperties": false
+                            }
+                        },
+                        {
+                            "name": "source_add",
+                            "description": "Add an external source to the space",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "space": { "type": "string" },
+                                    "id": { "type": "string" },
+                                    "kind": { "type": "string" },
+                                    "path": { "type": "string" },
+                                    "read_only": { "type": "boolean" }
+                                },
+                                "required": ["id", "kind", "path"],
+                                "additionalProperties": false
+                            }
                         }
                     ]
                 }
@@ -358,6 +385,56 @@ impl McpServer {
                 match service.transition_task(&r_ref, to_state, timestamp) {
                     Ok(transition) => Ok(serde_json::to_string(&transition).unwrap()),
                     Err(e) => Err((format!("Internal transition error: {e}"), true)),
+                }
+            }
+            "source_list" => {
+                let space_str = args.get("space").and_then(|s| s.as_str()).unwrap_or(".");
+                let space_path = std::path::Path::new(space_str);
+                match service.list_sources(space_path) {
+                    Ok(sources) => Ok(serde_json::to_string(&sources).unwrap()),
+                    Err(e) => Err((format!("Internal source_list error: {e}"), true)),
+                }
+            }
+
+            "source_add" => {
+                let space_str = args.get("space").and_then(|s| s.as_str()).unwrap_or(".");
+                let space_path = std::path::Path::new(space_str);
+
+                let id = args
+                    .get("id")
+                    .and_then(|i| i.as_str())
+                    .ok_or_else(|| ("Invalid params: missing 'id'".to_string(), false))?;
+                let kind_str = args
+                    .get("kind")
+                    .and_then(|k| k.as_str())
+                    .ok_or_else(|| ("Invalid params: missing 'kind'".to_string(), false))?;
+                let path_str = args
+                    .get("path")
+                    .and_then(|p| p.as_str())
+                    .ok_or_else(|| ("Invalid params: missing 'path'".to_string(), false))?;
+                let read_only = args
+                    .get("read_only")
+                    .and_then(|r| r.as_bool())
+                    .unwrap_or(false);
+
+                let kind = match kind_str {
+                    "native" => source::SourceKind::Native,
+                    "git" => source::SourceKind::Git,
+                    "obsidian" => source::SourceKind::Obsidian,
+                    _ => return Err((format!("Unknown source kind: {kind_str}"), false)),
+                };
+
+                let config = source::SourceConfig {
+                    id: id.to_string(),
+                    kind,
+                    path: std::path::PathBuf::from(path_str),
+                    read_only,
+                    exclude_paths: vec![],
+                };
+
+                match service.add_source(space_path, config) {
+                    Ok(_) => Ok(json!({ "added": true }).to_string()),
+                    Err(e) => Err((format!("Internal source_add error: {e}"), true)),
                 }
             }
             _ => Err((format!("Unknown tool: {name}"), false)),

@@ -252,6 +252,76 @@ fn main() {
                 }
             }
         }
+        Commands::Source(commands::SourceSubcommand { command }) => match command {
+            commands::SourceCommands::Add {
+                id,
+                kind,
+                path,
+                read_only,
+            } => {
+                let config = source::SourceConfig {
+                    id,
+                    kind: kind.into(),
+                    path,
+                    read_only,
+                    exclude_paths: vec![],
+                };
+                match service.add_source(&cli.space, config) {
+                    Ok(_) => {
+                        if cli.json {
+                            println!("{}", json!({ "added": true }));
+                        } else {
+                            println!("Source added successfully.");
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("Add source error: {e}");
+                        exit(5);
+                    }
+                }
+            }
+
+            commands::SourceCommands::List => match service.list_sources(&cli.space) {
+                Ok(sources) => {
+                    if cli.json {
+                        println!("{}", serde_json::to_string(&sources).unwrap());
+                    } else {
+                        for src in sources {
+                            println!("{} ({:?}): {:?}", src.id, src.kind, src.path);
+                        }
+                    }
+                }
+                Err(e) => {
+                    eprintln!("List sources error: {e}");
+                    exit(5);
+                }
+            },
+
+            commands::SourceCommands::Sync => match service.scan_federation(&cli.space) {
+                Ok(report) => {
+                    if cli.json {
+                        println!(
+                            "{}",
+                            json!({
+                                "synced": true,
+                                "scanned_files": report.scanned_files,
+                                "scanned_resources": report.scanned_resources,
+                                "scanned_relations": report.scanned_relations,
+                            })
+                        );
+                    } else {
+                        println!(
+                            "Synced sources: {} resources, {} relations.",
+                            report.scanned_resources, report.scanned_relations
+                        );
+                    }
+                }
+                Err(e) => {
+                    eprintln!("Source sync error: {e}");
+                    exit(5);
+                }
+            },
+        },
 
         Commands::Mcp(McpSubcommand {
             command: McpCommands::Serve,

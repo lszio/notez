@@ -44,6 +44,8 @@ pub enum Commands {
 
     /// Task mutation operations
     Task(TaskSubcommand),
+    /// Source management commands (federation)
+    Source(SourceSubcommand),
 
     /// MCP stdio server commands
     Mcp(McpSubcommand),
@@ -117,4 +119,50 @@ pub enum TaskCommands {
         #[arg(long, default_value = "2026-07-22 Wed 16:00")]
         timestamp: String,
     },
+}
+#[derive(Args, Debug)]
+pub struct SourceSubcommand {
+    #[command(subcommand)]
+    pub command: SourceCommands,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum SourceCommands {
+    /// Add an external source
+    Add {
+        #[arg(long)]
+        id: String,
+
+        #[arg(long)]
+        kind: CliSourceKind,
+
+        #[arg(long)]
+        path: PathBuf,
+
+        #[arg(long, default_value_t = false)]
+        read_only: bool,
+    },
+
+    /// List configured sources
+    List,
+
+    /// Sync / scan federated sources
+    Sync,
+}
+
+#[derive(ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CliSourceKind {
+    Native,
+    Git,
+    Obsidian,
+}
+
+impl From<CliSourceKind> for source::SourceKind {
+    fn from(k: CliSourceKind) -> Self {
+        match k {
+            CliSourceKind::Native => source::SourceKind::Native,
+            CliSourceKind::Git => source::SourceKind::Git,
+            CliSourceKind::Obsidian => source::SourceKind::Obsidian,
+        }
+    }
 }

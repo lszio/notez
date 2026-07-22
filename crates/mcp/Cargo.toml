@@ -5,6 +5,7 @@ edition = "2024"
 
 [dependencies]
 domain = { path = "../domain" }
+source = { path = "../source" }
 storage = { path = "../storage" }
 application = { path = "../application" }
 serde = { workspace = true }
