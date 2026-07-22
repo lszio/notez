@@ -1,4 +1,6 @@
 pub mod attachment;
+pub mod job_manager;
+pub use job_manager::{ArtifactStaleReport, JobRecord};
 pub mod doctor;
 pub use doctor::{DoctorIssue, DoctorReport};
 pub mod sync_app;

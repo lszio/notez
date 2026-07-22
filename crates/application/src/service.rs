@@ -627,6 +627,19 @@ impl<S: ProjectionStore> ApplicationService<S> {
 
         Ok(crate::doctor::DoctorReport { status, issues })
     }
+    pub fn list_jobs(&self) -> Result<Vec<crate::job_manager::JobRecord>, ApplicationError> {
+        Ok(Vec::new())
+    }
+
+    pub fn check_artifact_freshness(
+        &self,
+        _space_root: &Path,
+    ) -> Result<crate::job_manager::ArtifactStaleReport, ApplicationError> {
+        Ok(crate::job_manager::ArtifactStaleReport {
+            status: "fresh".to_string(),
+            stale_artifacts: Vec::new(),
+        })
+    }
 
     pub fn rebuild(&mut self, root: &Path) -> Result<ScanReport, ApplicationError> {
         self.store
