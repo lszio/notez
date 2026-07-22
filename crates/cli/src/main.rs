@@ -153,6 +153,105 @@ fn main() {
                 }
             }
         }
+        Commands::Inspect { r_ref, rules } => {
+            let parsed_ref = match ResourceRef::parse(&r_ref) {
+                Ok(r) => r,
+                Err(e) => {
+                    eprintln!("Invalid resource ref format '{r_ref}': {e}");
+                    exit(2);
+                }
+            };
+
+            if rules {
+                match service.inspect_rules(&parsed_ref) {
+                    Ok(Some(inspect_res)) => {
+                        if cli.json {
+                            println!("{}", serde_json::to_string(&inspect_res).unwrap());
+                        } else {
+                            println!("Ref: {}", inspect_res.r_ref);
+                            println!("Type: {:?}", inspect_res.classified_type);
+                            println!("Derived: {:?}", inspect_res.derived_properties);
+                        }
+                    }
+                    Ok(None) => {
+                        eprintln!("Resource not found: {r_ref}");
+                        exit(3);
+                    }
+                    Err(e) => {
+                        eprintln!("Inspect error: {e}");
+                        exit(5);
+                    }
+                }
+            } else {
+                match service.read(&parsed_ref) {
+                    Ok(Some(res)) => {
+                        if cli.json {
+                            println!("{}", serde_json::to_string(&res).unwrap());
+                        } else {
+                            println!("{res:?}");
+                        }
+                    }
+                    Ok(None) => {
+                        eprintln!("Resource not found: {r_ref}");
+                        exit(3);
+                    }
+                    Err(e) => {
+                        eprintln!("Read error: {e}");
+                        exit(5);
+                    }
+                }
+            }
+        }
+
+        Commands::Agenda => match service.agenda() {
+            Ok(agenda) => {
+                if cli.json {
+                    println!("{}", serde_json::to_string(&agenda).unwrap());
+                } else {
+                    for item in agenda.items {
+                        println!("{} {}", item.r_ref, item.title);
+                    }
+                }
+            }
+            Err(e) => {
+                eprintln!("Agenda error: {e}");
+                exit(5);
+            }
+        },
+
+        Commands::Task(commands::TaskSubcommand {
+            command:
+                commands::TaskCommands::Transition {
+                    r_ref,
+                    to,
+                    timestamp,
+                },
+        }) => {
+            let parsed_ref = match ResourceRef::parse(&r_ref) {
+                Ok(r) => r,
+                Err(e) => {
+                    eprintln!("Invalid resource ref format '{r_ref}': {e}");
+                    exit(2);
+                }
+            };
+
+            match service.transition_task(&parsed_ref, &to, &timestamp) {
+                Ok(transition) => {
+                    if cli.json {
+                        println!("{}", serde_json::to_string(&transition).unwrap());
+                    } else {
+                        println!(
+                            "Transitioned {} from {} to {}",
+                            r_ref, transition.from_state, transition.to_state
+                        );
+                    }
+                }
+                Err(e) => {
+                    eprintln!("Task transition error: {e}");
+                    exit(5);
+                }
+            }
+        }
 
         Commands::Mcp(McpSubcommand {
             command: McpCommands::Serve,

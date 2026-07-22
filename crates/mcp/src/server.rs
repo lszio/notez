@@ -144,6 +144,41 @@ impl McpServer {
                                 "properties": {},
                                 "additionalProperties": false
                             }
+                        },
+                        {
+                            "name": "inspect_rules",
+                            "description": "Inspect rule traces for a resource ref",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "ref": { "type": "string" }
+                                },
+                                "required": ["ref"],
+                                "additionalProperties": false
+                            }
+                        },
+                        {
+                            "name": "agenda",
+                            "description": "Query agenda view for scheduled or deadline items",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {},
+                                "additionalProperties": false
+                            }
+                        },
+                        {
+                            "name": "task_transition",
+                            "description": "Transition task state",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "ref": { "type": "string" },
+                                    "to": { "type": "string" },
+                                    "timestamp": { "type": "string" }
+                                },
+                                "required": ["ref", "to"],
+                                "additionalProperties": false
+                            }
                         }
                     ]
                 }
@@ -283,6 +318,48 @@ impl McpServer {
                 Err(e) => Err((format!("Internal inspect error: {e}"), true)),
             },
 
+            "inspect_rules" => {
+                let ref_str = args
+                    .get("ref")
+                    .and_then(|r| r.as_str())
+                    .ok_or_else(|| ("Invalid params: missing 'ref'".to_string(), false))?;
+                let r_ref = ResourceRef::parse(ref_str)
+                    .map_err(|e| (format!("Invalid resource ref '{ref_str}': {e}"), false))?;
+
+                match service.inspect_rules(&r_ref) {
+                    Ok(Some(inspect_res)) => Ok(serde_json::to_string(&inspect_res).unwrap()),
+                    Ok(None) => Err((format!("Resource not found: {ref_str}"), true)),
+                    Err(e) => Err((format!("Internal inspect_rules error: {e}"), true)),
+                }
+            }
+
+            "agenda" => match service.agenda() {
+                Ok(agenda) => Ok(serde_json::to_string(&agenda).unwrap()),
+                Err(e) => Err((format!("Internal agenda error: {e}"), true)),
+            },
+
+            "task_transition" => {
+                let ref_str = args
+                    .get("ref")
+                    .and_then(|r| r.as_str())
+                    .ok_or_else(|| ("Invalid params: missing 'ref'".to_string(), false))?;
+                let to_state = args
+                    .get("to")
+                    .and_then(|t| t.as_str())
+                    .ok_or_else(|| ("Invalid params: missing 'to'".to_string(), false))?;
+                let timestamp = args
+                    .get("timestamp")
+                    .and_then(|ts| ts.as_str())
+                    .unwrap_or("2026-07-22 Wed 16:00");
+
+                let r_ref = ResourceRef::parse(ref_str)
+                    .map_err(|e| (format!("Invalid resource ref '{ref_str}': {e}"), false))?;
+
+                match service.transition_task(&r_ref, to_state, timestamp) {
+                    Ok(transition) => Ok(serde_json::to_string(&transition).unwrap()),
+                    Err(e) => Err((format!("Internal transition error: {e}"), true)),
+                }
+            }
             _ => Err((format!("Unknown tool: {name}"), false)),
         }
     }

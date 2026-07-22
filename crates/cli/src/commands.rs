@@ -31,6 +31,20 @@ pub enum Commands {
 
     /// Read details of a specific resource ref
     Read { r_ref: String },
+
+    /// Inspect resource or rule traces
+    Inspect {
+        r_ref: String,
+        #[arg(long, default_value_t = false)]
+        rules: bool,
+    },
+
+    /// Agenda view of scheduled/deadline items
+    Agenda,
+
+    /// Task mutation operations
+    Task(TaskSubcommand),
+
     /// MCP stdio server commands
     Mcp(McpSubcommand),
 
@@ -86,4 +100,21 @@ pub enum McpCommands {
 pub enum SpaceCommands {
     /// Rebuild SQLite projection for the space
     Rebuild,
+}
+#[derive(Args, Debug)]
+pub struct TaskSubcommand {
+    #[command(subcommand)]
+    pub command: TaskCommands,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum TaskCommands {
+    /// Transition task state
+    Transition {
+        r_ref: String,
+        #[arg(long)]
+        to: String,
+        #[arg(long, default_value = "2026-07-22 Wed 16:00")]
+        timestamp: String,
+    },
 }
