@@ -2,7 +2,7 @@ pub mod commands;
 
 use application::{ApplicationService, ResolveResult};
 use clap::Parser;
-use commands::{Cli, Commands, SpaceCommands, SpaceSubcommand};
+use commands::{Cli, Commands, McpCommands, McpSubcommand, SpaceCommands, SpaceSubcommand};
 use domain::{ResourceKind, ResourceRef, Selector};
 use serde_json::json;
 use storage::SqliteProjection;
@@ -151,6 +151,17 @@ fn main() {
                     eprintln!("Read error: {e}");
                     exit(5);
                 }
+            }
+        }
+
+        Commands::Mcp(McpSubcommand {
+            command: McpCommands::Serve,
+        }) => {
+            let stdin = std::io::stdin().lock();
+            let stdout = std::io::stdout().lock();
+            if let Err(e) = mcp::McpServer::serve(stdin, stdout, &mut service) {
+                eprintln!("MCP server error: {e}");
+                exit(5);
             }
         }
 

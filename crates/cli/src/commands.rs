@@ -35,6 +35,8 @@ pub enum Commands {
     Read {
         r_ref: String,
     },
+    /// MCP stdio server commands
+    Mcp(McpSubcommand),
 
     /// Space administrative commands
     Space(SpaceSubcommand),
@@ -73,6 +75,17 @@ pub struct SpaceSubcommand {
     pub command: SpaceCommands,
 }
 
+#[derive(Args, Debug)]
+pub struct McpSubcommand {
+    #[command(subcommand)]
+    pub command: McpCommands,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum McpCommands {
+    /// Start MCP stdio server
+    Serve,
+}
 #[derive(Subcommand, Debug)]
 pub enum SpaceCommands {
     /// Rebuild SQLite projection for the space
