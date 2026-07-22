@@ -1,4 +1,6 @@
-use domain::{ProjectionStore, QueryPage, Resource, ResourceRef, ResourceRelation, Selector};
+use domain::{
+    ProjectionStore, QueryPage, Resource, ResourceRef, ResourceRelation, SegmentRecord, Selector,
+};
 use rusqlite::{Connection, OptionalExtension, params};
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -12,14 +14,6 @@ pub enum StorageError {
     Serialization(#[from] serde_json::Error),
     #[error("Invalid data: {0}")]
     InvalidData(String),
-}
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub struct SegmentRecord {
-    pub id: String,
-    pub attachment_ref: String,
-    pub text: String,
-    pub offset_start: usize,
-    pub offset_end: usize,
 }
 
 pub struct SqliteProjection {
@@ -315,5 +309,12 @@ impl ProjectionStore for SqliteProjection {
         self.conn.execute("DELETE FROM resources", [])?;
         self.conn.execute("DELETE FROM relations", [])?;
         Ok(())
+    }
+    fn insert_segments(&mut self, segments: &[SegmentRecord]) -> Result<(), StorageError> {
+        self.insert_segments(segments)
+    }
+
+    fn query_segments(&self, attachment_ref: &str) -> Result<Vec<SegmentRecord>, StorageError> {
+        self.query_segments(attachment_ref)
     }
 }

@@ -1,4 +1,6 @@
+pub mod attachment;
 pub mod federation;
+pub use attachment::ExtractionResult;
 pub mod service;
 pub use federation::SpaceSourcesConfig;
 pub mod task_para;

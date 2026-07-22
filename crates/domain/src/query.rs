@@ -1,4 +1,4 @@
-use crate::resource::{Resource, ResourceKind, ResourceRef, ResourceRelation};
+use crate::resource::{Resource, ResourceKind, ResourceRef, ResourceRelation, SegmentRecord};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -62,6 +62,13 @@ pub trait ProjectionStore {
     fn query(&self, selector: &Selector) -> Result<QueryPage, Self::Error>;
 
     fn clear(&mut self) -> Result<(), Self::Error>;
+    fn insert_segments(&mut self, _segments: &[SegmentRecord]) -> Result<(), Self::Error> {
+        Ok(())
+    }
+
+    fn query_segments(&self, _attachment_ref: &str) -> Result<Vec<SegmentRecord>, Self::Error> {
+        Ok(Vec::new())
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

@@ -1,6 +1,7 @@
 pub mod extractor;
 
+pub use domain::SegmentRecord;
 pub use extractor::{
-    ExtractedContent, ExtractedSegment, ExtractionError, Extractor, ImageMetadataExtractor,
-    SegmentSlicer, TextExtractor,
+    ExtractedContent, ExtractionError, Extractor, ImageMetadataExtractor, SegmentSlicer,
+    TextExtractor,
 };

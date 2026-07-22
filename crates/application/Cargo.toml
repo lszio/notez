@@ -9,6 +9,7 @@ document = { path = "../document" }
 storage = { path = "../storage" }
 serde = { workspace = true }
 source = { path = "../source" }
+artifact = { path = "../artifact" }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
 ulid = { workspace = true }

@@ -349,6 +349,111 @@ impl<S: ProjectionStore> ApplicationService<S> {
             archives,
         })
     }
+    pub fn add_attachment(
+        &mut self,
+        space_root: &Path,
+        file_path: &Path,
+        default_mime: &str,
+    ) -> Result<ResourceRef, ApplicationError> {
+        let bytes = std::fs::read(file_path)?;
+        let blob_store = storage::BlobStore::new(space_root);
+        let meta = blob_store
+            .store_bytes(&bytes, default_mime)
+            .map_err(ApplicationError::Io)?;
+
+        let att_ref = ResourceRef::new(domain::ResourceKind::Attachment, ulid::Ulid::new());
+        let mut properties = std::collections::BTreeMap::new();
+        properties.insert("hash".to_string(), meta.hash.clone());
+        properties.insert("mime".to_string(), meta.mime_type.clone());
+        properties.insert("size_bytes".to_string(), meta.size_bytes.to_string());
+
+        let title = file_path
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_string();
+
+        let resource = Resource {
+            r#ref: att_ref,
+            kind: domain::ResourceKind::Attachment,
+            title,
+            revision: meta.hash,
+            source_id: "native".to_string(),
+            locator: file_path.to_string_lossy().to_string(),
+            properties,
+        };
+
+        let page = self.query(&Selector::new())?;
+        let mut native_resources: Vec<Resource> = page
+            .items
+            .into_iter()
+            .filter(|r| r.source_id == "native" && r.r#ref != att_ref)
+            .collect();
+        native_resources.push(resource);
+
+        self.store
+            .replace_source("native", native_resources, vec![])
+            .map_err(|e| ApplicationError::Storage(e.to_string()))?;
+
+        Ok(att_ref)
+    }
+
+    pub fn run_extraction(
+        &mut self,
+        space_root: &Path,
+        att_ref: &ResourceRef,
+    ) -> Result<Vec<domain::SegmentRecord>, ApplicationError> {
+        use artifact::{Extractor, ImageMetadataExtractor, SegmentSlicer, TextExtractor};
+
+        let res = self
+            .read(att_ref)?
+            .ok_or_else(|| ApplicationError::NotFound(att_ref.to_string()))?;
+
+        let hash = res
+            .properties
+            .get("hash")
+            .ok_or_else(|| ApplicationError::Storage("missing hash property".to_string()))?;
+        let mime = res
+            .properties
+            .get("mime")
+            .cloned()
+            .unwrap_or_else(|| "application/octet-stream".to_string());
+
+        let blob_store = storage::BlobStore::new(space_root);
+        let bytes = blob_store
+            .get(hash)?
+            .ok_or_else(|| ApplicationError::NotFound(format!("blob hash {hash}")))?;
+
+        let extracted_content = if mime.starts_with("image/") {
+            let ext = ImageMetadataExtractor;
+            ext.extract(&bytes, &mime).map_err(|e| {
+                ApplicationError::Document(document::DocumentError::Other(e.to_string()))
+            })?
+        } else {
+            let ext = TextExtractor;
+            ext.extract(&bytes, &mime).map_err(|e| {
+                ApplicationError::Document(document::DocumentError::Other(e.to_string()))
+            })?
+        };
+
+        let slicer = SegmentSlicer::default();
+        let records = slicer.slice(&att_ref.to_string(), &extracted_content.text);
+
+        self.store
+            .insert_segments(&records)
+            .map_err(|e| ApplicationError::Storage(e.to_string()))?;
+
+        Ok(records)
+    }
+
+    pub fn query_segments(
+        &self,
+        att_ref: &ResourceRef,
+    ) -> Result<Vec<domain::SegmentRecord>, ApplicationError> {
+        self.store
+            .query_segments(&att_ref.to_string())
+            .map_err(|e| ApplicationError::Storage(e.to_string()))
+    }
 
     pub fn rebuild(&mut self, root: &Path) -> Result<ScanReport, ApplicationError> {
         self.store

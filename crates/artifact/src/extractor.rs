@@ -1,3 +1,4 @@
+use domain::SegmentRecord;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use thiserror::Error;
@@ -14,15 +15,6 @@ pub enum ExtractionError {
 pub struct ExtractedContent {
     pub text: String,
     pub metadata: BTreeMap<String, String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ExtractedSegment {
-    pub id: String,
-    pub attachment_ref: String,
-    pub text: String,
-    pub offset_start: usize,
-    pub offset_end: usize,
 }
 
 pub trait Extractor {
@@ -89,7 +81,7 @@ impl SegmentSlicer {
         }
     }
 
-    pub fn slice(&self, attachment_ref: &str, text: &str) -> Vec<ExtractedSegment> {
+    pub fn slice(&self, attachment_ref: &str, text: &str) -> Vec<SegmentRecord> {
         if text.is_empty() {
             return Vec::new();
         }
@@ -104,7 +96,7 @@ impl SegmentSlicer {
             let end = (start + self.max_segment_size).min(total);
             let segment_text: String = chars[start..end].iter().collect();
 
-            segments.push(ExtractedSegment {
+            segments.push(SegmentRecord {
                 id: format!("{attachment_ref}_seg_{idx}"),
                 attachment_ref: attachment_ref.to_string(),
                 text: segment_text,

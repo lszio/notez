@@ -1,6 +1,4 @@
-use artifact::extractor::{
-    Extractor, ImageMetadataExtractor, SegmentSlicer, TextExtractor,
-};
+use artifact::extractor::{Extractor, ImageMetadataExtractor, SegmentSlicer, TextExtractor};
 
 #[test]
 fn text_extractor_and_segment_slicing() {

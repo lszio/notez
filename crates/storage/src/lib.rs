@@ -1,5 +1,6 @@
 pub mod sqlite;
-pub use sqlite::{SegmentRecord, SqliteProjection, StorageError};
+pub use domain::SegmentRecord;
+pub use sqlite::{SqliteProjection, StorageError};
 pub mod blob;
 pub use blob::{BlobMeta, BlobStore};
 
