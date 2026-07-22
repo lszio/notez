@@ -60,6 +60,86 @@ impl<S: ProjectionStore> ApplicationService<S> {
             .map_err(|e| ApplicationError::Storage(e.to_string()))?;
         Ok(res.map(|r| self.rule_engine.evaluate(&r)))
     }
+    pub fn add_source(
+        &self,
+        space_root: &Path,
+        config: source::SourceConfig,
+    ) -> Result<(), ApplicationError> {
+        let mut cfg = crate::federation::SpaceSourcesConfig::load(space_root)?;
+        cfg.sources.retain(|s| s.id != config.id);
+        cfg.sources.push(config);
+        cfg.save(space_root)?;
+        Ok(())
+    }
+
+    pub fn list_sources(
+        &self,
+        space_root: &Path,
+    ) -> Result<Vec<source::SourceConfig>, ApplicationError> {
+        let cfg = crate::federation::SpaceSourcesConfig::load(space_root)?;
+        Ok(cfg.sources)
+    }
+
+    pub fn scan_federation(&mut self, space_root: &Path) -> Result<ScanReport, ApplicationError> {
+        use source::SourceAdapter;
+
+        let mut total_resources = 0;
+        let mut total_relations = 0;
+
+        let sources_cfg = crate::federation::SpaceSourcesConfig::load(space_root)?;
+        let exclude_paths: Vec<std::path::PathBuf> =
+            sources_cfg.sources.iter().map(|s| s.path.clone()).collect();
+
+        let native_config = source::SourceConfig {
+            id: "native".to_string(),
+            kind: source::SourceKind::Native,
+            path: space_root.to_path_buf(),
+            read_only: false,
+            exclude_paths,
+        };
+        let native_adapter = source::NativeSourceAdapter::new(native_config);
+        let native_scanned = native_adapter
+            .scan()
+            .map_err(|e| ApplicationError::Storage(e.to_string()))?;
+
+        total_resources += native_scanned.resources.len();
+        total_relations += native_scanned.relations.len();
+
+        self.store
+            .replace_source("native", native_scanned.resources, native_scanned.relations)
+            .map_err(|e| ApplicationError::Storage(e.to_string()))?;
+        let sources_cfg = crate::federation::SpaceSourcesConfig::load(space_root)?;
+        for src_cfg in sources_cfg.sources {
+            let scanned = match src_cfg.kind {
+                source::SourceKind::Native => {
+                    let adapter = source::NativeSourceAdapter::new(src_cfg.clone());
+                    adapter.scan()
+                }
+                source::SourceKind::Git => {
+                    let adapter = source::GitSourceAdapter::new(src_cfg.clone());
+                    adapter.scan()
+                }
+                source::SourceKind::Obsidian => {
+                    let adapter = source::ObsidianSourceAdapter::new(src_cfg.clone());
+                    adapter.scan()
+                }
+            }
+            .map_err(|e| ApplicationError::Storage(e.to_string()))?;
+
+            total_resources += scanned.resources.len();
+            total_relations += scanned.relations.len();
+
+            self.store
+                .replace_source(&src_cfg.id, scanned.resources, scanned.relations)
+                .map_err(|e| ApplicationError::Storage(e.to_string()))?;
+        }
+
+        Ok(ScanReport {
+            scanned_files: total_resources,
+            scanned_resources: total_resources,
+            scanned_relations: total_relations,
+        })
+    }
 
     pub fn scan_native(&mut self, root: &Path) -> Result<ScanReport, ApplicationError> {
         let mut entries: Vec<PathBuf> = Vec::new();

@@ -28,6 +28,7 @@ fn test_native_git_obsidian_adapters() {
         kind: SourceKind::Native,
         path: native_dir,
         read_only: false,
+        exclude_paths: vec![],
     });
     let native_scanned = native_adapter.scan().unwrap();
     assert_eq!(native_scanned.resources.len(), 2);
@@ -46,6 +47,7 @@ fn test_native_git_obsidian_adapters() {
         kind: SourceKind::Obsidian,
         path: obsidian_dir,
         read_only: true,
+        exclude_paths: vec![],
     });
     let obsidian_scanned = obsidian_adapter.scan().unwrap();
     assert_eq!(obsidian_scanned.resources.len(), 1);
@@ -64,6 +66,7 @@ fn test_native_git_obsidian_adapters() {
         kind: SourceKind::Git,
         path: git_dir,
         read_only: true,
+        exclude_paths: vec![],
     });
     let git_scanned = git_adapter.scan().unwrap();
     assert_eq!(git_scanned.resources.len(), 1);

@@ -20,10 +20,16 @@ impl SourceAdapter for ObsidianSourceAdapter {
 
     fn scan(&self) -> Result<ScannedSource, SourceError> {
         let mut entries: Vec<PathBuf> = Vec::new();
-        for entry in WalkDir::new(&self.config.path).into_iter().filter_map(Result::ok) {
+        for entry in WalkDir::new(&self.config.path)
+            .into_iter()
+            .filter_map(Result::ok)
+        {
             let path = entry.path();
             let rel_path = path.strip_prefix(&self.config.path).unwrap_or(path);
-            if rel_path.components().any(|c| c.as_os_str().to_string_lossy().starts_with('.')) {
+            if rel_path
+                .components()
+                .any(|c| c.as_os_str().to_string_lossy().starts_with('.'))
+            {
                 continue;
             }
             if path.is_file() {

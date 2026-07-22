@@ -20,7 +20,10 @@ impl SourceAdapter for GitSourceAdapter {
 
     fn scan(&self) -> Result<ScannedSource, SourceError> {
         let mut entries: Vec<PathBuf> = Vec::new();
-        for entry in WalkDir::new(&self.config.path).into_iter().filter_map(Result::ok) {
+        for entry in WalkDir::new(&self.config.path)
+            .into_iter()
+            .filter_map(Result::ok)
+        {
             let path = entry.path();
             let rel_path = path.strip_prefix(&self.config.path).unwrap_or(path);
             if rel_path.components().any(|c| {
@@ -44,7 +47,10 @@ impl SourceAdapter for GitSourceAdapter {
         let mut relations = Vec::new();
 
         for path in entries {
-            let ext = path.extension().and_then(|e| e.to_str()).unwrap_or_default();
+            let ext = path
+                .extension()
+                .and_then(|e| e.to_str())
+                .unwrap_or_default();
             if ext == "org" {
                 let doc = OrgScanner::scan(&path, &self.config.id)?;
                 resources.extend(doc.resources);

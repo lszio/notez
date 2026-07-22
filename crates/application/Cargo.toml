@@ -8,6 +8,7 @@ domain = { path = "../domain" }
 document = { path = "../document" }
 storage = { path = "../storage" }
 serde = { workspace = true }
+source = { path = "../source" }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
 ulid = { workspace = true }

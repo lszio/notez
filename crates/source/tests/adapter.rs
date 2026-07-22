@@ -37,6 +37,7 @@ fn source_adapter_interface() {
         kind: SourceKind::Native,
         path: Path::new("/mock/path").to_path_buf(),
         read_only: true,
+        exclude_paths: vec![],
     };
 
     let adapter = MockAdapter { config };

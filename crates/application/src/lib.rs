@@ -1,4 +1,6 @@
+pub mod federation;
 pub mod service;
+pub use federation::SpaceSourcesConfig;
 pub mod task_para;
 pub use task_para::{AgendaItem, AgendaView, ParaOverview};
 

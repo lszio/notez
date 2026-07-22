@@ -27,8 +27,25 @@ pub struct SourceConfig {
     pub kind: SourceKind,
     pub path: PathBuf,
     pub read_only: bool,
+    #[serde(default)]
+    pub exclude_paths: Vec<PathBuf>,
 }
-
+impl SourceConfig {
+    pub fn new(
+        id: impl Into<String>,
+        kind: SourceKind,
+        path: impl Into<PathBuf>,
+        read_only: bool,
+    ) -> Self {
+        Self {
+            id: id.into(),
+            kind,
+            path: path.into(),
+            read_only,
+            exclude_paths: Vec::new(),
+        }
+    }
+}
 #[derive(Debug, Clone)]
 pub struct ScannedSource {
     pub source_id: String,
