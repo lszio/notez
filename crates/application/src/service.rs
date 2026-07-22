@@ -176,6 +176,99 @@ impl<S: ProjectionStore> ApplicationService<S> {
             .get(r_ref)
             .map_err(|e| ApplicationError::Storage(e.to_string()))
     }
+    pub fn agenda(&self) -> Result<crate::task_para::AgendaView, ApplicationError> {
+        let page = self.query(&Selector::new())?;
+        let mut items = Vec::new();
+
+        for res in page.items {
+            let scheduled = res.properties.get("SCHEDULED").cloned();
+            let deadline = res.properties.get("DEADLINE").cloned();
+            let todo = res.properties.get("TODO").cloned();
+
+            if scheduled.is_some() || deadline.is_some() || todo.is_some() {
+                items.push(crate::task_para::AgendaItem {
+                    r_ref: res.r#ref.to_string(),
+                    title: res.title,
+                    todo,
+                    scheduled,
+                    deadline,
+                    locator: res.locator,
+                });
+            }
+        }
+
+        Ok(crate::task_para::AgendaView { items })
+    }
+
+    pub fn transition_task(
+        &mut self,
+        r_ref: &ResourceRef,
+        to_state: &str,
+        timestamp: &str,
+    ) -> Result<document::StateTransition, ApplicationError> {
+        let mut res = self
+            .read(r_ref)?
+            .ok_or_else(|| ApplicationError::NotFound(r_ref.to_string()))?;
+
+        let current_todo = res
+            .properties
+            .get("TODO")
+            .cloned()
+            .unwrap_or_else(|| "TODO".to_string());
+
+        let profile = document::WorkflowProfile::default();
+        let transition = profile
+            .transition(&current_todo, to_state, timestamp)
+            .map_err(|e| {
+                ApplicationError::Document(document::DocumentError::Other(e.to_string()))
+            })?;
+
+        res.properties
+            .insert("TODO".to_string(), transition.to_state.clone());
+        if let Some(ref closed_ts) = transition.closed_timestamp {
+            res.properties
+                .insert("CLOSED".to_string(), closed_ts.clone());
+        }
+
+        let source_id = res.source_id.clone();
+        self.store
+            .replace_source(&source_id, vec![res], vec![])
+            .map_err(|e| ApplicationError::Storage(e.to_string()))?;
+
+        Ok(transition)
+    }
+
+    pub fn para_overview(&self) -> Result<crate::task_para::ParaOverview, ApplicationError> {
+        let page = self.query(&Selector::new())?;
+        let mut projects = Vec::new();
+        let mut areas = Vec::new();
+        let mut resources = Vec::new();
+        let mut archives = Vec::new();
+
+        for res in page.items {
+            let inspect_res = self.inspect_rules(&res.r#ref)?;
+            let para_val = inspect_res
+                .as_ref()
+                .and_then(|i| i.derived_properties.get("para").map(|s| s.as_str()))
+                .or_else(|| res.properties.get("para").map(|s| s.as_str()))
+                .or_else(|| res.properties.get("TYPE").map(|s| s.as_str()));
+
+            match para_val {
+                Some("projects") | Some("project") => projects.push(res),
+                Some("areas") | Some("area") => areas.push(res),
+                Some("resources") | Some("resource") => resources.push(res),
+                Some("archives") | Some("archive") => archives.push(res),
+                _ => {}
+            }
+        }
+
+        Ok(crate::task_para::ParaOverview {
+            projects,
+            areas,
+            resources,
+            archives,
+        })
+    }
 
     pub fn rebuild(&mut self, root: &Path) -> Result<ScanReport, ApplicationError> {
         self.store
