@@ -112,6 +112,15 @@ Export a standalone `SKILL.md` package containing prompt directives and referenc
 ```bash
 notez --space /path/to/space skill export --community dev_comm --description "DevSync Prompt Skill" --out /path/to/skill
 ```
+### Folder Synchronization
+
+Synchronize notes offline between devices via a shared folder (`heads/`, `manifests/`, `objects/`, `tombstones/`):
+
+```bash
+notez --space /path/to/space_a sync push --actor device_a --folder /path/to/shared
+notez --space /path/to/space_b sync pull --actor device_b --folder /path/to/shared
+notez --space /path/to/space_b sync conflicts --json
+```
 
 ### Source Management (Federation)
 

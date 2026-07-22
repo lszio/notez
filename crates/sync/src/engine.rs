@@ -86,7 +86,7 @@ impl SyncEngine {
             }
         }
 
-        let heads = HeadsTracker::new(&self.transport.store.manifests_dir().parent().unwrap());
+        let heads = HeadsTracker::new(self.transport.store.manifests_dir().parent().unwrap());
         heads.set_head(&self.actor_id, &format!("snap_{pushed_files}"))?;
 
         Ok(PushReport {
@@ -95,7 +95,6 @@ impl SyncEngine {
             pushed_objects,
         })
     }
-
     pub fn pull(&self) -> Result<PullReport, SyncError> {
         let mut pulled_files = 0;
         let mut merged_files = 0;
