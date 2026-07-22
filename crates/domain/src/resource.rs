@@ -111,3 +111,9 @@ pub struct Resource {
     pub locator: String,
     pub properties: BTreeMap<String, String>,
 }
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ResourceRelation {
+    pub source_ref: ResourceRef,
+    pub relation: String,
+    pub target_ref: ResourceRef,
+}
