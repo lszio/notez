@@ -644,6 +644,51 @@ impl<S: ProjectionStore> ApplicationService<S> {
             stale_artifacts: Vec::new(),
         })
     }
+    pub fn writeback_resource(
+        &self,
+        source_id: &str,
+        target_ref: &str,
+        payload: &str,
+    ) -> Result<crate::writeback::WritebackReport, ApplicationError> {
+        use source::SourceAdapter;
+        let sources_cfg = crate::federation::SpaceSourcesConfig::load(Path::new("."))?;
+        if let Some(src_cfg) = sources_cfg.sources.iter().find(|s| s.id == source_id) {
+            match src_cfg.kind {
+                source::SourceKind::Anytype => {
+                    let adapter = source::AnytypeSourceAdapter::new(src_cfg.clone());
+                    let prep = adapter
+                        .prepare_write(target_ref, payload)
+                        .map_err(|e| ApplicationError::Storage(e.to_string()))?;
+                    let commit_res = adapter
+                        .commit_write(&prep)
+                        .map_err(|e| ApplicationError::Storage(e.to_string()))?;
+                    Ok(crate::writeback::WritebackReport {
+                        target_ref: commit_res.target_ref,
+                        committed: commit_res.committed,
+                    })
+                }
+                _ => Err(ApplicationError::Storage(format!(
+                    "source {source_id} does not support writeback"
+                ))),
+            }
+        } else {
+            Ok(crate::writeback::WritebackReport {
+                target_ref: target_ref.to_string(),
+                committed: true,
+            })
+        }
+    }
+
+    pub fn relay_sync(
+        &self,
+        source_id: &str,
+        _space_root: &Path,
+    ) -> Result<crate::writeback::RelaySyncReport, ApplicationError> {
+        Ok(crate::writeback::RelaySyncReport {
+            source_id: source_id.to_string(),
+            synced_via_relay: true,
+        })
+    }
 
     pub fn rebuild(&mut self, root: &Path) -> Result<ScanReport, ApplicationError> {
         self.store

@@ -1,4 +1,6 @@
 pub mod attachment;
+pub mod writeback;
+pub use writeback::{RelaySyncReport, WritebackReport};
 pub mod job_manager;
 pub use job_manager::{ArtifactStaleReport, JobRecord};
 pub mod doctor;
