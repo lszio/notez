@@ -1,5 +1,4 @@
 use assert_cmd::Command;
-use std::fs;
 use tempfile::tempdir;
 
 fn notez_cmd() -> Command {

@@ -1,7 +1,4 @@
-use std::io;
-use std::path::PathBuf;
 use sync::manifest::Manifest;
-use sync::object::SyncObject;
 use sync::relay::{P2pTransport, RelayTransport, SyncEvent, SyncTransport, TransportRegistry};
 use tempfile::tempdir;
 
@@ -54,7 +51,7 @@ fn p2p_transport_provides_object_lookups() {
 fn transport_registry_tracks_named_transports() {
     let temp = tempdir().unwrap();
     let mut registry = TransportRegistry::new(temp.path());
-    registry.register("relay", RelayTransport::new(&temp.path()));
+    registry.register("relay", RelayTransport::new(temp.path()));
     registry.register("p2p", P2pTransport::new());
     assert_eq!(registry.transports.len(), 2);
     assert!(registry.transports.contains_key("relay"));

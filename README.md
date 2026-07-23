@@ -82,10 +82,32 @@ Fetch full resource metadata and properties:
 ```bash
 notez --space /path/to/space read heading:01J00000000000000000000001 --json
 ```
+### Anytype Source Adapter & Writeback
+
+Mount Anytype sources and execute atomic writeback mutations:
+
+```bash
+notez --space /path/to/space source add --id anytype_src --kind anytype --path /anytype/path --read-only
+notez --space /path/to/space source writeback --id anytype_src --r-ref heading:01J00000000000000000000001 --payload "Updated Title"
+```
+
+### Block-Level References
+
+Fine-grained paragraph and code block entities use `block:<ULID>` references:
+
+```bash
+notez --space /path/to/space query --kind block --json
+```
+
+### Relay/P2P Sync Transport
+
+Sync via Relay server (the folder-based transport is the default):
+
+```bash
+notez --space /path/to/space sync relay --id anytype_src
+```
 
 ### Inspect Rule Traces
-
-Inspect classification, derivation, and validation traces for a resource ref:
 
 ```bash
 notez --space /path/to/space inspect heading:01J00000000000000000000001 --rules --json

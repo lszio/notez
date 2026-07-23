@@ -55,10 +55,10 @@ impl SyncTransport for RelayTransport {
             .store
             .read_manifest(logical_path)
             .map_err(|e| io::Error::other(e.to_string()))?;
-        if let Some(m) = &result {
-            if let Ok(mut events) = self.events.lock() {
-                events.push(SyncEvent::ManifestPulled(m.clone()));
-            }
+        if let Some(m) = &result
+            && let Ok(mut events) = self.events.lock()
+        {
+            events.push(SyncEvent::ManifestPulled(m.clone()));
         }
         Ok(result)
     }

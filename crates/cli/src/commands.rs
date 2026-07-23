@@ -82,18 +82,20 @@ pub struct QueryArgs {
     #[arg(long)]
     pub exact_ref: Option<String>,
 }
-
 #[derive(ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CliResourceKind {
     Document,
     Heading,
+    Attachment,
+    Block,
 }
-
 impl From<CliResourceKind> for ResourceKind {
     fn from(k: CliResourceKind) -> Self {
         match k {
             CliResourceKind::Document => ResourceKind::Document,
             CliResourceKind::Heading => ResourceKind::Heading,
+            CliResourceKind::Attachment => ResourceKind::Attachment,
+            CliResourceKind::Block => ResourceKind::Block,
         }
     }
 }
