@@ -1,4 +1,6 @@
 pub mod engine;
+pub mod relay;
+pub use relay::{P2pTransport, RelayTransport, SyncEvent, SyncTransport, TransportRegistry};
 pub mod manifest;
 pub mod transport;
 pub use engine::{PullReport, PushReport, SyncEngine};
