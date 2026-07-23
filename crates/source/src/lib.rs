@@ -1,7 +1,7 @@
 pub mod adapter;
 pub mod anytype;
-pub use anytype::AnytypeSourceAdapter;
 pub use adapter::{PreparedWrite, SourceCapabilities, WriteResult};
+pub use anytype::AnytypeSourceAdapter;
 pub mod git;
 pub mod native;
 pub mod obsidian;

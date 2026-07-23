@@ -1,7 +1,4 @@
-use source::{
-    AnytypeSourceAdapter, SourceAdapter, SourceConfig,
-    SourceKind,
-};
+use source::{AnytypeSourceAdapter, SourceAdapter, SourceConfig, SourceKind};
 use tempfile::tempdir;
 
 #[test]

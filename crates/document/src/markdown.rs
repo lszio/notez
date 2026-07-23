@@ -140,6 +140,34 @@ impl MarkdownScanner {
                     });
                 }
             }
+            if !trimmed.starts_with('#')
+                && let Some(comment_start) = trimmed.find("<!--")
+                && let Some(comment_end) = trimmed[comment_start..].find("-->")
+            {
+                let comment_body = trimmed[comment_start + 4..comment_start + comment_end].trim();
+                if let Some((id_k, id_v)) = comment_body.split_once(':')
+                    && id_k.trim().eq_ignore_ascii_case("id")
+                {
+                    let id_val = id_v.trim();
+                    let full_ref = if id_val.contains(':') {
+                        id_val.to_string()
+                    } else {
+                        format!("block:{id_val}")
+                    };
+                    if let Ok(b_ref) = ResourceRef::parse(&full_ref) {
+                        resources.push(Resource {
+                            r#ref: b_ref,
+                            kind: ResourceKind::Block,
+                            title: trimmed[..comment_start].trim().to_string(),
+                            revision: revision.clone(),
+                            source_id: source_id.to_string(),
+                            locator: path_str.clone(),
+                            properties: BTreeMap::new(),
+                        });
+                        current_source_ref = b_ref;
+                    }
+                }
+            }
 
             for target_ref in extract_markdown_links(line) {
                 links.push(ResourceRelation {

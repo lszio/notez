@@ -123,6 +123,10 @@ impl<S: ProjectionStore> ApplicationService<S> {
                     let adapter = source::ObsidianSourceAdapter::new(src_cfg.clone());
                     adapter.scan()
                 }
+                source::SourceKind::Anytype => {
+                    let adapter = source::AnytypeSourceAdapter::new(src_cfg.clone());
+                    adapter.scan()
+                }
             }
             .map_err(|e| ApplicationError::Storage(e.to_string()))?;
 

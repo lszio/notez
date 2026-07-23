@@ -90,6 +90,14 @@ impl OrgScanner {
                             col,
                         )?;
                         doc_id_opt = Some((r_ref, line_idx + 1, col));
+                    } else if key_upper == "NAME" {
+                        let block_ref = ResourceRef::new(ResourceKind::Block, Ulid::new());
+                        headings.push(PendingHeading {
+                            level: 99,
+                            title: val.to_string(),
+                            properties: BTreeMap::new(),
+                            id_opt: Some((block_ref, line_idx + 1, 1)),
+                        });
                     }
                     doc_properties.insert(key_upper, val.to_string());
                 }
@@ -204,7 +212,7 @@ impl OrgScanner {
 
             resources.push(Resource {
                 r#ref: h_ref,
-                kind: ResourceKind::Heading,
+                kind: h_ref.kind(),
                 title: h.title,
                 revision: revision.clone(),
                 source_id: source_id.to_string(),

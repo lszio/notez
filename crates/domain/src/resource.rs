@@ -11,6 +11,7 @@ pub enum ResourceKind {
     Document,
     Heading,
     Attachment,
+    Block,
 }
 
 impl ResourceKind {
@@ -19,6 +20,7 @@ impl ResourceKind {
             ResourceKind::Document => "document",
             ResourceKind::Heading => "heading",
             ResourceKind::Attachment => "attachment",
+            ResourceKind::Block => "block",
         }
     }
 }
@@ -56,6 +58,7 @@ impl ResourceRef {
             "document" => ResourceKind::Document,
             "heading" => ResourceKind::Heading,
             "attachment" => ResourceKind::Attachment,
+            "block" => ResourceKind::Block,
             _ => return Err(ResourceRefError::UnknownKind(kind_str.to_string())),
         };
         let id =
