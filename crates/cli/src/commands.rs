@@ -188,6 +188,12 @@ pub enum SyncCommands {
 
     /// List active sync conflicts
     Conflicts,
+
+    /// Trigger relay transport sync
+    Relay {
+        #[arg(long)]
+        id: String,
+    },
 }
 #[derive(Subcommand, Debug)]
 pub enum SpaceCommands {
@@ -300,6 +306,18 @@ pub enum SourceCommands {
 
     /// Sync / scan federated sources
     Sync,
+
+    /// Trigger writeback mutation to a writable external source
+    Writeback {
+        #[arg(long)]
+        id: String,
+
+        #[arg(long)]
+        r_ref: String,
+
+        #[arg(long)]
+        payload: String,
+    },
 }
 
 #[derive(ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
@@ -307,6 +325,7 @@ pub enum CliSourceKind {
     Native,
     Git,
     Obsidian,
+    Anytype,
 }
 
 impl From<CliSourceKind> for source::SourceKind {
@@ -315,6 +334,7 @@ impl From<CliSourceKind> for source::SourceKind {
             CliSourceKind::Native => source::SourceKind::Native,
             CliSourceKind::Git => source::SourceKind::Git,
             CliSourceKind::Obsidian => source::SourceKind::Obsidian,
+            CliSourceKind::Anytype => source::SourceKind::Anytype,
         }
     }
 }

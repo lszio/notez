@@ -321,6 +321,28 @@ fn main() {
                     exit(5);
                 }
             },
+
+            commands::SourceCommands::Writeback { id, r_ref, payload } => {
+                match service.writeback_resource(&id, &r_ref, &payload) {
+                    Ok(report) => {
+                        if cli.json {
+                            println!(
+                                "{}",
+                                json!({
+                                    "target_ref": report.target_ref,
+                                    "committed": report.committed
+                                })
+                            );
+                        } else {
+                            println!("Writeback committed: {}", report.committed);
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("Source writeback error: {e}");
+                        exit(5);
+                    }
+                }
+            }
         },
         Commands::Attachment(commands::AttachmentSubcommand { command }) => match command {
             commands::AttachmentCommands::Add { path, mime } => {
@@ -548,6 +570,28 @@ fn main() {
                 }
                 Err(e) => {
                     eprintln!("Sync conflicts error: {e}");
+                    exit(5);
+                }
+            },
+            commands::SyncCommands::Relay { id } => match service.relay_sync(&id, &cli.space) {
+                Ok(report) => {
+                    if cli.json {
+                        println!(
+                            "{}",
+                            json!({
+                                "source_id": report.source_id,
+                                "synced_via_relay": report.synced_via_relay
+                            })
+                        );
+                    } else {
+                        println!(
+                            "Relay sync complete for {} (synced: {})",
+                            report.source_id, report.synced_via_relay
+                        );
+                    }
+                }
+                Err(e) => {
+                    eprintln!("Sync relay error: {e}");
                     exit(5);
                 }
             },
