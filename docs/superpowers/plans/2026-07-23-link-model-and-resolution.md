@@ -262,3 +262,70 @@ Expected: PASS with preserved unresolved/ambiguous links and stable identities.
 git add crates/application/src/link_resolver.rs crates/application/src/lib.rs crates/application/src/service.rs crates/application/tests/link_resolution.rs tests/golden_suite.rs
 git commit -m "feat(application): resolve and diagnose textual links"
 ```
+
+## Task 5 实施现状与缺口 (2026-07-24 追加)
+
+复查代码后，T1–T4 已经在 dev 分支落地 (f4e5039 之前的工作)。T5 只完成
+`crates/application/src/link_resolution.rs` 中的最简候选匹配，且尚未提供 plan
+要求的四个公共方法、也没有写入 candidates 证据。下列缺口必须在 0.3 收尾时全部
+解决。
+
+### 5-A storage 层：持久化 candidates 与诊断字段
+- 在 `link_occurrences` 表新增 `candidates_json TEXT NOT NULL DEFAULT '[]'` 与
+  `last_resolved_at TEXT`，并在 `replace_links` / 重建时写入。`ProjectionStore`
+  trait 增 `list_link_occurrences_with_diagnostics(&self, source_ref)` 返回
+  `(LinkOccurrence, Vec<ResourceRef>, ResolutionStatus, Option<String>)`。
+- `resolved_relations` 表保留现状 (单 target_ref) 因为唯一命中；候选只在
+  `link_occurrences.candidates_json` 留痕。
+
+### 5-B application 层：补齐四个公共方法 + LinkResolver
+- 新增 `crates/application/src/link_resolver.rs`，导出 `LinkResolver` 与
+  `ResolutionDecision { status, target_ref, candidates, evidence }`。
+- 在 `ApplicationService` 增：
+  - `list_links(&self, source_ref: &ResourceRef) -> Vec<LinkOccurrence>`
+  - `resolve_links(&mut self, source_ref: &ResourceRef) -> Vec<ResolvedRelation>`
+  - `diagnose_link(&self, source_ref: &ResourceRef) -> Vec<LinkDiagnostic>`
+  - `reindex_links(&mut self, space_root: &Path) -> LinkReindexReport`
+- 引入 `ResourceAddress` 入口：让 `read / query / resolve` 接受 `&ResourceAddress`。
+  旧 `&ResourceRef` 方法保留为薄包装，避免一次性破坏。
+- 决议策略：按 plan §3.4 顺序 (exact ref → normalized path → alias →
+  basename/title)；写库时把 `candidates` 和 `evidence` 一并存入
+  `link_occurrences.candidates_json`。
+- `LinkReindexReport` 含 scanned/resolved/unresolved/ambiguous/external 计数。
+
+### 5-C CLI：补齐诊断与重索引命令
+- `notez link diagnose <ref>` 输出按 status 分组的诊断 JSON。
+- `notez link reindex [--space <path>]` 重新对扫描出的链接走 resolver，
+  输出 `LinkReindexReport`。
+- `notez resolve <address>` 接受 `ResourceAddress` 字面量 (`document:...`、
+  `file:...`、`[[Title]]` 等)。
+- 已有 `link list / link resolved` 行为不变，但 `link list` 现在带 status。
+
+### 5-D MCP：补齐 4 个 link 工具 + 修正 inspect
+- `tools/list` 新增：
+  - `link_list { ref }`
+  - `link_resolve { ref }`
+  - `link_diagnose { ref }`
+  - `link_reindex { space? }`
+- `resolve` 工具接受 `address: string` (覆盖原 `query` 字段)，内部走
+  `ResourceAddress::parse`。
+- `inspect` 工具改为调用真正的 inspect 操作：输入 `{ ref? }`，输出
+  `{ resource, occurrences_by_status, resolved_relations, trace_id }`。
+  不再退化为 `query(Selector::new())`。
+
+### 5-E golden suite
+- 新建 `tests/golden_suite.rs`，固定一个 fixture 空间 (两个 `Design.md`、一个
+  `Design.org`、一个空目录、URL、ID link、显式歧义标题)。
+- 断言：
+  1. 同名文件 ID link 解析唯一。
+  2. 裸标题在两处出现 → status=ambiguous，candidates 长度 >= 2。
+  3. 不存在 target → status=unresolved。
+  4. HTTPS → status=external，target_ref=None。
+  5. 重复扫描 → 所有 ref 与 status 完全稳定。
+
+### 5-F 验收门槛 (合并入 0.3 publish gate)
+- 全部测试 `cargo test --workspace` PASS。
+- `notez link diagnose` 与 MCP `link_diagnose` 对同 fixture 输出等价 JSON。
+- `link_reindex` 后 `unresolved/ambiguous/resolved` 计数与首次扫描完全一致。
+- 旧 `relations` 视图仍可读；CLI `link resolved` 与 MCP `link_resolve` 返回
+  等价。

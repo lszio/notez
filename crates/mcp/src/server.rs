@@ -158,8 +158,65 @@ impl McpServer {
                             }
                         },
                         {
+                            "name": "link_list",
+                            "description": "List link occurrences for a resource",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "ref": { "type": "string" }
+                                },
+                                "required": ["ref"],
+                                "additionalProperties": false
+                            }
+                        },
+                        {
+                            "name": "link_resolve",
+                            "description": "Re-resolve link occurrences for a resource and return relations",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "ref": { "type": "string" }
+                                },
+                                "required": ["ref"],
+                                "additionalProperties": false
+                            }
+                        },
+                        {
+                            "name": "link_diagnose",
+                            "description": "Diagnose link occurrences (status + candidates) for a resource",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "ref": { "type": "string" }
+                                },
+                                "required": ["ref"],
+                                "additionalProperties": false
+                            }
+                        },
+                        {
+                            "name": "link_reindex",
+                            "description": "Reindex link status counts for the whole space",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "space": { "type": "string" }
+                                },
+                                "additionalProperties": false
+                            }
+                        },
+                        {
+                            "name": "inspect",
+                            "description": "Inspect projection status and resources",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "ref": { "type": "string" }
+                                },
+                                "additionalProperties": false
+                            }
+                        },
+                        {
                             "name": "agenda",
-                            "description": "Query agenda view for scheduled or deadline items",
                             "inputSchema": {
                                 "type": "object",
                                 "properties": {},
@@ -435,44 +492,135 @@ impl McpServer {
     ) -> Result<String, (String, bool)> {
         match name {
             "resolve" => {
-                let query = args
-                    .get("query")
+                let address_str = args
+                    .get("address")
+                    .or_else(|| args.get("query"))
                     .and_then(|q| q.as_str())
-                    .ok_or_else(|| ("Invalid params: missing 'query'".to_string(), false))?;
-                match service.resolve(query) {
-                    Ok(ResolveResult::Found(r_ref)) => {
-                        Ok(json!({ "ref": r_ref.to_string() }).to_string())
+                    .ok_or_else(|| ("Invalid params: missing 'address'".to_string(), false))?;
+                if let Ok(addr) = domain::ResourceAddress::parse(address_str) {
+                    match service.resolve_address(&addr) {
+                        Ok(ResolveResult::Found(r_ref)) => {
+                            Ok(json!({ "ref": r_ref.to_string() }).to_string())
+                        }
+                        Ok(ResolveResult::NotFound) => {
+                            Err((format!("Resource not found: {address_str}"), true))
+                        }
+                        Ok(ResolveResult::Ambiguous(refs)) => {
+                            let str_refs: Vec<String> = refs.iter().map(|r| r.to_string()).collect();
+                            Err((
+                                format!("Ambiguous resolve '{address_str}': matches {str_refs:?}"),
+                                true,
+                            ))
+                        }
+                        Err(e) => Err((format!("Internal resolve error: {e}"), true)),
                     }
-                    Ok(ResolveResult::NotFound) => {
-                        Err((format!("Resource not found: {query}"), true))
+                } else {
+                    match service.resolve(address_str) {
+                        Ok(ResolveResult::Found(r_ref)) => {
+                            Ok(json!({ "ref": r_ref.to_string() }).to_string())
+                        }
+                        Ok(ResolveResult::NotFound) => {
+                            Err((format!("Resource not found: {address_str}"), true))
+                        }
+                        Ok(ResolveResult::Ambiguous(refs)) => {
+                            let str_refs: Vec<String> = refs.iter().map(|r| r.to_string()).collect();
+                            Err((
+                                format!("Ambiguous resolve '{address_str}': matches {str_refs:?}"),
+                                true,
+                            ))
+                        }
+                        Err(e) => Err((format!("Internal resolve error: {e}"), true)),
                     }
-                    Ok(ResolveResult::Ambiguous(refs)) => {
-                        let str_refs: Vec<String> = refs.iter().map(|r| r.to_string()).collect();
-                        Err((
-                            format!("Ambiguous query '{query}': matches {str_refs:?}"),
-                            true,
-                        ))
-                    }
-                    Err(e) => Err((format!("Internal resolve error: {e}"), true)),
                 }
             }
-
-            "query" => {
-                let mut selector = Selector::new();
-                if let Some(kind_str) = args.get("kind").and_then(|k| k.as_str()) {
-                    match kind_str {
-                        "document" => selector.kind = Some(ResourceKind::Document),
-                        "heading" => selector.kind = Some(ResourceKind::Heading),
-                        _ => return Err((format!("Unknown resource kind: {kind_str}"), false)),
+            "link_list" => {
+                let ref_str = args
+                    .get("ref")
+                    .and_then(|r| r.as_str())
+                    .ok_or_else(|| ("Invalid params: missing 'ref'".to_string(), false))?;
+                let parsed = ResourceRef::parse(ref_str)
+                    .map_err(|e| (format!("Invalid resource ref '{ref_str}': {e}"), false))?;
+                match service.list_links(&parsed) {
+                    Ok(occs) => Ok(serde_json::to_string(&occs).unwrap()),
+                    Err(e) => Err((format!("Internal link_list error: {e}"), true)),
+                }
+            }
+            "link_resolve" => {
+                let ref_str = args
+                    .get("ref")
+                    .and_then(|r| r.as_str())
+                    .ok_or_else(|| ("Invalid params: missing 'ref'".to_string(), false))?;
+                let parsed = ResourceRef::parse(ref_str)
+                    .map_err(|e| (format!("Invalid resource ref '{ref_str}': {e}"), false))?;
+                match service.resolve_links(&parsed) {
+                    Ok(rels) => Ok(serde_json::to_string(&rels).unwrap()),
+                    Err(e) => Err((format!("Internal link_resolve error: {e}"), true)),
+                }
+            }
+            "link_diagnose" => {
+                let ref_str = args
+                    .get("ref")
+                    .and_then(|r| r.as_str())
+                    .ok_or_else(|| ("Invalid params: missing 'ref'".to_string(), false))?;
+                let parsed = ResourceRef::parse(ref_str)
+                    .map_err(|e| (format!("Invalid resource ref '{ref_str}': {e}"), false))?;
+                match service.diagnose_link(&parsed) {
+                    Ok(diags) => Ok(serde_json::to_string(&diags).unwrap()),
+                    Err(e) => Err((format!("Internal link_diagnose error: {e}"), true)),
+                }
+            }
+            "link_reindex" => {
+                let space_str = args
+                    .get("space")
+                    .and_then(|s| s.as_str())
+                    .unwrap_or(".");
+                let space_path = std::path::Path::new(space_str);
+                match service.reindex_links(space_path) {
+                    Ok(report) => Ok(serde_json::to_string(&report).unwrap()),
+                    Err(e) => Err((format!("Internal link_reindex error: {e}"), true)),
+                }
+            }
+            "inspect" => {
+                if let Some(ref_str) = args.get("ref").and_then(|r| r.as_str()) {
+                    let parsed = ResourceRef::parse(ref_str).map_err(|e| {
+                        (format!("Invalid resource ref '{ref_str}': {e}"), false)
+                    })?;
+                    let occs = service.list_links(&parsed).map_err(|e| {
+                        (format!("Internal inspect error: {e}"), true)
+                    })?;
+                    let resolved = service.resolve_links(&parsed).map_err(|e| {
+                        (format!("Internal inspect error: {e}"), true)
+                    })?;
+                    let diags = service.diagnose_link(&parsed).map_err(|e| {
+                        (format!("Internal inspect error: {e}"), true)
+                    })?;
+                    let mut by_status = serde_json::Map::new();
+                    for d in &diags {
+                        let key = format!("{:?}", d.status);
+                        let count = by_status
+                            .get(&key)
+                            .and_then(|v| v.as_u64())
+                            .unwrap_or(0);
+                        by_status.insert(key, serde_json::json!(count + 1));
                     }
-                }
-                if let Some(title_sub) = args.get("title_contains").and_then(|t| t.as_str()) {
-                    selector.title_contains = Some(title_sub.to_string());
-                }
-
-                match service.query(&selector) {
-                    Ok(page) => Ok(serde_json::to_string(&page).unwrap()),
-                    Err(e) => Err((format!("Internal query error: {e}"), true)),
+                    Ok(json!({
+                        "ref": parsed.to_string(),
+                        "occurrences": occs,
+                        "resolved_relations": resolved,
+                        "diagnostics": diags,
+                        "occurrences_by_status": by_status,
+                    })
+                    .to_string())
+                } else {
+                    // No ref provided: project-level snapshot.
+                    let page = service.query(&Selector::new()).map_err(|e| {
+                        (format!("Internal inspect error: {e}"), true)
+                    })?;
+                    Ok(json!({
+                        "status": "ok",
+                        "total_items": page.items.len(),
+                    })
+                    .to_string())
                 }
             }
 
@@ -490,16 +638,6 @@ impl McpServer {
                     Err(e) => Err((format!("Internal read error: {e}"), true)),
                 }
             }
-
-            "inspect" => match service.query(&Selector::new()) {
-                Ok(page) => Ok(json!({
-                    "status": "ok",
-                    "total_items": page.items.len(),
-                    "items": page.items
-                })
-                .to_string()),
-                Err(e) => Err((format!("Internal inspect error: {e}"), true)),
-            },
 
             "inspect_rules" => {
                 let ref_str = args

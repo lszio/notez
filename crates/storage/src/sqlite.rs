@@ -80,7 +80,18 @@ impl SqliteProjection {
                 span_line INTEGER NOT NULL,
                 span_col_start INTEGER NOT NULL,
                 span_col_end INTEGER NOT NULL,
+                status TEXT NOT NULL DEFAULT 'unresolved',
+                candidates_json TEXT NOT NULL DEFAULT '[]',
                 source_id TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS link_diagnostics (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                source_ref TEXT NOT NULL,
+                source_id TEXT NOT NULL,
+                status TEXT NOT NULL,
+                candidates_json TEXT NOT NULL DEFAULT '[]',
+                raw TEXT NOT NULL
             );
 
             CREATE INDEX IF NOT EXISTS idx_link_occ_source_ref ON link_occurrences(source_ref);
@@ -286,7 +297,6 @@ impl ProjectionStore for SqliteProjection {
             Ok(None)
         }
     }
-
     fn query(&self, selector: &Selector) -> Result<QueryPage, StorageError> {
         let mut sql = "SELECT ref, kind, title, revision, source_id, locator, properties_json FROM resources WHERE 1=1".to_string();
         let mut query_params: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
@@ -543,5 +553,123 @@ impl ProjectionStore for SqliteProjection {
             });
         }
         Ok(results)
+    }
+
+    fn write_link_diagnostics(
+        &mut self,
+        source_id: &str,
+        diagnostics: &[(LinkOccurrence, ResolutionStatus, Vec<ResourceRef>)],
+    ) -> Result<(), StorageError> {
+        let tx = self.conn.transaction()?;
+        tx.execute(
+            "DELETE FROM link_diagnostics WHERE source_id = ?1",
+            params![source_id],
+        )?;
+        let mut stmt = tx.prepare(
+            "INSERT INTO link_diagnostics (source_ref, source_id, status, candidates_json, raw)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+        )?;
+        for (occ, status, candidates) in diagnostics {
+            let status_str = serde_json::to_string(status)?;
+            let candidates_json = serde_json::to_string(candidates)?;
+            stmt.execute(params![
+                occ.source_ref.to_string(),
+                source_id,
+                status_str,
+                candidates_json,
+                occ.raw,
+            ])?;
+        }
+        drop(stmt);
+        // Mirror onto link_occurrences so list_link_diagnostics can join
+        // without a sidecar read. Match by raw text within a source.
+        tx.execute(
+            "UPDATE link_occurrences SET status = 'unresolved', candidates_json = '[]' WHERE source_id = ?1",
+            params![source_id],
+        )?;
+        let mut stmt_update = tx.prepare(
+            "UPDATE link_occurrences
+                SET status = ?1, candidates_json = ?2
+              WHERE source_id = ?3 AND raw = ?4",
+        )?;
+        for (occ, status, candidates) in diagnostics {
+            let status_str = serde_json::to_string(status)?;
+            let candidates_json = serde_json::to_string(candidates)?;
+            stmt_update.execute(params![
+                status_str,
+                candidates_json,
+                source_id,
+                occ.raw,
+            ])?;
+        }
+        drop(stmt_update);
+        tx.commit()?;
+        Ok(())
+    }
+
+    fn list_link_diagnostics(
+        &self,
+        source_ref: &ResourceRef,
+    ) -> Result<Option<Vec<domain::LinkDiagnostic>>, StorageError> {
+        let ref_str = source_ref.to_string();
+        let mut stmt = self.conn.prepare(
+            "SELECT lo.source_ref, lo.target_json, lo.raw, lo.display_text,
+                    lo.span_line, lo.span_col_start, lo.span_col_end,
+                    lo.status, lo.candidates_json
+               FROM link_occurrences lo
+              WHERE lo.source_ref = ?1
+              ORDER BY lo.span_line, lo.span_col_start",
+        )?;
+        let rows = stmt.query_map(params![ref_str], |row| {
+            let source_ref_str: String = row.get(0)?;
+            let target_json: String = row.get(1)?;
+            let raw: String = row.get(2)?;
+            let display_text: Option<String> = row.get(3)?;
+            let span_line: i64 = row.get(4)?;
+            let span_col_start: i64 = row.get(5)?;
+            let span_col_end: i64 = row.get(6)?;
+            let status_str: String = row.get(7)?;
+            let candidates_json: String = row.get(8)?;
+            Ok((
+                source_ref_str,
+                target_json,
+                raw,
+                display_text,
+                span_line,
+                span_col_start,
+                span_col_end,
+                status_str,
+                candidates_json,
+            ))
+        })?;
+        let mut results = Vec::new();
+        let mut any = false;
+        for r in rows {
+            any = true;
+            let (source_ref_str, target_json, raw, display_text,
+                 span_line, span_col_start, span_col_end,
+                 status_str, candidates_json) = r?;
+            let source_ref = ResourceRef::parse(&source_ref_str)
+                .map_err(|e| StorageError::InvalidData(format!("invalid ref: {e}")))?;
+            let target: LinkTarget = serde_json::from_str(&target_json)?;
+            let status: ResolutionStatus = serde_json::from_str(&status_str)?;
+            let candidates: Vec<ResourceRef> = serde_json::from_str(&candidates_json)?;
+            results.push(domain::LinkDiagnostic {
+                occurrence: LinkOccurrence {
+                    source_ref,
+                    target,
+                    raw,
+                    display_text,
+                    span: TextSpan {
+                        line: span_line as usize,
+                        col_start: span_col_start as usize,
+                        col_end: span_col_end as usize,
+                    },
+                },
+                status,
+                candidates,
+            });
+        }
+        Ok(if any { Some(results) } else { None })
     }
 }

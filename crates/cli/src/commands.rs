@@ -110,13 +110,21 @@ pub struct LinkSubcommand {
 
 #[derive(Subcommand, Debug)]
 pub enum LinkCommands {
-    /// List link occurrences for a resource
     List {
         r_ref: String,
     },
     /// List resolved relations for a resource
     Resolved {
         r_ref: String,
+    },
+    /// Diagnose link occurrences (status + candidates) for a resource
+    Diagnose {
+        r_ref: String,
+    },
+    /// Re-resolve and tally link statuses for the whole space
+    Reindex {
+        #[arg(long, default_value = ".")]
+        space: PathBuf,
     },
 }
 

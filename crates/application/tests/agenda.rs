@@ -50,5 +50,5 @@ fn agenda_views_task_transitions_and_para_overview() {
 
     let para = service.para_overview().unwrap();
     assert_eq!(para.projects.len(), 1);
-    assert_eq!(para.projects[0].r#ref, r_ref);
+    assert_eq!(para.projects[0].resource.r#ref, r_ref);
 }

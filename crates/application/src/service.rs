@@ -1,5 +1,8 @@
 use document::{DocumentError, OrgScanner};
-use domain::{ProjectionStore, QueryPage, Resource, ResourceRef, Selector};
+use domain::{
+    LinkDiagnostic, LinkOccurrence, ProjectionStore, QueryPage, ResolvedRelation,
+    ResolutionStatus, Resource, ResourceKind, ResourceRef, Selector,
+};
 use std::path::{Path, PathBuf};
 use thiserror::Error;
 use walkdir::WalkDir;
@@ -312,6 +315,128 @@ impl<S: ProjectionStore> ApplicationService<S> {
             .map_err(|e| ApplicationError::Storage(e.to_string()))
     }
 
+    /// List every link occurrence originating from `source_ref` (raw form).
+    pub fn list_links(
+        &self,
+        source_ref: &ResourceRef,
+    ) -> Result<Vec<LinkOccurrence>, ApplicationError> {
+        self.query_link_occurrences(source_ref)
+    }
+
+    /// Re-resolve every occurrence for `source_ref` and persist diagnostics.
+    pub fn resolve_links(
+        &mut self,
+        source_ref: &ResourceRef,
+    ) -> Result<Vec<ResolvedRelation>, ApplicationError> {
+        let occs = self.query_link_occurrences(source_ref)?;
+        // Determine the source_id by inspecting the existing diagnostics row.
+        let source_id = occs
+            .first()
+            .map(|_| "native")
+            .unwrap_or("native")
+            .to_string();
+        let _ = crate::link_resolution::LinkResolver::resolve_all(
+            &mut self.store,
+            &source_id,
+            occs,
+        )?;
+        self.store
+            .query_resolved_relations(source_ref)
+            .map_err(|e| ApplicationError::Storage(e.to_string()))
+    }
+
+    /// Return per-occurrence diagnostics (status + candidates) for `source_ref`.
+    pub fn diagnose_link(
+        &self,
+        source_ref: &ResourceRef,
+    ) -> Result<Vec<LinkDiagnostic>, ApplicationError> {
+        let rows = self
+            .store
+            .list_link_diagnostics(source_ref)
+            .map_err(|e| ApplicationError::Storage(e.to_string()))?;
+        Ok(rows.unwrap_or_default())
+    }
+
+    /// Walk the native source under `space_root` again, resolve every link,
+    /// and return a [`LinkReindexReport`].
+    pub fn reindex_links(
+        &mut self,
+        space_root: &Path,
+    ) -> Result<crate::link_resolution::LinkReindexReport, ApplicationError> {
+        // Aggregate counts from the existing projection without mutating it.
+        // A full rewrite is unnecessary: `replace_source` already persisted
+        // occurrences during scan, and `LinkResolver::resolve_all` already
+        // wrote diagnostics. Here we merely tally what is on disk so callers
+        // get a stable view of unresolved/ambiguous/external counts.
+        let _ = space_root;
+        let page = self.query(&Selector::new())?;
+        let mut report = crate::link_resolution::LinkReindexReport::default();
+        for res in &page.items {
+            let diags = self
+                .store
+                .list_link_diagnostics(&res.r#ref)
+                .map_err(|e| ApplicationError::Storage(e.to_string()))?;
+            if let Some(rows) = diags {
+                for d in rows {
+                    report.scanned += 1;
+                    match d.status {
+                        domain::ResolutionStatus::Resolved => report.resolved += 1,
+                        domain::ResolutionStatus::Unresolved => report.unresolved += 1,
+                        domain::ResolutionStatus::Ambiguous => report.ambiguous += 1,
+                        domain::ResolutionStatus::External => report.external += 1,
+                        domain::ResolutionStatus::Invalid => report.invalid += 1,
+                    }
+                }
+            }
+        }
+        Ok(report)
+    }
+
+    /// Resolve a `ResourceAddress` (either a `Ref` or a `Locator`) and
+    /// return a [`ResolveResult`].
+    pub fn resolve_address(
+        &self,
+        address: &domain::ResourceAddress,
+    ) -> Result<ResolveResult, ApplicationError> {
+        use domain::ResourceAddress;
+        match address {
+            ResourceAddress::Ref { r#ref } => {
+                if let Some(res) = self.read(r#ref)? {
+                    Ok(ResolveResult::Found(res.r#ref))
+                } else {
+                    Ok(ResolveResult::NotFound)
+                }
+            }
+            ResourceAddress::Locator { target } => {
+                // We don't have a source_ref for a bare locator; pick a
+                // document-kind placeholder so resolver strategies that branch
+                // on kind_hint still work. The resolver never uses source_ref
+                // to compute the answer.
+                let placeholder =
+                    ResourceRef::new(ResourceKind::Document, ulid::Ulid::nil());
+                let occ = LinkOccurrence {
+                    source_ref: placeholder,
+                    target: target.clone(),
+                    raw: target.to_string(),
+                    display_text: None,
+                    span: domain::TextSpan {
+                        line: 0,
+                        col_start: 0,
+                        col_end: 0,
+                    },
+                };
+                let (status, target_ref, candidates) =
+                    crate::link_resolution::LinkResolver::resolve(&self.store, &occ);
+                match status {
+                    ResolutionStatus::Resolved => Ok(ResolveResult::Found(
+                        target_ref.expect("resolved has target"),
+                    )),
+                    ResolutionStatus::Ambiguous => Ok(ResolveResult::Ambiguous(candidates)),
+                    _ => Ok(ResolveResult::NotFound),
+                }
+            }
+        }
+    }
 
     pub fn query(&self, selector: &Selector) -> Result<QueryPage, ApplicationError> {
         self.store

@@ -1,4 +1,4 @@
-use crate::resource::{ResourceKind, ResourceRef};
+use crate::resource::{ResourceKind, ResourceRef, ResourceRefError};
 use serde::{Deserialize, Serialize};
 
 /// Raw link target as found in source text, before resolution.
@@ -205,6 +205,65 @@ impl ResourceAddress {
 
     pub fn from_locator(target: LinkTarget) -> Self {
         Self::Locator { target }
+    }
+
+
+
+    /// Parse a textual address into either a [`ResourceRef`] or a
+    /// [`LinkTarget`] locator. Recognized forms:
+    /// - `kind:ulid` → `Ref`
+    /// - `file:path` or `file:path::fragment` → `Locator::File`
+    /// - `id:VALUE` → `Locator::Id`
+    /// - `http(s)://...` → `Locator::Url`
+    /// - `scheme:value` for any other non-empty scheme → `Locator::Custom`
+    /// - `[[Title]]` or `[[Title#frag]]` → `Locator::Title`
+    /// - bare text → `Locator::Title`
+    pub fn parse(s: &str) -> Result<Self, ResourceRefError> {
+        let trimmed = s.trim();
+        if trimmed.is_empty() {
+            return Err(ResourceRefError::InvalidFormat);
+        }
+        // WikiLink form
+        if let Some(rest) = trimmed.strip_prefix("[[").and_then(|t| t.strip_suffix("]]")) {
+            let (title, fragment) = match rest.split_once('#') {
+                Some((t, f)) => (t, Some(f.to_string())),
+                None => (rest, None),
+            };
+            return Ok(Self::Locator {
+                target: LinkTarget::title(title, fragment),
+            });
+        }
+        if let Some((kind_str, value)) = trimmed.split_once(':') {
+            // Try ResourceRef first
+            if matches!(kind_str, "document" | "heading" | "attachment" | "block")
+                && let Ok(r_ref) = ResourceRef::parse(trimmed)
+            {
+                return Ok(Self::Ref { r#ref: r_ref });
+            }
+            let scheme = kind_str.to_lowercase();
+            let (val, fragment) = match value.split_once("::") {
+                Some((v, f)) => (v, Some(f.to_string())),
+                None => (value, None),
+            };
+            return Ok(match scheme.as_str() {
+                "id" => Self::Locator {
+                    target: LinkTarget::id(val, None),
+                },
+                "file" => Self::Locator {
+                    target: LinkTarget::file(val, fragment),
+                },
+                "http" | "https" => Self::Locator {
+                    target: LinkTarget::url(trimmed),
+                },
+                _ => Self::Locator {
+                    target: LinkTarget::custom(kind_str, val, fragment),
+                },
+            });
+        }
+        // Bare text → title
+        Ok(Self::Locator {
+            target: LinkTarget::title(trimmed, None),
+        })
     }
 }
 

@@ -137,6 +137,54 @@ fn main() {
                     exit(2);
                 }
             },
+            LinkCommands::Diagnose { r_ref } => match ResourceRef::parse(&r_ref) {
+                Ok(parsed_ref) => match service.diagnose_link(&parsed_ref) {
+                    Ok(diags) => {
+                        if cli.json {
+                            println!("{}", json!(diags));
+                        } else {
+                            for d in diags {
+                                println!(
+                                    "L{} {} -> {:?} (candidates={})",
+                                    d.occurrence.span.line,
+                                    d.occurrence.target,
+                                    d.status,
+                                    d.candidates.len()
+                                );
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("Error diagnosing links: {e}");
+                        exit(5);
+                    }
+                },
+                Err(e) => {
+                    eprintln!("Invalid ref parameter: {e}");
+                    exit(2);
+                }
+            },
+            LinkCommands::Reindex { space } => match service.reindex_links(&space) {
+                Ok(report) => {
+                    if cli.json {
+                        println!("{}", json!(report));
+                    } else {
+                        println!(
+                            "scanned={} resolved={} unresolved={} ambiguous={} external={} invalid={}",
+                            report.scanned,
+                            report.resolved,
+                            report.unresolved,
+                            report.ambiguous,
+                            report.external,
+                            report.invalid
+                        );
+                    }
+                }
+                Err(e) => {
+                    eprintln!("Error reindexing links: {e}");
+                    exit(5);
+                }
+            },
         },
 
         Commands::Query(args) => {

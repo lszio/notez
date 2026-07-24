@@ -17,5 +17,6 @@ pub mod service;
 pub use federation::SpaceSourcesConfig;
 pub mod task_para;
 pub use task_para::{AgendaItem, AgendaView, ParaOverview};
+pub use link_resolution::{LinkReindexReport, LinkResolver};
 
 pub use service::{ApplicationError, ApplicationService, ResolveResult, ScanReport};

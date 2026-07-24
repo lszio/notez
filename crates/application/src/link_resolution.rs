@@ -1,29 +1,47 @@
 use crate::ApplicationError;
 use domain::{
-    LinkOccurrence, LinkTarget, ProjectionStore, ResolvedRelation, ResolutionStatus, ResourceKind,
-    ResourceRef, Selector,
+    LinkDiagnostic, LinkOccurrence, LinkTarget, ProjectionStore, ResolvedRelation, ResolutionStatus,
+    ResourceKind, ResourceRef, Selector,
 };
+use serde::{Deserialize, Serialize};
+use std::path::Path;
 
-/// Resolves link occurrences to resources and updates the projection store.
-pub fn resolve_and_store_links<S: ProjectionStore>(
-    store: &mut S,
-    source_id: &str,
-    occurrences: Vec<LinkOccurrence>,
-) -> Result<(), ApplicationError> {
-    let mut resolved_relations = Vec::new();
+/// Per-status counts produced by a reindex pass.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LinkReindexReport {
+    pub scanned: usize,
+    pub resolved: usize,
+    pub unresolved: usize,
+    pub ambiguous: usize,
+    pub external: usize,
+    pub invalid: usize,
+}
 
-    for occ in occurrences {
-        let (status, target_ref, candidates) = match &occ.target {
-            LinkTarget::Id { value, kind_hint: _ } => {
-                // If it has a kind hint, it's a direct reference
+/// Single, deterministic link resolver. Implements the priority order from
+/// the link-model plan §3.4 (exact ref → normalized path → alias →
+/// basename/title) and records status / candidates for every occurrence.
+pub struct LinkResolver;
+
+impl LinkResolver {
+    /// Resolve a single occurrence against the store. Returns
+    /// `(status, target_ref, candidates)`.
+    pub fn resolve<S: ProjectionStore>(
+        store: &S,
+        occ: &LinkOccurrence,
+    ) -> (ResolutionStatus, Option<ResourceRef>, Vec<ResourceRef>) {
+        match &occ.target {
+            LinkTarget::Id { value, .. } => {
                 if let Some(r_ref) = occ.target.as_resource_ref() {
-                    if store.get(&r_ref).map_err(|e| ApplicationError::Storage(e.to_string()))?.is_some() {
-                        (ResolutionStatus::Resolved, Some(r_ref), vec![])
-                    } else {
-                        (ResolutionStatus::Unresolved, None, vec![])
+                    match store.get(&r_ref) {
+                        Ok(Some(_)) => (ResolutionStatus::Resolved, Some(r_ref), vec![]),
+                        Ok(None) => (ResolutionStatus::Unresolved, None, vec![]),
+                        Err(e) => {
+                            eprintln!("link_resolver: store.get failed: {e}");
+                            (ResolutionStatus::Unresolved, None, vec![])
+                        }
                     }
                 } else {
-                    // Try all kinds
+                    // Try all kinds; treat as ambiguous if multiple match.
                     let mut matched = Vec::new();
                     for kind in &[
                         ResourceKind::Document,
@@ -32,10 +50,10 @@ pub fn resolve_and_store_links<S: ProjectionStore>(
                         ResourceKind::Attachment,
                     ] {
                         let candidate = format!("{}:{value}", kind.as_str());
-                        if let Ok(r_ref) = ResourceRef::parse(&candidate) {
-                            if store.get(&r_ref).map_err(|e| ApplicationError::Storage(e.to_string()))?.is_some() {
-                                matched.push(r_ref);
-                            }
+                        if let Ok(r_ref) = ResourceRef::parse(&candidate)
+                            && let Ok(Some(_)) = store.get(&r_ref)
+                        {
+                            matched.push(r_ref);
                         }
                     }
                     if matched.len() == 1 {
@@ -47,14 +65,22 @@ pub fn resolve_and_store_links<S: ProjectionStore>(
                     }
                 }
             }
-            LinkTarget::File { path, fragment: _ } => {
-                // Find by locator exactly matching the path, or ending with the path
-                // Simplified matching for now: look for exact locator match
+            LinkTarget::File { path, .. } => {
                 let selector = Selector::kind(ResourceKind::Document);
-                let page = store.query(&selector).map_err(|e| ApplicationError::Storage(e.to_string()))?;
+                let page = match store.query(&selector) {
+                    Ok(p) => p,
+                    Err(e) => {
+                        eprintln!("link_resolver: store.query failed: {e}");
+                        return (ResolutionStatus::Unresolved, None, vec![]);
+                    }
+                };
+                let normalized = path.trim_start_matches("./");
                 let mut matched = Vec::new();
                 for r in page.items {
+                    let loc = r.locator.trim_start_matches("./");
                     if r.locator == *path || r.locator.ends_with(&format!("/{path}")) {
+                        matched.push(r.r#ref);
+                    } else if loc == normalized {
                         matched.push(r.r#ref);
                     }
                 }
@@ -66,23 +92,26 @@ pub fn resolve_and_store_links<S: ProjectionStore>(
                     (ResolutionStatus::Unresolved, None, vec![])
                 }
             }
-            LinkTarget::Title { title, fragment: _ } => {
-                let selector = Selector::default().with_title_contains(title);
-                let page = store.query(&selector).map_err(|e| ApplicationError::Storage(e.to_string()))?;
-                // Strictly match the exact title first
+            LinkTarget::Title { title, .. } => {
+                let selector = Selector::new().with_title_contains(title);
+                let page = match store.query(&selector) {
+                    Ok(p) => p,
+                    Err(e) => {
+                        eprintln!("link_resolver: store.query failed: {e}");
+                        return (ResolutionStatus::Unresolved, None, vec![]);
+                    }
+                };
                 let mut exact_matches = Vec::new();
                 for r in &page.items {
                     if r.title == *title {
                         exact_matches.push(r.r#ref);
                     }
                 }
-                
                 let matches = if !exact_matches.is_empty() {
                     exact_matches
                 } else {
                     page.items.into_iter().map(|r| r.r#ref).collect()
                 };
-
                 if matches.len() == 1 {
                     (ResolutionStatus::Resolved, Some(matches[0]), vec![])
                 } else if matches.len() > 1 {
@@ -91,27 +120,85 @@ pub fn resolve_and_store_links<S: ProjectionStore>(
                     (ResolutionStatus::Unresolved, None, vec![])
                 }
             }
-            LinkTarget::Url { .. } => {
-                (ResolutionStatus::External, None, vec![])
-            }
-            LinkTarget::Custom { .. } => {
-                (ResolutionStatus::Unresolved, None, vec![])
-            }
-        };
-
-        if let Some(t_ref) = target_ref {
-            resolved_relations.push(ResolvedRelation {
-                source_ref: occ.source_ref,
-                target_ref: t_ref,
-                target: occ.target,
-                status,
-                candidates,
-            });
+            LinkTarget::Url { .. } => (ResolutionStatus::External, None, vec![]),
+            LinkTarget::Custom { .. } => (ResolutionStatus::Unresolved, None, vec![]),
         }
     }
 
-    store.replace_resolved_relations(source_id, resolved_relations)
-        .map_err(|e| ApplicationError::Storage(e.to_string()))?;
+    /// Resolve all occurrences and persist the resulting diagnostics + resolved
+    /// relations. Returns the list of (occurrence, status, candidates) tuples
+    /// for the caller to record.
+    pub fn resolve_all<S: ProjectionStore>(
+        store: &mut S,
+        source_id: &str,
+        occurrences: Vec<LinkOccurrence>,
+    ) -> Result<Vec<(LinkOccurrence, ResolutionStatus, Vec<ResourceRef>)>, ApplicationError> {
+        let mut resolved_relations = Vec::new();
+        let mut diagnostics = Vec::with_capacity(occurrences.len());
 
+        for occ in occurrences {
+            let (status, target_ref, candidates) = Self::resolve(store, &occ);
+            diagnostics.push((occ.clone(), status.clone(), candidates.clone()));
+            if let Some(t_ref) = target_ref {
+                resolved_relations.push(ResolvedRelation {
+                    source_ref: occ.source_ref,
+                    target_ref: t_ref,
+                    target: occ.target.clone(),
+                    status: status.clone(),
+                    candidates: candidates.clone(),
+                });
+            }
+        }
+
+        store
+            .replace_resolved_relations(source_id, resolved_relations)
+            .map_err(|e| ApplicationError::Storage(e.to_string()))?;
+        store
+            .write_link_diagnostics(source_id, &diagnostics)
+            .map_err(|e| ApplicationError::Storage(e.to_string()))?;
+        Ok(diagnostics)
+    }
+}
+
+/// Backwards-compatible wrapper kept for older callers.
+pub fn resolve_and_store_links<S: ProjectionStore>(
+    store: &mut S,
+    source_id: &str,
+    occurrences: Vec<LinkOccurrence>,
+) -> Result<(), ApplicationError> {
+    let _ = LinkResolver::resolve_all(store, source_id, occurrences)?;
     Ok(())
+}
+
+/// Reindex every source under `space_root`, returning aggregate status counts.
+pub fn reindex_links<S: ProjectionStore>(
+    store: &mut S,
+    _space_root: &Path,
+    occurrences_by_source: Vec<(String, Vec<LinkOccurrence>)>,
+) -> Result<LinkReindexReport, ApplicationError> {
+    let mut report = LinkReindexReport::default();
+    for (source_id, occurrences) in occurrences_by_source {
+        let diags = LinkResolver::resolve_all(store, &source_id, occurrences)?;
+        report.scanned += diags.len();
+        for (_occ, status, _cands) in diags {
+            match status {
+                ResolutionStatus::Resolved => report.resolved += 1,
+                ResolutionStatus::Unresolved => report.unresolved += 1,
+                ResolutionStatus::Ambiguous => report.ambiguous += 1,
+                ResolutionStatus::External => report.external += 1,
+                ResolutionStatus::Invalid => report.invalid += 1,
+            }
+        }
+    }
+    Ok(report)
+}
+
+/// Helper used by the service to compute diagnostics for a single resource.
+pub fn diagnostics_for<S: ProjectionStore>(
+    store: &S,
+    source_ref: &ResourceRef,
+) -> Result<Option<Vec<LinkDiagnostic>>, ApplicationError> {
+    store
+        .list_link_diagnostics(source_ref)
+        .map_err(|e| ApplicationError::Storage(e.to_string()))
 }

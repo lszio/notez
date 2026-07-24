@@ -1,4 +1,4 @@
-use crate::link::{LinkOccurrence, ResolvedRelation};
+use crate::link::{LinkOccurrence, ResolvedRelation, ResolutionStatus};
 use crate::resource::{Resource, ResourceKind, ResourceRef, ResourceRelation, SegmentRecord};
 use serde::{Deserialize, Serialize};
 
@@ -101,10 +101,42 @@ pub trait ProjectionStore {
     ) -> Result<Vec<ResolvedRelation>, Self::Error> {
         Ok(Vec::new())
     }
-}
+
+    /// Persist the resolution status and candidate list alongside each
+    /// occurrence. Implementations may store this on the same `link_occurrences`
+    /// row, a sidecar table, or in a diagnostic log. The input is keyed by the
+    /// raw occurrence text; implementations match occurrences in insertion
+    /// order.
+    fn write_link_diagnostics(
+        &mut self,
+        _source_id: &str,
+        _diagnostics: &[(LinkOccurrence, ResolutionStatus, Vec<ResourceRef>)],
+    ) -> Result<(), Self::Error> {
+        Ok(())
+    }
+
+    /// Fetch diagnostics for a single source. Returns `None` when the source
+    /// has no rows (so callers can distinguish "no link columns" from
+    /// "zero diagnostics written").
+    fn list_link_diagnostics(
+        &self,
+        _source_ref: &ResourceRef,
+    ) -> Result<Option<Vec<LinkDiagnostic>>, Self::Error> {
+        Ok(None)
+    }
+ }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct QueryPage {
     pub items: Vec<Resource>,
     pub next_cursor: Option<String>,
+}
+
+/// Diagnostic record for a single link occurrence: the original occurrence plus
+/// the resolution status and candidate list produced by the resolver.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LinkDiagnostic {
+    pub occurrence: LinkOccurrence,
+    pub status: ResolutionStatus,
+    pub candidates: Vec<ResourceRef>,
 }

@@ -10,7 +10,7 @@ pub use link::{
 };
 pub use rule::{InspectResult, Rule, RuleEngine, RuleKind, RuleTrace};
 
-pub use query::{Projection, ProjectionStore, QueryPage, Selector};
+pub use query::{LinkDiagnostic, Projection, ProjectionStore, QueryPage, Selector};
 pub use resource::{
     Resource, ResourceKind, ResourceRef, ResourceRefError, ResourceRelation, SegmentRecord,
     derived_id,
