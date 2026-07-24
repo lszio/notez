@@ -157,6 +157,11 @@ pub enum TaskCommands {
     /// List all tasks grouped by status
     List,
 
+    /// Query complete record and content of a task
+    Detail {
+        r_ref: String,
+    },
+
     /// Agenda view of scheduled, deadline, or actionable items
     Agenda,
 

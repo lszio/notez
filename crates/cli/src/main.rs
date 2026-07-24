@@ -303,6 +303,90 @@ fn main() {
                         }
                     }
                 }
+                commands::TaskCommands::Detail { r_ref } => {
+                    let parsed_ref = match ResourceRef::parse(&r_ref) {
+                        Ok(r) => r,
+                        Err(e) => {
+                            eprintln!("Invalid resource ref format '{r_ref}': {e}");
+                            exit(2);
+                        }
+                    };
+                    match service.read(&parsed_ref) {
+                        Ok(Some(res)) => {
+                            if cli.json {
+                                println!("{}", serde_json::to_string(&res).unwrap());
+                            } else {
+                                println!("=== Task Record ===");
+                                println!("Ref:      {}", res.r#ref);
+                                println!("Title:    {}", res.title);
+                                println!("Locator:  {}", res.locator);
+                                println!("Revision: {}", res.revision);
+                                if !res.properties.is_empty() {
+                                    println!("Properties:");
+                                    for (k, v) in &res.properties {
+                                        println!("  {k}: {v}");
+                                    }
+                                }
+                                
+                                println!("\n=== Content ===");
+                                let direct_path = std::path::PathBuf::from(&res.locator);
+                                let file_path = if direct_path.exists() { direct_path } else { cli.space.join(&res.locator) };
+                                if let Ok(content) = std::fs::read_to_string(&file_path) {
+                                    if res.kind == domain::ResourceKind::Document {
+                                        println!("{content}");
+                                    } else if res.kind == domain::ResourceKind::Heading {
+                                        let level_str = res.properties.get("LEVEL").cloned().unwrap_or_else(|| "1".to_string());
+                                        let target_level: usize = level_str.parse().unwrap_or(1);
+                                        let mut printing = false;
+                                        let is_org = res.locator.ends_with(".org");
+                                        
+                                        for line in content.lines() {
+                                            let trimmed = line.trim_start();
+                                            let (is_heading, level, text) = if is_org && trimmed.starts_with('*') && trimmed.contains(' ') {
+                                                let stars = trimmed.chars().take_while(|c| *c == '*').count();
+                                                (true, stars, trimmed[stars..].trim())
+                                            } else if !is_org && trimmed.starts_with('#') && trimmed.contains(' ') {
+                                                let hashes = trimmed.chars().take_while(|c| *c == '#').count();
+                                                (true, hashes, trimmed[hashes..].trim())
+                                            } else {
+                                                (false, 0, "")
+                                            };
+
+                                            if is_heading {
+                                                if !printing && text.contains(&res.title) {
+                                                    printing = true;
+                                                } else if printing && level <= target_level {
+                                                    // Reached next heading of same or higher level
+                                                    break;
+                                                }
+                                            }
+                                            
+                                            if printing {
+                                                println!("{line}");
+                                            }
+                                        }
+                                        
+                                        if !printing {
+                                            println!("(Could not locate heading content in file)");
+                                        }
+                                    } else {
+                                        println!("(Content extraction for {} is not supported in CLI detail view)", res.kind);
+                                    }
+                                } else {
+                                    println!("(Unable to read source file at {:?})", file_path);
+                                }
+                            }
+                        }
+                        Ok(None) => {
+                            eprintln!("Task not found: {r_ref}");
+                            exit(3);
+                        }
+                        Err(e) => {
+                            eprintln!("Detail error: {e}");
+                            exit(5);
+                        }
+                    }
+                }
                 commands::TaskCommands::List => match service.agenda() {
                     Ok(agenda) => {
                         if cli.json {
