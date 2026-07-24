@@ -19,32 +19,39 @@ impl SourceAdapter for NativeSourceAdapter {
     }
 
     fn scan(&self) -> Result<ScannedSource, SourceError> {
+        // Resolve include roots: when none are declared, scan the whole
+        // source root. When declared, only those roots are visited.
+        let include_roots: Vec<PathBuf> = if self.config.include_paths.is_empty() {
+            vec![self.config.path.clone()]
+        } else {
+            self.config.include_paths.clone()
+        };
+
         let mut entries: Vec<PathBuf> = Vec::new();
-        for entry in WalkDir::new(&self.config.path)
-            .into_iter()
-            .filter_map(Result::ok)
-        {
-            let path = entry.path();
-            if self
-                .config
-                .exclude_paths
-                .iter()
-                .any(|ex| path.starts_with(ex))
-            {
-                continue;
-            }
-            let rel_path = path.strip_prefix(&self.config.path).unwrap_or(path);
-            if rel_path
-                .components()
-                .any(|c| c.as_os_str().to_string_lossy().starts_with('.'))
-            {
-                continue;
-            }
-            if path.is_file()
-                && let Some(ext) = path.extension().and_then(|e| e.to_str())
-                && (ext == "org" || ext == "md")
-            {
-                entries.push(path.to_path_buf());
+        for include_root in &include_roots {
+            for entry in WalkDir::new(include_root).into_iter().filter_map(Result::ok) {
+                let path = entry.path();
+                if self
+                    .config
+                    .exclude_paths
+                    .iter()
+                    .any(|ex| path.starts_with(ex))
+                {
+                    continue;
+                }
+                let rel_path = path.strip_prefix(include_root).unwrap_or(path);
+                if rel_path
+                    .components()
+                    .any(|c| c.as_os_str().to_string_lossy().starts_with('.'))
+                {
+                    continue;
+                }
+                if path.is_file()
+                    && let Some(ext) = path.extension().and_then(|e| e.to_str())
+                    && (ext == "org" || ext == "md")
+                {
+                    entries.push(path.to_path_buf());
+                }
             }
         }
 

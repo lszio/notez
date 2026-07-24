@@ -5,8 +5,8 @@ use std::path::PathBuf;
 #[derive(Parser, Debug)]
 #[command(name = "notez", version, about = "Notez CLI")]
 pub struct Cli {
-    #[arg(long, global = true, default_value = ".")]
-    pub space: PathBuf,
+    #[arg(long, global = true)]
+    pub space: Option<String>,
 
     #[arg(long, global = true)]
     pub db: Option<PathBuf>,
@@ -47,7 +47,7 @@ pub enum Commands {
 
     /// Task mutation operations
     Task(TaskSubcommand),
-    /// Source management commands (federation)
+    Config(ConfigSubcommand),
     Source(SourceSubcommand),
     /// Attachment operations and extraction jobs
     Attachment(AttachmentSubcommand),
@@ -236,27 +236,51 @@ pub enum SyncCommands {
     /// List active sync conflicts
     Conflicts,
 
-    /// Trigger relay transport sync
+    /// Force relay synchronization over HTTP
     Relay {
         #[arg(long)]
         id: String,
     },
 }
-#[derive(Subcommand, Debug)]
-pub enum SpaceCommands {
-    /// Rebuild SQLite projection for the space
-    Rebuild,
 
-    /// Run space integrity diagnostics (space doctor)
-    Doctor,
+#[derive(Args, Debug)]
+pub struct ConfigSubcommand {
+    #[command(subcommand)]
+    pub command: ConfigCommands,
 }
 
+#[derive(Subcommand, Debug)]
+pub enum ConfigCommands {
+    Show,
+    Validate,
+    /// Migrate legacy JSON configurations to the current format
+    Migrate {
+        #[arg(long)]
+        apply: bool,
+    },
+}
+#[derive(Subcommand, Debug)]
+pub enum SpaceCommands {
+    Rebuild,
+    Doctor,
+    List,
+    Register {
+        name: String,
+        #[arg(long)]
+        path: Option<PathBuf>,
+    },
+    Unregister {
+        name: String,
+    },
+}
 
 #[derive(Args, Debug)]
 pub struct ArtifactSubcommand {
     #[command(subcommand)]
     pub command: ArtifactCommands,
 }
+
+
 
 #[derive(Subcommand, Debug)]
 pub enum ArtifactCommands {
@@ -335,6 +359,14 @@ pub enum SourceCommands {
 
         #[arg(long, default_value_t = false)]
         read_only: bool,
+
+        /// Paths to scan; when set, files outside these are skipped.
+        #[arg(long, value_delimiter = ',', num_args = 0..)]
+        include: Vec<PathBuf>,
+
+        /// Paths to skip during scan; matched as prefix.
+        #[arg(long, value_delimiter = ',', num_args = 0..)]
+        exclude: Vec<PathBuf>,
     },
 
     /// List configured sources

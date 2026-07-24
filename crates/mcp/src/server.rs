@@ -14,6 +14,21 @@ pub enum McpError {
 
 pub struct McpServer;
 
+fn parse_path_list(value: Option<&Value>) -> Vec<std::path::PathBuf> {
+    let Some(v) = value else {
+        return Vec::new();
+    };
+    if let Some(arr) = v.as_array() {
+        arr.iter()
+            .filter_map(|item| item.as_str().map(std::path::PathBuf::from))
+            .collect()
+    } else if let Some(s) = v.as_str() {
+        vec![std::path::PathBuf::from(s)]
+    } else {
+        Vec::new()
+    }
+}
+
 impl McpServer {
     pub fn serve<R: BufRead, W: Write, S: ProjectionStore>(
         mut reader: R,
@@ -689,7 +704,6 @@ impl McpServer {
                     Err(e) => Err((format!("Internal source_list error: {e}"), true)),
                 }
             }
-
             "source_add" => {
                 let space_str = args.get("space").and_then(|s| s.as_str()).unwrap_or(".");
                 let space_path = std::path::Path::new(space_str);
@@ -710,6 +724,8 @@ impl McpServer {
                     .get("read_only")
                     .and_then(|r| r.as_bool())
                     .unwrap_or(false);
+                let include_paths = parse_path_list(args.get("include_paths"));
+                let exclude_paths = parse_path_list(args.get("exclude_paths"));
 
                 let kind = match kind_str {
                     "native" => source::SourceKind::Native,
@@ -723,7 +739,8 @@ impl McpServer {
                     kind,
                     path: std::path::PathBuf::from(path_str),
                     read_only,
-                    exclude_paths: vec![],
+                    include_paths,
+                    exclude_paths,
                 };
 
                 match service.add_source(space_path, config) {

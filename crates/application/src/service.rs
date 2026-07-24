@@ -97,6 +97,7 @@ impl<S: ProjectionStore> ApplicationService<S> {
             kind: source::SourceKind::Native,
             path: space_root.to_path_buf(),
             read_only: false,
+            include_paths: vec![],
             exclude_paths,
         };
         let native_adapter = source::NativeSourceAdapter::new(native_config);

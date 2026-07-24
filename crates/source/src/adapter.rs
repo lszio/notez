@@ -50,6 +50,8 @@ pub struct SourceConfig {
     pub path: PathBuf,
     pub read_only: bool,
     #[serde(default)]
+    pub include_paths: Vec<PathBuf>,
+    #[serde(default)]
     pub exclude_paths: Vec<PathBuf>,
 }
 impl SourceConfig {
@@ -64,11 +66,12 @@ impl SourceConfig {
             kind,
             path: path.into(),
             read_only,
+            include_paths: Vec::new(),
             exclude_paths: Vec::new(),
         }
     }
 }
-#[derive(Debug, Clone)]
+
 pub struct ScannedSource {
     pub source_id: String,
     pub resources: Vec<Resource>,

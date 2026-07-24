@@ -87,7 +87,7 @@ pub struct SpaceConfig {
     pub workflow: WorkflowConfig,
     #[serde(default)]
     pub sources: Vec<SpaceSourceConfig>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "serde_json::Value::is_null")]
     pub link_overrides: JsonValue,
 }
 

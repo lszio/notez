@@ -82,6 +82,7 @@ pub struct SelectedSpace {
     pub space_root: PathBuf,
     pub space_config_path: PathBuf,
     pub registration: Option<SpaceRegistration>,
+    pub space_config: SpaceConfig,
 }
 pub fn select_space(
     paths: &ConfigPaths,
@@ -116,6 +117,7 @@ pub fn select_space(
                 space_root: root,
                 space_config_path: space_toml,
                 registration: Some(reg),
+space_config: space_config.clone(),
             })
             .and_then(|sel| sel.with_space(&space_config))
         }
@@ -125,15 +127,28 @@ pub fn select_space(
                 root.join("notez.toml")
             } else if root.is_file() {
                 root.clone()
+            } else if root.is_dir() {
+                root.join("notez.toml")
             } else {
                 return Err(ConfigError::Invalid(
                     "space",
-                    format!("no notez.toml under {}", root.display()),
+                    format!("invalid space path {}", root.display()),
                 ));
             };
-            let cfg = SpaceConfig::parse(
-                &std::fs::read_to_string(&space_toml).map_err(|e| ConfigError::Invalid("io", e.to_string()))?,
-            )?;
+            
+            let cfg = if space_toml.exists() {
+                SpaceConfig::parse(
+                    &std::fs::read_to_string(&space_toml).map_err(|e| ConfigError::Invalid("io", e.to_string()))?,
+                )?
+            } else {
+                SpaceConfig {
+                    version: 1,
+                    space: crate::model::SpaceIdentity { name: root.file_name().unwrap_or_default().to_string_lossy().to_string(), database: crate::model::default_database() },
+                    workflow: Default::default(),
+                    sources: Vec::new(),
+                    link_overrides: serde_json::Value::Null,
+                }
+            };
             let name = cfg.space.name.clone();
             let root_dir = space_toml.parent().unwrap().to_path_buf();
             Ok(SelectedSpace {
@@ -141,6 +156,7 @@ pub fn select_space(
                 space_root: root_dir,
                 space_config_path: space_toml,
                 registration: None,
+space_config: cfg.clone(),
             })
             .and_then(|sel| sel.with_space(&cfg))
         }
@@ -159,6 +175,7 @@ pub fn select_space(
                 space_root: root,
                 space_config_path: path,
                 registration: None,
+space_config: cfg.clone(),
             })
             .and_then(|sel| sel.with_space(&cfg))
         }

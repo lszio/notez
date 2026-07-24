@@ -36,6 +36,7 @@ fn multi_source_federation_scanning() {
         kind: SourceKind::Obsidian,
         path: vault_dir,
         read_only: true,
+        include_paths: vec![],
         exclude_paths: vec![],
     };
     service.add_source(space_root, vault_config).unwrap();

@@ -13,9 +13,58 @@ use storage::SqliteProjection;
 fn main() {
     let cli = Cli::parse();
 
+    // 1. Discover paths
+    let env_vars: std::collections::BTreeMap<String, std::ffi::OsString> =
+        std::env::vars_os().map(|(k, v)| (k.to_string_lossy().to_string(), v)).collect();
+    let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    let paths = match config::ConfigPaths::discover(&env_vars, &cwd) {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("Configuration discovery error: {e}");
+            exit(2);
+        }
+    };
+
+    // 2. Select space
+    let resolved_path: Option<std::path::PathBuf>;
+    let selector = match &cli.space {
+        Some(s) => {
+            if std::path::Path::new(s).is_absolute() || s.starts_with('.') || s.starts_with("~/") || s.contains('/') {
+                resolved_path = Some(std::path::PathBuf::from(s));
+                config::SpaceSelector::Path(resolved_path.as_ref().unwrap())
+            } else {
+                config::SpaceSelector::Name(s)
+            }
+        }
+        None => {
+            if paths.space_config.is_some() {
+                config::SpaceSelector::Upward
+            } else {
+                config::SpaceSelector::Default
+            }
+        }
+    };
+
+    let selected = match config::select_space(&paths, selector) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("Space selection error: {e}");
+            exit(2);
+        }
+    };
+
+    // 3. Load runtime config
+    let r_config = match config::load_runtime_config(&paths, &selected, &env_vars, None) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("Configuration load error: {e}");
+            exit(2);
+        }
+    };
+
     let db_path = match cli.db {
         Some(path) => path,
-        None => cli.space.join(".notez/index.sqlite"),
+        None => r_config.database.clone(),
     };
 
     if let Some(parent) = db_path.parent()
@@ -35,7 +84,7 @@ fn main() {
     let mut service = ApplicationService::new(store);
 
     match cli.command {
-        Commands::Scan => match service.scan_native(&cli.space) {
+        Commands::Scan => match service.scan_native(&r_config.space_root) {
             Ok(report) => {
                 if cli.json {
                     println!(
@@ -378,7 +427,7 @@ fn main() {
                                 
                                 println!("\n=== Content ===");
                                 let direct_path = std::path::PathBuf::from(&res.locator);
-                                let file_path = if direct_path.exists() { direct_path } else { cli.space.join(&res.locator) };
+                                let file_path = if direct_path.exists() { direct_path } else { r_config.space_root.join(&res.locator) };
                                 if let Ok(content) = std::fs::read_to_string(&file_path) {
                                     if res.kind == domain::ResourceKind::Document {
                                         println!("{content}");
@@ -607,15 +656,18 @@ fn main() {
                 kind,
                 path,
                 read_only,
+                include,
+                exclude,
             } => {
                 let config = source::SourceConfig {
                     id,
                     kind: kind.into(),
                     path,
                     read_only,
-                    exclude_paths: vec![],
+                    include_paths: include,
+                    exclude_paths: exclude,
                 };
-                match service.add_source(&cli.space, config) {
+                match service.add_source(&r_config.space_root, config) {
                     Ok(_) => {
                         if cli.json {
                             println!("{}", json!({ "added": true }));
@@ -630,7 +682,7 @@ fn main() {
                 }
             }
 
-            commands::SourceCommands::List => match service.list_sources(&cli.space) {
+            commands::SourceCommands::List => match service.list_sources(&r_config.space_root) {
                 Ok(sources) => {
                     if cli.json {
                         println!("{}", serde_json::to_string(&sources).unwrap());
@@ -646,7 +698,7 @@ fn main() {
                 }
             },
 
-            commands::SourceCommands::Sync => match service.scan_federation(&cli.space) {
+            commands::SourceCommands::Sync => match service.scan_federation(&r_config.space_root) {
                 Ok(report) => {
                     if cli.json {
                         println!(
@@ -695,7 +747,7 @@ fn main() {
         },
         Commands::Attachment(commands::AttachmentSubcommand { command }) => match command {
             commands::AttachmentCommands::Add { path, mime } => {
-                match service.add_attachment(&cli.space, &path, &mime) {
+                match service.add_attachment(&r_config.space_root, &path, &mime) {
                     Ok(att_ref) => {
                         if cli.json {
                             println!("{}", json!({ "ref": att_ref.to_string() }));
@@ -719,7 +771,7 @@ fn main() {
                     }
                 };
 
-                match service.run_extraction(&cli.space, &parsed_ref) {
+                match service.run_extraction(&r_config.space_root, &parsed_ref) {
                     Ok(segments) => {
                         if cli.json {
                             println!(
@@ -790,7 +842,7 @@ fn main() {
                     excluded_members: vec![],
                 };
 
-                match service.create_community(&cli.space, comm) {
+                match service.create_community(&r_config.space_root, comm) {
                     Ok(_) => {
                         if cli.json {
                             println!("{}", json!({ "created": true }));
@@ -805,7 +857,7 @@ fn main() {
                 }
             }
 
-            commands::CommunityCommands::List => match service.list_communities(&cli.space) {
+            commands::CommunityCommands::List => match service.list_communities(&r_config.space_root) {
                 Ok(communities) => {
                     if cli.json {
                         println!("{}", serde_json::to_string(&communities).unwrap());
@@ -823,7 +875,7 @@ fn main() {
         },
 
         Commands::Derive(commands::DeriveArgs { community, recipe }) => {
-            match service.derive_artifact(&cli.space, &community, &recipe) {
+            match service.derive_artifact(&r_config.space_root, &community, &recipe) {
                 Ok(derived) => {
                     if cli.json {
                         println!("{}", serde_json::to_string(&derived).unwrap());
@@ -845,7 +897,7 @@ fn main() {
                     description,
                     out,
                 },
-        }) => match service.export_skill(&cli.space, &community, &description, &out) {
+        }) => match service.export_skill(&r_config.space_root, &community, &description, &out) {
             Ok(pkg) => {
                 if cli.json {
                     println!("{}", serde_json::to_string(&pkg).unwrap());
@@ -860,7 +912,7 @@ fn main() {
         },
         Commands::Sync(commands::SyncSubcommand { command }) => match command {
             commands::SyncCommands::Push { actor, folder } => {
-                match service.sync_push(&actor, &cli.space, &folder) {
+                match service.sync_push(&actor, &r_config.space_root, &folder) {
                     Ok(report) => {
                         if cli.json {
                             println!(
@@ -882,7 +934,7 @@ fn main() {
             }
 
             commands::SyncCommands::Pull { actor, folder } => {
-                match service.sync_pull(&actor, &cli.space, &folder) {
+                match service.sync_pull(&actor, &r_config.space_root, &folder) {
                     Ok(report) => {
                         if cli.json {
                             println!(
@@ -922,7 +974,7 @@ fn main() {
                     exit(5);
                 }
             },
-            commands::SyncCommands::Relay { id } => match service.relay_sync(&id, &cli.space) {
+            commands::SyncCommands::Relay { id } => match service.relay_sync(&id, &r_config.space_root) {
                 Ok(report) => {
                     if cli.json {
                         println!(
@@ -948,7 +1000,7 @@ fn main() {
 
         Commands::Artifact(commands::ArtifactSubcommand {
             command: commands::ArtifactCommands::Stale,
-        }) => match service.check_artifact_freshness(&cli.space) {
+        }) => match service.check_artifact_freshness(&r_config.space_root) {
             Ok(stale_report) => {
                 if cli.json {
                     println!("{}", serde_json::to_string(&stale_report).unwrap());
@@ -974,7 +1026,7 @@ fn main() {
         }
 
         Commands::Space(SpaceSubcommand { command }) => match command {
-            SpaceCommands::Rebuild => match service.rebuild(&cli.space) {
+            SpaceCommands::Rebuild => match service.rebuild(&r_config.space_root) {
                 Ok(report) => {
                     if cli.json {
                         println!(
@@ -1001,7 +1053,7 @@ fn main() {
                 }
             },
 
-            SpaceCommands::Doctor => match service.space_doctor(&cli.space) {
+            SpaceCommands::Doctor => match service.space_doctor(&r_config.space_root) {
                 Ok(report) => {
                     if cli.json {
                         println!("{}", serde_json::to_string(&report).unwrap());
@@ -1017,6 +1069,127 @@ fn main() {
                     exit(5);
                 }
             },
+            SpaceCommands::List => {
+                let mut spaces = Vec::new();
+                if let Some(global) = &paths.global_config {
+                    for (name, reg) in &global.spaces {
+                        spaces.push(json!({ "name": name, "path": reg.path }));
+                    }
+                }
+                if cli.json {
+                    println!("{}", json!({ "spaces": spaces }));
+                } else {
+                    for s in spaces {
+                        println!("{}: {}", s["name"].as_str().unwrap(), s["path"].as_str().unwrap());
+                    }
+                }
+            }
+            SpaceCommands::Register { name, path } => {
+                let mut global = paths.global_config.clone().unwrap_or_else(|| {
+                    config::GlobalConfig {
+                        version: 1,
+                        default_space: None,
+                        spaces: std::collections::BTreeMap::new(),
+                        preferences: Default::default(),
+                    }
+                });
+                let root = path.unwrap_or_else(|| cwd.clone());
+                let reg = config::SpaceRegistration {
+                    path: root,
+                    config: None,
+                };
+                global.spaces.insert(name.clone(), reg);
+                if global.default_space.is_none() {
+                    global.default_space = Some(name.clone());
+                }
+                let text = toml::to_string(&global).unwrap();
+                let cfg_path = paths.global.clone();
+                if let Some(p) = cfg_path.parent() {
+                    fs::create_dir_all(p).unwrap();
+                }
+                // atomic write
+                let tmp = cfg_path.with_extension("tmp");
+                fs::write(&tmp, text).unwrap();
+                fs::rename(tmp, cfg_path).unwrap();
+                if cli.json {
+                    println!("{}", json!({ "registered": name }));
+                } else {
+                    println!("Registered space '{}'", name);
+                }
+            }
+            SpaceCommands::Unregister { name } => {
+                if let Some(mut global) = paths.global_config.clone() {
+                    global.spaces.remove(&name);
+                    if global.default_space.as_deref() == Some(&name) {
+                        global.default_space = None;
+                    }
+                    let text = toml::to_string(&global).unwrap();
+                    let tmp = paths.global.with_extension("tmp");
+                    fs::write(&tmp, text).unwrap();
+                    fs::rename(tmp, &paths.global).unwrap();
+                }
+                if cli.json {
+                    println!("{}", json!({ "unregistered": name }));
+                } else {
+                    println!("Unregistered space '{}'", name);
+                }
+            }
+        },
+        Commands::Config(commands::ConfigSubcommand { command }) => match command {
+            commands::ConfigCommands::Show => {
+                if cli.json {
+                    println!("{}", serde_json::to_string(&r_config).unwrap());
+                } else {
+                    println!("Space Name: {}", r_config.space_name);
+                    println!("Space Root: {}", r_config.space_root.display());
+                    println!("Database:   {}", r_config.database.display());
+                    println!("Sources:    {}", r_config.sources.len());
+                }
+            }
+            commands::ConfigCommands::Validate => {
+                if cli.json {
+                    println!("{}", json!({ "valid": true }));
+                } else {
+                    println!("Configuration valid.");
+                }
+            }
+            commands::ConfigCommands::Migrate { apply } => {
+                match config::migrate::plan_legacy_migration(&r_config.space_root, &selected.space_config) {
+                    Ok(plan) => {
+                        if apply {
+                            if let Err(e) = config::migrate::apply_legacy_migration(
+                                &r_config.space_root,
+                                selected.space_config.clone(),
+                                plan,
+                            ) {
+                                eprintln!("Migration error: {e}");
+                                exit(5);
+                            }
+                            println!("Migration applied.");
+                        } else {
+                            if cli.json {
+                                println!(
+                                    "{}",
+                                    json!({
+                                        "sources_to_add": plan.sources_to_add.len(),
+                                        "communities_to_extract": plan.communities_to_extract.len(),
+                                    })
+                                );
+                            } else {
+                                println!("Would merge {} source(s).", plan.sources_to_add.len());
+                                println!(
+                                    "Would extract {} community(s).",
+                                    plan.communities_to_extract.len()
+                                );
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("Migration error: {e}");
+                        exit(5);
+                    }
+                }
+            }
         },
     }
 }
