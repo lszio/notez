@@ -84,7 +84,6 @@ impl<S: ProjectionStore> ApplicationService<S> {
         use source::SourceAdapter;
 
         let mut total_resources = 0;
-        let mut total_relations = 0;
 
         let sources_cfg = crate::federation::SpaceSourcesConfig::load(space_root)?;
         let exclude_paths: Vec<std::path::PathBuf> =
@@ -103,7 +102,6 @@ impl<S: ProjectionStore> ApplicationService<S> {
             .map_err(|e| ApplicationError::Storage(e.to_string()))?;
 
         total_resources += native_scanned.resources.len();
-        total_relations += native_scanned.relations.len();
 
         self.store
             .replace_source(
@@ -139,7 +137,6 @@ impl<S: ProjectionStore> ApplicationService<S> {
             .map_err(|e| ApplicationError::Storage(e.to_string()))?;
 
             total_resources += scanned.resources.len();
-            total_relations += scanned.relations.len();
 
             self.store
                 .replace_source(
@@ -153,10 +150,17 @@ impl<S: ProjectionStore> ApplicationService<S> {
             crate::link_resolution::resolve_and_store_links(&mut self.store, &src_cfg.id, scanned.link_occurrences)?;
         }
 
+        let mut resolved_count = 0;
+        let page = self.query(&domain::Selector::new())?;
+        for res in page.items {
+            let rels = self.store.query_resolved_relations(&res.r#ref).unwrap_or_default();
+            resolved_count += rels.len();
+        }
+
         Ok(ScanReport {
-            scanned_files: total_resources,
+            scanned_files: total_resources, // Note: not fully accurate, but historically used
             scanned_resources: total_resources,
-            scanned_relations: total_relations,
+            scanned_relations: resolved_count,
         })
     }
 
@@ -200,7 +204,6 @@ impl<S: ProjectionStore> ApplicationService<S> {
         }
 
         let scanned_resources = all_resources.len();
-        let scanned_relations = all_relations.len();
 
         self.store
             .replace_source(
@@ -213,10 +216,20 @@ impl<S: ProjectionStore> ApplicationService<S> {
 
         crate::link_resolution::resolve_and_store_links(&mut self.store, "native", all_link_occurrences)?;
 
+        // Fetch the number of actual resolved relations
+        let mut resolved_count = 0;
+        let page = self.query(&domain::Selector::new())?;
+        for res in page.items {
+            if res.source_id == "native" {
+                let rels = self.store.query_resolved_relations(&res.r#ref).unwrap_or_default();
+                resolved_count += rels.len();
+            }
+        }
+
         Ok(ScanReport {
             scanned_files,
             scanned_resources,
-            scanned_relations,
+            scanned_relations: resolved_count,
         })
     }
 

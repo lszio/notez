@@ -50,7 +50,7 @@ pub fn resolve_and_store_links<S: ProjectionStore>(
             LinkTarget::File { path, fragment: _ } => {
                 // Find by locator exactly matching the path, or ending with the path
                 // Simplified matching for now: look for exact locator match
-                let selector = Selector::default();
+                let selector = Selector::kind(ResourceKind::Document);
                 let page = store.query(&selector).map_err(|e| ApplicationError::Storage(e.to_string()))?;
                 let mut matched = Vec::new();
                 for r in page.items {
