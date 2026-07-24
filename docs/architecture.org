@@ -1,0 +1,89 @@
+#+title: Notez 架构
+#+STARTUP: showeverything
+
+* 1. 系统定位
+
+Notez 将多个本地或外部知识来源投影为统一、可查询、可组合的资源网络，同时保留原始格式的行为语义。系统优化目标依次是：内容安全、保真、稳定寻址、离线可用、接口一致和可重建性。
+
+关于系统演进方向，请参考 [[file:roadmap.org][Notez Roadmap]]。
+
+* 2. 核心不变量
+
+1. 原生 Org/Markdown 文件是事实来源；索引可以删除并重建。
+2. =ResourceRef= 只表示稳定身份，不表示标题、文件路径或其他待解析地址。详情请见 [[file:link-protocol.org][Notez 链接协议]]。
+3. 所有文本链接都应被保留；只有唯一解析成功的链接才能成为 =ResolvedRelation=。
+4. 写操作必须面向唯一资源，并携带冲突保护；歧义地址不能静默修改。
+5. CLI 与 MCP 不实现业务规则，只适配统一应用协议。
+6. 外部 source 必须显式声明能力；默认只读，不以空实现伪装写入能力。
+7. 全局配置负责发现空间，空间配置负责空间行为，=.notez/= 只存运行状态和投影。详细配置架构见 [[file:configuration.org][Notez 配置设计]]。
+
+* 3. 组件边界
+
+#+begin_src text
+Org / Markdown / External Sources
+              │
+              ▼
+      document + source adapters
+       保真扫描、来源能力声明
+              │ Resource + LinkOccurrence
+              ▼
+             domain
+  身份、地址、选择器、关系、规则、DTO
+              │
+              ▼
+          application
+  resolve/query/mutate/derive/sync/inspect
+          │              │
+          ▼              ▼
+       storage       sync/artifact
+  可重建 SQLite      对象同步与派生产物
+          │
+          ▼
+       CLI / MCP
+      传输与呈现适配
+#+end_src
+
+Cargo crate 职责：
+
+| crate | 职责 | 禁止承担 |
+|---|---|---|
+| =domain= | 稳定领域类型、协议 DTO、选择器和关系 | 文件 I/O、CLI/MCP 呈现 |
+| =document= | Org/Markdown 保真扫描、link occurrence 提取 | 数据库查询、跨文档决议 |
+| =source= | 来源枚举、读取、能力和 locator 上下文 | 全局业务编排 |
+| =application= | 用例、地址解析、权限、事务和诊断 | 复制 CLI/MCP 参数模型 |
+| =storage= | 可重建投影及 schema migration | 成为原生内容事实来源 |
+| =sync= | manifest/object/transport/merge | 依赖 SQLite 投影同步 |
+| =artifact= | extraction、recipe 和 Agent 产物 | 修改原始笔记 |
+| =cli= | 参数解析、输出和退出码 | 直接访问文件或数据库 |
+| =mcp= | MCP schema、协议和结果编码 | 独立实现业务能力 |
+
+* 4. 稳定信息模型
+
+#+begin_src text
+Space
+ ├─ Source
+ │   └─ Resource ── stable ResourceRef
+ │       └─ LinkOccurrence ── raw LinkTarget
+ │              └─ resolution ── ResolvedRelation ── ResourceRef
+ ├─ Community
+ └─ Artifact
+#+end_src
+
+=ResourceAddress= 是接口输入的联合值：稳定 =Ref(ResourceRef)= 或待解析 =Locator(LinkTarget)=。读取可以返回候选；写入只有唯一命中时才能继续。
+
+没有显式 ID 的资源使用带版本的确定性派生身份算法。输入至少包含 source identity、规范化的 source-relative locator 和结构位置。文件 rename 不保证自动保持身份；需要 move detection 或显式写入稳定 ID。详情请参考 [[file:link-protocol.org][Notez 链接协议]]。
+
+* 5. 关键数据流
+
+- *扫描流程*：读取原始文件 → 保真解析 → 生成资源与所有链接出现 → 原子替换 source 投影 → 基于 source/profile/context 解析候选 → 写入已解析关系与诊断统计。
+- *读取流程*：传入 =ResourceAddress= → resolve → 返回唯一资源或候选/诊断 → 按 projection 输出。
+- *写入流程*：地址唯一解析 → 检查 source capability 与 expected revision → 生成最小文本补丁 → 预览或原子提交 → 重扫受影响文件 → 写审计记录。
+- *配置流程*：加载内置默认值 → 读取 XDG 全局配置 → 选择空间 → 读取空间配置 → 应用环境变量和 CLI 临时覆盖 → 校验 → 构造应用服务。任何配置错误都在打开数据库或执行命令前失败。（见 [[file:configuration.org][Notez 配置设计]]）
+
+* 6. 一致性与可观察性
+
+解析、扫描、写回、同步和派生任务携带 trace ID。=inspect= 与 =link diagnose= 应显示采用的 profile、候选、证据和未选择原因。source 暂时不可用时保留最后有效投影并标记 stale；配置无效时不启动服务。日志默认不记录笔记正文或敏感配置值。
+
+* 7. 演化约束
+
+新增文本格式时扩展 link profile 或 =LinkTarget::Custom=，不能放宽 =ResourceRef=。新增公共能力时先登记能力目录和共享 DTO，再暴露 CLI/MCP。新增配置必须明确归属全局、空间或运行状态，禁止再创建无版本且静默回退的旁路 JSON 配置。

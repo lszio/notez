@@ -1,0 +1,52 @@
+#+title: Notez Roadmap
+#+STARTUP: showeverything
+
+* 基线状态
+当前实现已具备 Rust 模块化单内核、Org/Markdown 扫描、SQLite 投影、CLI/MCP、来源挂载、附件、社区、派生产物及 folder/relay 同步的纵向切片。主要技术债是配置分散以及 CLI/MCP 能力漂移（无损链接与稳定身份的债务已在 0.3 中解决）。
+
+* 里程碑计划
+
+** DONE 0.3：无损链接与稳定身份
+CLOSED: [2026-07-24]
+- [X] 交付 =LinkTarget=、=LinkOccurrence=、=ResolvedRelation= 和 =ResourceAddress=。
+- [X] 支持 Org、标准 Markdown 与 Obsidian 默认 profile，保真提取所有链接目标。
+- [X] 加入确定性派生身份算法 (=derived_id=)，确保无 ID 资源身份稳定。
+- [X] 提供链接诊断能力（CLI/MCP =link list= 和 =link resolved= 命令）。
+- [X] 发布门槛：重复扫描和数据库重建保持身份稳定；所有支持链接均被保留；歧义不静默决议；旧 relations 查询在迁移窗口可用。
+
+** NEXT 0.4：两级配置与空间注册表
+- [ ] 交付 XDG 全局配置结构。
+- [ ] 引入空间 =notez.toml=，替代目前分散的 JSON 状态。
+- [ ] 支持三种空间发现方式：空间名称选择、向上查找、默认空间。
+- [ ] 实现配置来源解释与严格校验。
+- [ ] 实现旧 JSON 状态显式迁移到新版配置的机制。
+- [ ] 确保所有应用服务从已解析的 =RuntimeConfig= 启动。
+- [ ] 发布门槛：相对路径不依赖 =cwd=；无效配置在打开数据库前失败；常见链接零配置工作。
+
+** TODO 0.5：统一协议与接口完整覆盖
+- [ ] 建立共享 Request/Response DTO。
+- [ ] 建立稳定错误定义。
+- [ ] 建立能力目录和统一 dispatcher。
+- [ ] 迁移 CLI/MCP 的全部公开操作至新协议。
+- [ ] 生成或复用 MCP schema。
+- [ ] 发布门槛：能力矩阵测试无缺口；CLI/MCP 对相同请求返回等价领域结果；MCP =inspect= 使用真正的 inspect 用例；写操作统一执行地址唯一性、capability 和 revision 检查。
+
+** TODO 0.6：保真写回与可观察性强化
+- [ ] 把 =mutate=/=relate=/=task transition= 落到最小文本补丁。
+- [ ] 引入 journal 和 expected revision 机制（并发与冲突控制）。
+- [ ] 引入操作审计（Audit）和端到端 Trace。
+- [ ] 完善 source =stale= 状态和链接解析指标。
+- [ ] 发布门槛：无关格式逐字节不变；冲突不会覆盖用户文件；失败可诊断并可恢复。
+
+** TODO 1.0：稳定本地优先知识联邦
+- [ ] 冻结公开地址、配置版本和错误码协议。
+- [ ] 完成跨平台路径与 Unicode 行为的规范化。
+- [ ] 支持长时间重建进度、故障恢复机制。
+- [ ] 执行安全审计（尤其是挂载与附件相关逻辑）。
+- [ ] 提供从 0.x 数据和配置升级的正式版本迁移工具。
+
+* 后续演进方向
+- [ ] 更多 source adapter 和 URI scheme（通过现有 capability/link profile 扩展，而无需改动核心）。
+- [ ] 基于历史和内容证据的跨文件 Rename/Move Detection 机制。
+- [ ] 更强的搜索、Community 匹配和 Agent context pack（保持派生产物可删除重建的纯函数特性）。
+- [ ] 多设备传输优化（不改变 manifest/object/merge 的同步语义）。
