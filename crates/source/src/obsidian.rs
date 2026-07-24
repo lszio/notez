@@ -44,17 +44,20 @@ impl SourceAdapter for ObsidianSourceAdapter {
 
         let mut resources = Vec::new();
         let mut relations = Vec::new();
+        let mut link_occurrences = Vec::new();
 
         for path in entries {
             let doc = MarkdownScanner::scan(&path, &self.config.id)?;
             resources.extend(doc.resources);
             relations.extend(doc.links);
+            link_occurrences.extend(doc.link_occurrences);
         }
 
         Ok(ScannedSource {
             source_id: self.config.id.clone(),
             resources,
             relations,
+            link_occurrences,
         })
     }
 }

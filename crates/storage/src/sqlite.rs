@@ -1,5 +1,6 @@
 use domain::{
-    ProjectionStore, QueryPage, Resource, ResourceRef, ResourceRelation, SegmentRecord, Selector,
+    LinkOccurrence, LinkTarget, ProjectionStore, QueryPage, ResolvedRelation, ResolutionStatus,
+    Resource, ResourceRef, ResourceRelation, SegmentRecord, Selector, TextSpan,
 };
 use rusqlite::{Connection, OptionalExtension, params};
 use std::collections::BTreeMap;
@@ -69,6 +70,35 @@ impl SqliteProjection {
             );
 
             CREATE INDEX IF NOT EXISTS idx_segments_attachment ON segments(attachment_ref);
+
+            CREATE TABLE IF NOT EXISTS link_occurrences (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                source_ref TEXT NOT NULL,
+                target_json TEXT NOT NULL,
+                raw TEXT NOT NULL,
+                display_text TEXT,
+                span_line INTEGER NOT NULL,
+                span_col_start INTEGER NOT NULL,
+                span_col_end INTEGER NOT NULL,
+                source_id TEXT NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_link_occ_source_ref ON link_occurrences(source_ref);
+            CREATE INDEX IF NOT EXISTS idx_link_occ_source_id ON link_occurrences(source_id);
+
+            CREATE TABLE IF NOT EXISTS resolved_relations (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                source_ref TEXT NOT NULL,
+                target_ref TEXT NOT NULL,
+                target_json TEXT NOT NULL,
+                status TEXT NOT NULL,
+                candidates_json TEXT NOT NULL DEFAULT '[]',
+                source_id TEXT NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_resolved_source_ref ON resolved_relations(source_ref);
+            CREATE INDEX IF NOT EXISTS idx_resolved_target_ref ON resolved_relations(target_ref);
+            CREATE INDEX IF NOT EXISTS idx_resolved_source_id ON resolved_relations(source_id);
             ",
         )?;
         Ok(())
@@ -128,6 +158,7 @@ impl ProjectionStore for SqliteProjection {
         source_id: &str,
         resources: Vec<Resource>,
         relations: Vec<ResourceRelation>,
+        link_occurrences: Vec<LinkOccurrence>,
     ) -> Result<(), StorageError> {
         let tx = self.conn.transaction()?;
 
@@ -137,6 +168,10 @@ impl ProjectionStore for SqliteProjection {
         )?;
         tx.execute(
             "DELETE FROM relations WHERE source_id = ?1",
+            params![source_id],
+        )?;
+        tx.execute(
+            "DELETE FROM link_occurrences WHERE source_id = ?1",
             params![source_id],
         )?;
 
@@ -173,6 +208,27 @@ impl ProjectionStore for SqliteProjection {
                     rel.source_ref.to_string(),
                     rel.relation,
                     rel.target_ref.to_string(),
+                    source_id,
+                ])?;
+            }
+        }
+
+        {
+            let mut stmt_occ = tx.prepare(
+                "INSERT INTO link_occurrences (source_ref, target_json, raw, display_text, span_line, span_col_start, span_col_end, source_id)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            )?;
+
+            for occ in link_occurrences {
+                let target_json = serde_json::to_string(&occ.target)?;
+                stmt_occ.execute(params![
+                    occ.source_ref.to_string(),
+                    target_json,
+                    occ.raw,
+                    occ.display_text,
+                    occ.span.line as i64,
+                    occ.span.col_start as i64,
+                    occ.span.col_end as i64,
                     source_id,
                 ])?;
             }
@@ -308,6 +364,10 @@ impl ProjectionStore for SqliteProjection {
     fn clear(&mut self) -> Result<(), StorageError> {
         self.conn.execute("DELETE FROM resources", [])?;
         self.conn.execute("DELETE FROM relations", [])?;
+        self.conn
+            .execute("DELETE FROM link_occurrences", [])?;
+        self.conn
+            .execute("DELETE FROM resolved_relations", [])?;
         Ok(())
     }
     fn insert_segments(&mut self, segments: &[SegmentRecord]) -> Result<(), StorageError> {
@@ -316,5 +376,172 @@ impl ProjectionStore for SqliteProjection {
 
     fn query_segments(&self, attachment_ref: &str) -> Result<Vec<SegmentRecord>, StorageError> {
         self.query_segments(attachment_ref)
+    }
+
+    fn replace_link_occurrences(
+        &mut self,
+        source_id: &str,
+        occurrences: Vec<LinkOccurrence>,
+    ) -> Result<(), StorageError> {
+        let tx = self.conn.transaction()?;
+        tx.execute(
+            "DELETE FROM link_occurrences WHERE source_id = ?1",
+            params![source_id],
+        )?;
+
+        {
+            let mut stmt_occ = tx.prepare(
+                "INSERT INTO link_occurrences (source_ref, target_json, raw, display_text, span_line, span_col_start, span_col_end, source_id)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            )?;
+
+            for occ in occurrences {
+                let target_json = serde_json::to_string(&occ.target)?;
+                stmt_occ.execute(params![
+                    occ.source_ref.to_string(),
+                    target_json,
+                    occ.raw,
+                    occ.display_text,
+                    occ.span.line as i64,
+                    occ.span.col_start as i64,
+                    occ.span.col_end as i64,
+                    source_id,
+                ])?;
+            }
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    fn query_link_occurrences(
+        &self,
+        source_ref: &ResourceRef,
+    ) -> Result<Vec<LinkOccurrence>, StorageError> {
+        let ref_str = source_ref.to_string();
+        let mut stmt = self.conn.prepare(
+            "SELECT source_ref, target_json, raw, display_text, span_line, span_col_start, span_col_end
+             FROM link_occurrences WHERE source_ref = ?1 ORDER BY span_line, span_col_start",
+        )?;
+
+        let rows = stmt.query_map(params![ref_str], |row| {
+            let source_ref_str: String = row.get(0)?;
+            let target_json: String = row.get(1)?;
+            let raw: String = row.get(2)?;
+            let display_text: Option<String> = row.get(3)?;
+            let span_line: i64 = row.get(4)?;
+            let span_col_start: i64 = row.get(5)?;
+            let span_col_end: i64 = row.get(6)?;
+            Ok((
+                source_ref_str,
+                target_json,
+                raw,
+                display_text,
+                span_line,
+                span_col_start,
+                span_col_end,
+            ))
+        })?;
+
+        let mut results = Vec::new();
+        for r in rows {
+            let (source_ref_str, target_json, raw, display_text, span_line, span_col_start, span_col_end) = r?;
+            let source_ref = ResourceRef::parse(&source_ref_str)
+                .map_err(|e| StorageError::InvalidData(format!("invalid ref: {e}")))?;
+            let target: LinkTarget = serde_json::from_str(&target_json)?;
+            results.push(LinkOccurrence {
+                source_ref,
+                target,
+                raw,
+                display_text,
+                span: TextSpan {
+                    line: span_line as usize,
+                    col_start: span_col_start as usize,
+                    col_end: span_col_end as usize,
+                },
+            });
+        }
+        Ok(results)
+    }
+
+    fn replace_resolved_relations(
+        &mut self,
+        source_id: &str,
+        relations: Vec<ResolvedRelation>,
+    ) -> Result<(), StorageError> {
+        let tx = self.conn.transaction()?;
+        tx.execute(
+            "DELETE FROM resolved_relations WHERE source_id = ?1",
+            params![source_id],
+        )?;
+
+        {
+            let mut stmt = tx.prepare(
+                "INSERT INTO resolved_relations (source_ref, target_ref, target_json, status, candidates_json, source_id)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            )?;
+
+            for rel in relations {
+                let target_json = serde_json::to_string(&rel.target)?;
+                let status_str = serde_json::to_string(&rel.status)?;
+                let candidates_json = serde_json::to_string(&rel.candidates)?;
+                stmt.execute(params![
+                    rel.source_ref.to_string(),
+                    rel.target_ref.to_string(),
+                    target_json,
+                    status_str,
+                    candidates_json,
+                    source_id,
+                ])?;
+            }
+        }
+
+        tx.commit()?;
+        Ok(())
+    }
+
+    fn query_resolved_relations(
+        &self,
+        source_ref: &ResourceRef,
+    ) -> Result<Vec<ResolvedRelation>, StorageError> {
+        let ref_str = source_ref.to_string();
+        let mut stmt = self.conn.prepare(
+            "SELECT source_ref, target_ref, target_json, status, candidates_json
+             FROM resolved_relations WHERE source_ref = ?1",
+        )?;
+
+        let rows = stmt.query_map(params![ref_str], |row| {
+            let source_ref_str: String = row.get(0)?;
+            let target_ref_str: String = row.get(1)?;
+            let target_json: String = row.get(2)?;
+            let status_str: String = row.get(3)?;
+            let candidates_json: String = row.get(4)?;
+            Ok((
+                source_ref_str,
+                target_ref_str,
+                target_json,
+                status_str,
+                candidates_json,
+            ))
+        })?;
+
+        let mut results = Vec::new();
+        for r in rows {
+            let (source_ref_str, target_ref_str, target_json, status_str, candidates_json) = r?;
+            let source_ref = ResourceRef::parse(&source_ref_str)
+                .map_err(|e| StorageError::InvalidData(format!("invalid ref: {e}")))?;
+            let target_ref = ResourceRef::parse(&target_ref_str)
+                .map_err(|e| StorageError::InvalidData(format!("invalid ref: {e}")))?;
+            let target: LinkTarget = serde_json::from_str(&target_json)?;
+            let status: ResolutionStatus = serde_json::from_str(&status_str)?;
+            let candidates: Vec<ResourceRef> = serde_json::from_str(&candidates_json)?;
+            results.push(ResolvedRelation {
+                source_ref,
+                target_ref,
+                target,
+                status,
+                candidates,
+            });
+        }
+        Ok(results)
     }
 }

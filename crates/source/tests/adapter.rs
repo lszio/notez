@@ -26,6 +26,7 @@ impl SourceAdapter for MockAdapter {
             source_id: self.config.id.clone(),
             resources: vec![res],
             relations: vec![],
+            link_occurrences: vec![],
         })
     }
 }

@@ -1,5 +1,5 @@
 use document::OrgScanner;
-use domain::{ResourceKind, ResourceRef};
+use domain::{LinkTarget, ResourceKind, ResourceRef};
 use std::path::Path;
 
 #[test]
@@ -37,14 +37,15 @@ fn scan_basic_org_fixture() {
         Some("project")
     );
 
-    assert_eq!(scanned.links.len(), 1);
-    let link = &scanned.links[0];
-    assert_eq!(link.source_ref, heading.r#ref);
-    assert_eq!(link.relation, "id_link");
-    assert_eq!(
-        link.target_ref,
-        ResourceRef::parse("heading:01J00000000000000000000002").unwrap()
-    );
+    // Legacy links: bare id without kind_hint → not in legacy links
+    assert_eq!(scanned.links.len(), 0);
+
+    // link_occurrences captures all links
+    assert_eq!(scanned.link_occurrences.len(), 1);
+    let occ = &scanned.link_occurrences[0];
+    assert_eq!(occ.source_ref, heading.r#ref);
+    assert!(matches!(&occ.target, LinkTarget::Id { value, kind_hint: None } if value == "01J00000000000000000000002"));
+    assert_eq!(occ.display_text.as_deref(), Some("Merge rules"));
 }
 #[test]
 fn scan_malformed_id_reports_location() {

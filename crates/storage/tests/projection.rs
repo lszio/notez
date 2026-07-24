@@ -39,7 +39,7 @@ fn projection_replace_get_query_clear() {
     };
 
     store
-        .replace_source("native", vec![res1.clone(), res2.clone()], vec![rel1])
+        .replace_source("native", vec![res1.clone(), res2.clone()], vec![rel1], vec![])
         .unwrap();
 
     let fetched = store
@@ -56,7 +56,7 @@ fn projection_replace_get_query_clear() {
 
     // Replace native source with only res1
     store
-        .replace_source("native", vec![res1.clone()], vec![])
+        .replace_source("native", vec![res1.clone()], vec![], vec![])
         .unwrap();
     assert!(store.get(&res2.r#ref).unwrap().is_none());
 
@@ -65,7 +65,7 @@ fn projection_replace_get_query_clear() {
     assert!(store.get(&res1.r#ref).unwrap().is_none());
 
     store
-        .replace_source("native", vec![res1.clone()], vec![])
+        .replace_source("native", vec![res1.clone()], vec![], vec![])
         .unwrap();
     let page2 = store.query(&Selector::new()).unwrap();
     assert_eq!(page2.items, vec![res1]);
@@ -86,9 +86,8 @@ fn projection_rollback_on_duplicate_refs() {
         "01J00000000000000000000001",
         "native",
     );
-
     // Attempting to replace_source with duplicate refs in the same batch should fail and roll back
-    let result = store.replace_source("native", vec![res1.clone(), res2_dup], vec![]);
+    let result = store.replace_source("native", vec![res1.clone(), res2_dup], vec![], vec![]);
     assert!(result.is_err());
 
     // Verify nothing was committed
@@ -110,7 +109,7 @@ fn projection_disk_persistence() {
     {
         let mut store = SqliteProjection::open(&db_path).unwrap();
         store
-            .replace_source("native", vec![res1.clone()], vec![])
+            .replace_source("native", vec![res1.clone()], vec![], vec![])
             .unwrap();
     }
 

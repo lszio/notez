@@ -2,6 +2,7 @@ pub mod commands;
 
 use application::{ApplicationService, ResolveResult};
 use clap::Parser;
+use commands::LinkCommands;
 use commands::{Cli, Commands, McpCommands, McpSubcommand, SpaceCommands, SpaceSubcommand};
 use domain::{ResourceKind, ResourceRef, Selector};
 use serde_json::json;
@@ -82,6 +83,60 @@ fn main() {
                 eprintln!("Resolve error: {e}");
                 exit(5);
             }
+        },
+
+        Commands::Link(sub) => match sub.command {
+            LinkCommands::List { r_ref } => match ResourceRef::parse(&r_ref) {
+                Ok(parsed_ref) => match service.query_link_occurrences(&parsed_ref) {
+                    Ok(occs) => {
+                        if cli.json {
+                            println!("{}", json!(occs));
+                        } else {
+                            for occ in occs {
+                                println!(
+                                    "{}:{}-{} -> {}",
+                                    occ.span.line,
+                                    occ.span.col_start,
+                                    occ.span.col_end,
+                                    occ.target
+                                );
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("Error querying occurrences: {e}");
+                        exit(5);
+                    }
+                },
+                Err(e) => {
+                    eprintln!("Invalid ref parameter: {e}");
+                    exit(2);
+                }
+            },
+            LinkCommands::Resolved { r_ref } => match ResourceRef::parse(&r_ref) {
+                Ok(parsed_ref) => match service.query_resolved_relations(&parsed_ref) {
+                    Ok(rels) => {
+                        if cli.json {
+                            println!("{}", json!(rels));
+                        } else {
+                            for rel in rels {
+                                println!(
+                                    "{} -> {} ({:?})",
+                                    rel.target, rel.target_ref, rel.status
+                                );
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("Error querying resolved relations: {e}");
+                        exit(5);
+                    }
+                },
+                Err(e) => {
+                    eprintln!("Invalid ref parameter: {e}");
+                    exit(2);
+                }
+            },
         },
 
         Commands::Query(args) => {

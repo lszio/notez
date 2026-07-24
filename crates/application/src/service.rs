@@ -106,8 +106,16 @@ impl<S: ProjectionStore> ApplicationService<S> {
         total_relations += native_scanned.relations.len();
 
         self.store
-            .replace_source("native", native_scanned.resources, native_scanned.relations)
+            .replace_source(
+                "native",
+                native_scanned.resources,
+                native_scanned.relations,
+                native_scanned.link_occurrences.clone(),
+            )
             .map_err(|e| ApplicationError::Storage(e.to_string()))?;
+
+        crate::link_resolution::resolve_and_store_links(&mut self.store, "native", native_scanned.link_occurrences)?;
+
         let sources_cfg = crate::federation::SpaceSourcesConfig::load(space_root)?;
         for src_cfg in sources_cfg.sources {
             let scanned = match src_cfg.kind {
@@ -134,8 +142,15 @@ impl<S: ProjectionStore> ApplicationService<S> {
             total_relations += scanned.relations.len();
 
             self.store
-                .replace_source(&src_cfg.id, scanned.resources, scanned.relations)
+                .replace_source(
+                    &src_cfg.id,
+                    scanned.resources,
+                    scanned.relations,
+                    scanned.link_occurrences.clone(),
+                )
                 .map_err(|e| ApplicationError::Storage(e.to_string()))?;
+
+            crate::link_resolution::resolve_and_store_links(&mut self.store, &src_cfg.id, scanned.link_occurrences)?;
         }
 
         Ok(ScanReport {
@@ -156,29 +171,47 @@ impl<S: ProjectionStore> ApplicationService<S> {
             {
                 continue;
             }
-            if path.is_file() && path.extension().is_some_and(|ext| ext == "org") {
+            if path.is_file()
+                && let Some(ext) = path.extension().and_then(|e| e.to_str())
+                && (ext == "org" || ext == "md")
+            {
                 entries.push(path.to_path_buf());
             }
         }
-
         entries.sort();
-
         let mut all_resources = Vec::new();
         let mut all_relations = Vec::new();
+        let mut all_link_occurrences = Vec::new();
         let scanned_files = entries.len();
 
         for path in entries {
-            let scanned = OrgScanner::scan(&path, "native")?;
-            all_resources.extend(scanned.resources);
-            all_relations.extend(scanned.links);
+            let ext = path.extension().and_then(|e| e.to_str()).unwrap_or_default();
+            if ext == "org" {
+                let scanned = OrgScanner::scan(&path, "native")?;
+                all_resources.extend(scanned.resources);
+                all_relations.extend(scanned.links);
+                all_link_occurrences.extend(scanned.link_occurrences);
+            } else if ext == "md" {
+                let scanned = document::MarkdownScanner::scan(&path, "native")?;
+                all_resources.extend(scanned.resources);
+                all_relations.extend(scanned.links);
+                all_link_occurrences.extend(scanned.link_occurrences);
+            }
         }
 
         let scanned_resources = all_resources.len();
         let scanned_relations = all_relations.len();
 
         self.store
-            .replace_source("native", all_resources, all_relations)
+            .replace_source(
+                "native",
+                all_resources,
+                all_relations,
+                all_link_occurrences.clone(),
+            )
             .map_err(|e| ApplicationError::Storage(e.to_string()))?;
+
+        crate::link_resolution::resolve_and_store_links(&mut self.store, "native", all_link_occurrences)?;
 
         Ok(ScanReport {
             scanned_files,
@@ -248,6 +281,24 @@ impl<S: ProjectionStore> ApplicationService<S> {
 
         Ok(ResolveResult::NotFound)
     }
+    pub fn query_link_occurrences(
+        &self,
+        source_ref: &ResourceRef,
+    ) -> Result<Vec<domain::LinkOccurrence>, ApplicationError> {
+        self.store
+            .query_link_occurrences(source_ref)
+            .map_err(|e| ApplicationError::Storage(e.to_string()))
+    }
+
+    pub fn query_resolved_relations(
+        &self,
+        source_ref: &ResourceRef,
+    ) -> Result<Vec<domain::ResolvedRelation>, ApplicationError> {
+        self.store
+            .query_resolved_relations(source_ref)
+            .map_err(|e| ApplicationError::Storage(e.to_string()))
+    }
+
 
     pub fn query(&self, selector: &Selector) -> Result<QueryPage, ApplicationError> {
         self.store
@@ -316,7 +367,7 @@ impl<S: ProjectionStore> ApplicationService<S> {
 
         let source_id = res.source_id.clone();
         self.store
-            .replace_source(&source_id, vec![res], vec![])
+            .replace_source(&source_id, vec![res], vec![], vec![])
             .map_err(|e| ApplicationError::Storage(e.to_string()))?;
 
         Ok(transition)
@@ -403,7 +454,7 @@ impl<S: ProjectionStore> ApplicationService<S> {
         native_resources.push(resource);
 
         self.store
-            .replace_source("native", native_resources, vec![])
+            .replace_source("native", native_resources, vec![], vec![])
             .map_err(|e| ApplicationError::Storage(e.to_string()))?;
 
         Ok(att_ref)

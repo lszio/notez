@@ -52,6 +52,7 @@ impl SourceAdapter for NativeSourceAdapter {
 
         let mut resources = Vec::new();
         let mut relations = Vec::new();
+        let mut link_occurrences = Vec::new();
 
         for path in entries {
             let ext = path
@@ -62,10 +63,12 @@ impl SourceAdapter for NativeSourceAdapter {
                 let doc = OrgScanner::scan(&path, &self.config.id)?;
                 resources.extend(doc.resources);
                 relations.extend(doc.links);
+                link_occurrences.extend(doc.link_occurrences);
             } else if ext == "md" {
                 let doc = MarkdownScanner::scan(&path, &self.config.id)?;
                 resources.extend(doc.resources);
                 relations.extend(doc.links);
+                link_occurrences.extend(doc.link_occurrences);
             }
         }
 
@@ -73,6 +76,7 @@ impl SourceAdapter for NativeSourceAdapter {
             source_id: self.config.id.clone(),
             resources,
             relations,
+            link_occurrences,
         })
     }
 }

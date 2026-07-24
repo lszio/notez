@@ -134,3 +134,46 @@ pub struct SegmentRecord {
     pub offset_start: usize,
     pub offset_end: usize,
 }
+
+/// Deterministic derived identity for resources without explicit IDs.
+///
+/// Generates a stable `ResourceRef` from source identity + normalized locator +
+/// structural position. The algorithm is versioned (v1) so future changes can
+/// migrate.
+///
+/// Inputs:
+/// - `kind`: the resource kind
+/// - `source_id`: the source adapter's identity
+/// - `locator`: normalized source-relative path
+/// - `position`: structural position within the document (e.g. heading index)
+///
+/// The output ULID encodes a zero timestamp (derived, not temporal) and the
+/// lower 80 bits of a SHA-256 hash of the inputs.
+pub fn derived_id(
+    kind: ResourceKind,
+    source_id: &str,
+    locator: &str,
+    position: &str,
+) -> ResourceRef {
+    use sha2::{Digest, Sha256};
+
+    let mut hasher = Sha256::new();
+    hasher.update(b"notez-derived-id-v1\0");
+    hasher.update(kind.as_str().as_bytes());
+    hasher.update(b"\0");
+    hasher.update(source_id.as_bytes());
+    hasher.update(b"\0");
+    hasher.update(locator.as_bytes());
+    hasher.update(b"\0");
+    hasher.update(position.as_bytes());
+    let hash = hasher.finalize();
+
+    // Pack lower 80 bits of hash into a ULID with timestamp=0
+    let mut bytes = [0u8; 16];
+    // timestamp bytes [0..6] = 0 (derived, non-temporal)
+    // random bytes [6..16] = hash[0..10]
+    bytes[6..16].copy_from_slice(&hash[0..10]);
+
+    let id = Ulid::from_bytes(bytes);
+    ResourceRef::new(kind, id)
+}

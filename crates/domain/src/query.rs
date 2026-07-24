@@ -1,3 +1,4 @@
+use crate::link::{LinkOccurrence, ResolvedRelation};
 use crate::resource::{Resource, ResourceKind, ResourceRef, ResourceRelation, SegmentRecord};
 use serde::{Deserialize, Serialize};
 
@@ -55,6 +56,7 @@ pub trait ProjectionStore {
         source_id: &str,
         resources: Vec<Resource>,
         relations: Vec<ResourceRelation>,
+        link_occurrences: Vec<LinkOccurrence>,
     ) -> Result<(), Self::Error>;
 
     fn get(&self, r#ref: &ResourceRef) -> Result<Option<Resource>, Self::Error>;
@@ -67,6 +69,36 @@ pub trait ProjectionStore {
     }
 
     fn query_segments(&self, _attachment_ref: &str) -> Result<Vec<SegmentRecord>, Self::Error> {
+        Ok(Vec::new())
+    }
+
+    fn replace_link_occurrences(
+        &mut self,
+        _source_id: &str,
+        _occurrences: Vec<LinkOccurrence>,
+    ) -> Result<(), Self::Error> {
+        Ok(())
+    }
+
+    fn query_link_occurrences(
+        &self,
+        _source_ref: &ResourceRef,
+    ) -> Result<Vec<LinkOccurrence>, Self::Error> {
+        Ok(Vec::new())
+    }
+
+    fn replace_resolved_relations(
+        &mut self,
+        _source_id: &str,
+        _relations: Vec<ResolvedRelation>,
+    ) -> Result<(), Self::Error> {
+        Ok(())
+    }
+
+    fn query_resolved_relations(
+        &self,
+        _source_ref: &ResourceRef,
+    ) -> Result<Vec<ResolvedRelation>, Self::Error> {
         Ok(Vec::new())
     }
 }

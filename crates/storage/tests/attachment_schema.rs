@@ -25,7 +25,7 @@ fn test_attachment_resource_and_segments_schema() {
     };
 
     store
-        .replace_source("native", vec![att_resource.clone()], vec![])
+        .replace_source("native", vec![att_resource.clone()], vec![], vec![])
         .unwrap();
 
     let fetched = store

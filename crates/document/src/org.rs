@@ -1,4 +1,8 @@
-use domain::{Resource, ResourceKind, ResourceRef, ResourceRelation};
+use crate::ScannedDocument;
+use domain::{
+    LinkOccurrence, LinkTarget, Resource, ResourceKind, ResourceRef, ResourceRelation, TextSpan,
+    derived_id,
+};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::fs;
@@ -12,6 +16,7 @@ pub enum DocumentError {
     #[error("I/O error reading {path}: {source}")]
     Io {
         path: String,
+        #[source]
         source: std::io::Error,
     },
     #[error("malformed ID at {path}:{line}:{column}: {message}")]
@@ -23,13 +28,6 @@ pub enum DocumentError {
     },
     #[error("document error: {0}")]
     Other(String),
-}
-
-#[derive(Debug, Clone)]
-pub struct ScannedDocument {
-    pub raw: Arc<str>,
-    pub resources: Vec<Resource>,
-    pub links: Vec<ResourceRelation>,
 }
 
 pub struct OrgScanner;
@@ -65,11 +63,14 @@ impl OrgScanner {
             title: String,
             properties: BTreeMap<String, String>,
             id_opt: Option<(ResourceRef, usize, usize)>,
+            /// 0-based index among headings, for deterministic ID derivation
+            index: usize,
         }
         let mut headings: Vec<PendingHeading> = Vec::new();
 
         let lines: Vec<&str> = raw.lines().collect();
         let mut line_idx = 0;
+        let mut heading_count = 0;
 
         while line_idx < lines.len() {
             let line = lines[line_idx];
@@ -97,7 +98,9 @@ impl OrgScanner {
                             title: val.to_string(),
                             properties: BTreeMap::new(),
                             id_opt: Some((block_ref, line_idx + 1, 1)),
+                            index: heading_count,
                         });
+                        heading_count += 1;
                     }
                     doc_properties.insert(key_upper, val.to_string());
                 }
@@ -118,7 +121,9 @@ impl OrgScanner {
                         title,
                         properties,
                         id_opt: None,
+                        index: heading_count,
                     });
+                    heading_count += 1;
                 }
             } else if trimmed.eq_ignore_ascii_case(":PROPERTIES:") {
                 line_idx += 1;
@@ -167,9 +172,12 @@ impl OrgScanner {
             line_idx += 1;
         }
 
+        // Normalize locator: use source-relative path if possible
+        let locator = path_str.clone();
+
         let doc_ref = match doc_id_opt {
             Some((r, _, _)) => r,
-            None => ResourceRef::new(ResourceKind::Document, Ulid::new()),
+            None => derived_id(ResourceKind::Document, source_id, &locator, ""),
         };
 
         let doc_resource = Resource {
@@ -178,7 +186,7 @@ impl OrgScanner {
             title: doc_title,
             revision: revision.clone(),
             source_id: source_id.to_string(),
-            locator: path_str.clone(),
+            locator: locator.clone(),
             properties: doc_properties,
         };
 
@@ -188,10 +196,15 @@ impl OrgScanner {
         let mut heading_refs = Vec::new();
         let mut level_stack: Vec<(usize, ResourceRef)> = Vec::new();
 
-        for h in headings {
+        for h in &headings {
             let h_ref = match h.id_opt {
                 Some((r, _, _)) => r,
-                None => ResourceRef::new(ResourceKind::Heading, Ulid::new()),
+                None => derived_id(
+                    ResourceKind::Heading,
+                    source_id,
+                    &locator,
+                    &h.index.to_string(),
+                ),
             };
 
             while let Some((lvl, _)) = level_stack.last() {
@@ -202,7 +215,7 @@ impl OrgScanner {
                 }
             }
 
-            let mut props = h.properties;
+            let mut props = h.properties.clone();
             if let Some((_, parent_ref)) = level_stack.last() {
                 props.insert("PARENT_REF".to_string(), parent_ref.to_string());
             }
@@ -213,20 +226,21 @@ impl OrgScanner {
             resources.push(Resource {
                 r#ref: h_ref,
                 kind: h_ref.kind(),
-                title: h.title,
+                title: h.title.clone(),
                 revision: revision.clone(),
                 source_id: source_id.to_string(),
-                locator: path_str.clone(),
+                locator: locator.clone(),
                 properties: props,
             });
         }
 
-        // Parse links
+        // Parse links — extract all forms
         let mut links = Vec::new();
+        let mut link_occurrences = Vec::new();
         let mut current_source_ref = doc_ref;
         let mut heading_idx = 0;
 
-        for line in raw.lines() {
+        for (line_num, line) in raw.lines().enumerate() {
             let trimmed = line.trim();
             if trimmed.starts_with('*') && trimmed.contains(' ') {
                 let stars = trimmed.chars().take_while(|c| *c == '*').count();
@@ -239,12 +253,17 @@ impl OrgScanner {
                 }
             }
 
-            for target_ref in extract_id_links(line) {
-                links.push(ResourceRelation {
-                    source_ref: current_source_ref,
-                    relation: "id_link".to_string(),
-                    target_ref,
-                });
+            let extracted = extract_org_links(line, line_num + 1, current_source_ref);
+            for occ in extracted {
+                // Backward compat: if this is an ID link, produce old-style ResourceRelation
+                if let Some(target_ref) = occ.target.as_resource_ref() {
+                    links.push(ResourceRelation {
+                        source_ref: current_source_ref,
+                        relation: "id_link".to_string(),
+                        target_ref,
+                    });
+                }
+                link_occurrences.push(occ);
             }
         }
 
@@ -252,6 +271,7 @@ impl OrgScanner {
             raw,
             resources,
             links,
+            link_occurrences,
         })
     }
 }
@@ -305,26 +325,179 @@ fn parse_id_val(
     }
 }
 
-fn extract_id_links(line: &str) -> Vec<ResourceRef> {
+/// Extract all Org-mode links from a line, returning `LinkOccurrence` for each.
+///
+/// Supported forms:
+/// - `[[id:VALUE]]` or `[[id:VALUE][DESCRIPTION]]` → `LinkTarget::Id`
+/// - `[[file:PATH]]` or `[[file:PATH::HEADING]]` → `LinkTarget::File`
+/// - `[[file:PATH][DESC]]` → `LinkTarget::File`
+/// - `[[https://URL]]` or `[[http://URL][DESC]]` → `LinkTarget::Url`
+/// - `[[SCHEME:VALUE]]` → `LinkTarget::Custom` for unknown schemes
+/// - `[[TITLE]]` → `LinkTarget::Title` (bare wikilink without scheme)
+fn extract_org_links(line: &str, line_num: usize, source_ref: ResourceRef) -> Vec<LinkOccurrence> {
     let mut results = Vec::new();
     let mut rest = line;
-    while let Some(start) = rest.find("[[id:") {
-        let after = &rest[start + 5..];
-        if let Some(end) = after.find(']') {
-            let target_str = &after[..end];
-            let target_str = target_str.trim();
-            let parsed = if target_str.contains(':') {
-                ResourceRef::parse(target_str).ok()
+    let mut offset = 0;
+
+    while let Some(start) = rest.find("[[") {
+        let col_start = offset + start;
+        let after = &rest[start + 2..];
+
+        // Find the matching ]] — may have ][desc] in between
+        let end = if let Some(desc_start) = after.find("][") {
+            let after_desc = &after[desc_start + 2..];
+            if let Some(close) = after_desc.find("]]") {
+                // [[target][description]]
+                desc_start + 2 + close + 2
+            } else if let Some(close) = after.find("]]") {
+                close + 2
             } else {
-                ResourceRef::parse(&format!("heading:{target_str}")).ok()
-            };
-            if let Some(r) = parsed {
-                results.push(r);
+                break;
             }
-            rest = &after[end + 1..];
+        } else if let Some(close) = after.find("]]") {
+            close + 2
         } else {
             break;
+        };
+
+        let full_raw = &rest[start..start + 2 + end];
+        let col_end = col_start + full_raw.len();
+
+        // Parse inner: [[target][description]] or [[target]]
+        let inner = &after[..end - 2]; // strip trailing ]]
+        let (target_part, display_text) = if let Some(desc_pos) = inner.find("][") {
+            (&inner[..desc_pos], Some(inner[desc_pos + 2..].to_string()))
+        } else {
+            (inner, None)
+        };
+
+        let link_target = parse_org_link_target(target_part);
+
+        results.push(LinkOccurrence {
+            source_ref,
+            target: link_target,
+            raw: full_raw.to_string(),
+            display_text,
+            span: TextSpan {
+                line: line_num,
+                col_start: col_start + 1, // 1-indexed
+                col_end: col_end + 1,
+            },
+        });
+
+        rest = &rest[start + 2 + end..];
+        offset = col_end;
+    }
+
+    results
+}
+
+/// Parse the target part of an Org link (inside `[[...]]` before any `][`).
+fn parse_org_link_target(target: &str) -> LinkTarget {
+    // Check for scheme:value pattern
+    if let Some((scheme, value)) = target.split_once(':') {
+        let scheme_lower = scheme.to_lowercase();
+        match scheme_lower.as_str() {
+            "id" => {
+                let value = value.trim();
+                // Try to determine kind hint
+                if value.contains(':') {
+                    // Already has kind:ulid format
+                    if let Some((kind_str, ulid_part)) = value.split_once(':') {
+                        let kind_hint = match kind_str {
+                            "document" => Some(ResourceKind::Document),
+                            "heading" => Some(ResourceKind::Heading),
+                            "block" => Some(ResourceKind::Block),
+                            "attachment" => Some(ResourceKind::Attachment),
+                            _ => None,
+                        };
+                        LinkTarget::id(ulid_part, kind_hint)
+                    } else {
+                        LinkTarget::id(value, None)
+                    }
+                } else {
+                    LinkTarget::id(value, None)
+                }
+            }
+            "file" => {
+                // file:path or file:path::heading
+                if let Some((path, fragment)) = value.split_once("::") {
+                    LinkTarget::file(path, Some(fragment.to_string()))
+                } else {
+                    LinkTarget::file(value, None)
+                }
+            }
+            "http" | "https" => LinkTarget::url(target),
+            _ => {
+                // Custom scheme
+                if let Some((val, fragment)) = value.split_once("::") {
+                    LinkTarget::custom(scheme, val, Some(fragment.to_string()))
+                } else {
+                    LinkTarget::custom(scheme, value, None)
+                }
+            }
+        }
+    } else {
+        // No scheme — treat as title/wikilink
+        LinkTarget::title(target, None)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_org_id_link() {
+        let t = parse_org_link_target("id:01J00000000000000000000001");
+        assert!(matches!(t, LinkTarget::Id { .. }));
+        if let LinkTarget::Id { value, kind_hint } = &t {
+            assert_eq!(value, "01J00000000000000000000001");
+            assert_eq!(*kind_hint, None);
         }
     }
-    results
+
+    #[test]
+    fn parse_org_file_link() {
+        let t = parse_org_link_target("file:notes/todo.org::heading");
+        assert!(matches!(t, LinkTarget::File { .. }));
+        if let LinkTarget::File { path, fragment } = &t {
+            assert_eq!(path, "notes/todo.org");
+            assert_eq!(fragment.as_deref(), Some("heading"));
+        }
+    }
+
+    #[test]
+    fn parse_org_url_link() {
+        let t = parse_org_link_target("https://example.com/page");
+        assert!(matches!(t, LinkTarget::Url { .. }));
+    }
+
+    #[test]
+    fn parse_org_title_link() {
+        let t = parse_org_link_target("Some Heading");
+        assert!(matches!(t, LinkTarget::Title { .. }));
+        if let LinkTarget::Title { title, .. } = &t {
+            assert_eq!(title, "Some Heading");
+        }
+    }
+
+    #[test]
+    fn parse_org_custom_link() {
+        let t = parse_org_link_target("zotero:key123");
+        assert!(matches!(t, LinkTarget::Custom { .. }));
+    }
+
+    #[test]
+    fn extract_multiple_links() {
+        let ref_id =
+            ResourceRef::parse("document:01J00000000000000000000001").unwrap();
+        let line = "See [[id:01J00000000000000000000002][target]] and [[file:notes.org]].";
+        let occs = extract_org_links(line, 1, ref_id);
+        assert_eq!(occs.len(), 2);
+        assert!(matches!(occs[0].target, LinkTarget::Id { .. }));
+        assert_eq!(occs[0].display_text.as_deref(), Some("target"));
+        assert!(matches!(occs[1].target, LinkTarget::File { .. }));
+        assert!(occs[1].display_text.is_none());
+    }
 }

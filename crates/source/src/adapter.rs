@@ -1,4 +1,4 @@
-use domain::{Resource, ResourceRelation};
+use domain::{LinkOccurrence, Resource, ResourceRelation};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use thiserror::Error;
@@ -73,6 +73,7 @@ pub struct ScannedSource {
     pub source_id: String,
     pub resources: Vec<Resource>,
     pub relations: Vec<ResourceRelation>,
+    pub link_occurrences: Vec<LinkOccurrence>,
 }
 
 pub trait SourceAdapter {

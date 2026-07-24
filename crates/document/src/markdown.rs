@@ -1,17 +1,14 @@
+use crate::ScannedDocument;
 use crate::org::DocumentError;
-use domain::{Resource, ResourceKind, ResourceRef, ResourceRelation};
+use domain::{
+    LinkOccurrence, LinkTarget, Resource, ResourceKind, ResourceRef, ResourceRelation, TextSpan,
+    derived_id,
+};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
 use std::sync::Arc;
-use ulid::Ulid;
-
-pub struct ScannedDocument {
-    pub raw: Arc<str>,
-    pub resources: Vec<Resource>,
-    pub links: Vec<ResourceRelation>,
-}
 
 pub struct MarkdownScanner;
 
@@ -74,8 +71,10 @@ impl MarkdownScanner {
             }
         }
 
+        let locator = path_str.clone();
+
         let doc_ref =
-            doc_id_opt.unwrap_or_else(|| ResourceRef::new(ResourceKind::Document, Ulid::new()));
+            doc_id_opt.unwrap_or_else(|| derived_id(ResourceKind::Document, source_id, &locator, ""));
 
         let doc_resource = Resource {
             r#ref: doc_ref,
@@ -83,13 +82,15 @@ impl MarkdownScanner {
             title: doc_title,
             revision: revision.clone(),
             source_id: source_id.to_string(),
-            locator: path_str.clone(),
+            locator: locator.clone(),
             properties: doc_properties,
         };
 
         let mut resources = vec![doc_resource];
         let mut links = Vec::new();
+        let mut link_occurrences = Vec::new();
         let mut current_source_ref = doc_ref;
+        let mut heading_count: usize = 0;
 
         while line_idx < lines.len() {
             let line = lines[line_idx];
@@ -122,8 +123,15 @@ impl MarkdownScanner {
                         heading_text = heading_text[..comment_start].trim().to_string();
                     }
 
-                    let h_ref = heading_id_opt
-                        .unwrap_or_else(|| ResourceRef::new(ResourceKind::Heading, Ulid::new()));
+                    let h_ref = heading_id_opt.unwrap_or_else(|| {
+                        derived_id(
+                            ResourceKind::Heading,
+                            source_id,
+                            &locator,
+                            &heading_count.to_string(),
+                        )
+                    });
+                    heading_count += 1;
                     current_source_ref = h_ref;
 
                     let mut props = BTreeMap::new();
@@ -135,7 +143,7 @@ impl MarkdownScanner {
                         title: heading_text,
                         revision: revision.clone(),
                         source_id: source_id.to_string(),
-                        locator: path_str.clone(),
+                        locator: locator.clone(),
                         properties: props,
                     });
                 }
@@ -161,7 +169,7 @@ impl MarkdownScanner {
                             title: trimmed[..comment_start].trim().to_string(),
                             revision: revision.clone(),
                             source_id: source_id.to_string(),
-                            locator: path_str.clone(),
+                            locator: locator.clone(),
                             properties: BTreeMap::new(),
                         });
                         current_source_ref = b_ref;
@@ -169,12 +177,17 @@ impl MarkdownScanner {
                 }
             }
 
-            for target_ref in extract_markdown_links(line) {
-                links.push(ResourceRelation {
-                    source_ref: current_source_ref,
-                    relation: "id_link".to_string(),
-                    target_ref,
-                });
+            // Extract all links from this line
+            let extracted = extract_markdown_links(line, line_idx + 1, current_source_ref);
+            for occ in extracted {
+                if let Some(target_ref) = occ.target.as_resource_ref() {
+                    links.push(ResourceRelation {
+                        source_ref: current_source_ref,
+                        relation: "id_link".to_string(),
+                        target_ref,
+                    });
+                }
+                link_occurrences.push(occ);
             }
 
             line_idx += 1;
@@ -184,39 +197,284 @@ impl MarkdownScanner {
             raw,
             resources,
             links,
+            link_occurrences,
         })
     }
 }
 
-fn extract_markdown_links(line: &str) -> Vec<ResourceRef> {
+/// Extract all Markdown links from a line.
+///
+/// Supported forms:
+/// - `[[wikilink]]` → `LinkTarget::Title` (bare wikilink)
+/// - `[[id:VALUE]]` or `[[id:VALUE][desc]]` → `LinkTarget::Id`
+/// - `[label](url)` → `LinkTarget::Url` or `LinkTarget::File`
+/// - `[label](path#fragment)` → `LinkTarget::File` with fragment
+fn extract_markdown_links(
+    line: &str,
+    line_num: usize,
+    source_ref: ResourceRef,
+) -> Vec<LinkOccurrence> {
     let mut results = Vec::new();
-    let mut rest = line;
-    while let Some(start) = rest.find("[[") {
-        let after = &rest[start + 2..];
-        if let Some(end) = after.find("]]") {
-            let inner = &after[..end];
-            let inner_trimmed = inner.trim();
+    let bytes = line.as_bytes();
+    let len = bytes.len();
+    let mut i = 0;
 
-            if let Some(id_part) = inner_trimmed.strip_prefix("id:") {
-                let target_str = if let Some((target, _)) = id_part.split_once("][") {
-                    target
-                } else {
-                    id_part
-                };
-                let target_str = target_str.trim();
-                let parsed = if target_str.contains(':') {
-                    ResourceRef::parse(target_str).ok()
-                } else {
-                    ResourceRef::parse(&format!("heading:{target_str}")).ok()
-                };
-                if let Some(r) = parsed {
-                    results.push(r);
+    while i < len {
+        if i + 1 < len && bytes[i] == b'[' && bytes[i + 1] == b'[' {
+            // Wikilink: [[...]] or [[...][...]]
+            let start = i;
+            i += 2;
+            let target_start = i;
+            // Find ]] or ][
+            let mut target_end = None;
+            let mut desc_range = None;
+            while i + 1 < len {
+                if bytes[i] == b']' && bytes[i + 1] == b']' {
+                    target_end = Some(i);
+                    i += 2;
+                    break;
+                } else if bytes[i] == b']' && bytes[i + 1] == b'[' {
+                    target_end = Some(i);
+                    i += 2;
+                    let desc_start = i;
+                    while i + 1 < len {
+                        if bytes[i] == b']' && bytes[i + 1] == b']' {
+                            desc_range = Some((desc_start, i));
+                            i += 2;
+                            break;
+                        }
+                        i += 1;
+                    }
+                    break;
+                }
+                i += 1;
+            }
+
+            if let Some(te) = target_end {
+                let target_str = &line[target_start..te];
+                let display_text = desc_range.map(|(ds, de)| line[ds..de].to_string());
+                let raw_str = &line[start..i];
+
+                let link_target = parse_markdown_link_target(target_str);
+
+                results.push(LinkOccurrence {
+                    source_ref,
+                    target: link_target,
+                    raw: raw_str.to_string(),
+                    display_text,
+                    span: TextSpan {
+                        line: line_num,
+                        col_start: start + 1,
+                        col_end: i + 1,
+                    },
+                });
+            }
+        } else if bytes[i] == b'[' && (i == 0 || bytes[i - 1] != b'[') {
+            // Standard Markdown link: [label](target)
+            let start = i;
+            i += 1;
+            let label_start = i;
+            let mut depth = 1;
+            while i < len && depth > 0 {
+                if bytes[i] == b'[' {
+                    depth += 1;
+                } else if bytes[i] == b']' {
+                    depth -= 1;
+                }
+                if depth > 0 {
+                    i += 1;
                 }
             }
-            rest = &after[end + 2..];
+            if depth == 0 {
+                let label_end = i;
+                i += 1; // skip ]
+                if i < len && bytes[i] == b'(' {
+                    i += 1;
+                    let url_start = i;
+                    let mut paren_depth = 1;
+                    while i < len && paren_depth > 0 {
+                        if bytes[i] == b'(' {
+                            paren_depth += 1;
+                        } else if bytes[i] == b')' {
+                            paren_depth -= 1;
+                        }
+                        if paren_depth > 0 {
+                            i += 1;
+                        }
+                    }
+                    if paren_depth == 0 {
+                        let url_end = i;
+                        i += 1; // skip )
+                        let label = &line[label_start..label_end];
+                        let url = &line[url_start..url_end];
+                        let raw_str = &line[start..i];
+
+                        // Skip images: ![alt](url)
+                        if start > 0 && bytes[start - 1] == b'!' {
+                            continue;
+                        }
+
+                        let link_target = parse_inline_link_target(url);
+
+                        results.push(LinkOccurrence {
+                            source_ref,
+                            target: link_target,
+                            raw: raw_str.to_string(),
+                            display_text: if label.is_empty() {
+                                None
+                            } else {
+                                Some(label.to_string())
+                            },
+                            span: TextSpan {
+                                line: line_num,
+                                col_start: start + 1,
+                                col_end: i + 1,
+                            },
+                        });
+                    } else {
+                        continue;
+                    }
+                } else {
+                    // Just a [label] without (url), skip
+                    continue;
+                }
+            } else {
+                continue;
+            }
         } else {
-            break;
+            i += 1;
         }
     }
+
     results
+}
+
+/// Parse a wikilink target: `id:VALUE`, `Some Title`, `file:path`, etc.
+fn parse_markdown_link_target(target: &str) -> LinkTarget {
+    let trimmed = target.trim();
+
+    if let Some(id_part) = trimmed.strip_prefix("id:") {
+        let id_part = id_part.trim();
+        if id_part.contains(':') {
+            if let Some((kind_str, ulid_part)) = id_part.split_once(':') {
+                let kind_hint = match kind_str {
+                    "document" => Some(ResourceKind::Document),
+                    "heading" => Some(ResourceKind::Heading),
+                    "block" => Some(ResourceKind::Block),
+                    "attachment" => Some(ResourceKind::Attachment),
+                    _ => None,
+                };
+                LinkTarget::id(ulid_part, kind_hint)
+            } else {
+                LinkTarget::id(id_part, None)
+            }
+        } else {
+            LinkTarget::id(id_part, None)
+        }
+    } else if let Some(file_part) = trimmed.strip_prefix("file:") {
+        if let Some((path, fragment)) = file_part.split_once("::") {
+            LinkTarget::file(path, Some(fragment.to_string()))
+        } else {
+            LinkTarget::file(file_part, None)
+        }
+    } else if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
+        LinkTarget::url(trimmed)
+    } else if let Some((scheme, value)) = trimmed.split_once(':') {
+        // Check if it's a known scheme
+        if scheme.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-') && !scheme.is_empty()
+        {
+            LinkTarget::custom(scheme, value, None)
+        } else {
+            LinkTarget::title(trimmed, None)
+        }
+    } else {
+        // Bare title wikilink
+        if let Some((title, fragment)) = trimmed.split_once('#') {
+            LinkTarget::title(title, Some(fragment.to_string()))
+        } else {
+            LinkTarget::title(trimmed, None)
+        }
+    }
+}
+
+/// Parse a standard Markdown inline link target: `url`, `path`, `path#fragment`.
+fn parse_inline_link_target(url: &str) -> LinkTarget {
+    let trimmed = url.trim();
+
+    if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
+        LinkTarget::url(trimmed)
+    } else if trimmed.starts_with("mailto:") {
+        LinkTarget::url(trimmed)
+    } else if let Some((scheme, value)) = trimmed.split_once(':') {
+        if scheme.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+            && !scheme.is_empty()
+            && scheme != "C"  // Avoid matching Windows paths like C:\...
+        {
+            LinkTarget::custom(scheme, value, None)
+        } else {
+            parse_file_or_title(trimmed)
+        }
+    } else {
+        parse_file_or_title(trimmed)
+    }
+}
+
+fn parse_file_or_title(target: &str) -> LinkTarget {
+    // If it looks like a path (contains . or /), treat as file
+    if target.contains('/') || target.contains('.') {
+        if let Some((path, fragment)) = target.split_once('#') {
+            LinkTarget::file(path, Some(fragment.to_string()))
+        } else {
+            LinkTarget::file(target, None)
+        }
+    } else if let Some((title, fragment)) = target.split_once('#') {
+        LinkTarget::title(title, Some(fragment.to_string()))
+    } else {
+        LinkTarget::title(target, None)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_wikilink_title() {
+        let t = parse_markdown_link_target("Some Note");
+        assert!(matches!(t, LinkTarget::Title { .. }));
+    }
+
+    #[test]
+    fn parse_wikilink_id() {
+        let t = parse_markdown_link_target("id:01J00000000000000000000001");
+        assert!(matches!(t, LinkTarget::Id { .. }));
+    }
+
+    #[test]
+    fn parse_inline_url() {
+        let t = parse_inline_link_target("https://example.com");
+        assert!(matches!(t, LinkTarget::Url { .. }));
+    }
+
+    #[test]
+    fn parse_inline_file() {
+        let t = parse_inline_link_target("notes/todo.md#section");
+        assert!(matches!(t, LinkTarget::File { .. }));
+        if let LinkTarget::File { path, fragment } = &t {
+            assert_eq!(path, "notes/todo.md");
+            assert_eq!(fragment.as_deref(), Some("section"));
+        }
+    }
+
+    #[test]
+    fn extract_mixed_links() {
+        let ref_id = ResourceRef::parse("document:01J00000000000000000000001").unwrap();
+        let line =
+            "See [[Obsidian Vault]] and [docs](https://example.com) and [[id:01J00000000000000000000002][target]].";
+        let occs = extract_markdown_links(line, 1, ref_id);
+        assert_eq!(occs.len(), 3);
+        assert!(matches!(occs[0].target, LinkTarget::Title { .. }));
+        assert!(matches!(occs[1].target, LinkTarget::Url { .. }));
+        assert!(matches!(occs[2].target, LinkTarget::Id { .. }));
+    }
 }

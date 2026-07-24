@@ -1,3 +1,5 @@
+pub mod link_resolution;
+
 pub mod attachment;
 pub mod writeback;
 pub use writeback::{RelaySyncReport, WritebackReport};

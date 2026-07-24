@@ -42,6 +42,9 @@ pub enum Commands {
     /// Agenda view of scheduled/deadline items
     Agenda,
 
+    /// Link commands (list, resolve, diagnose)
+    Link(LinkSubcommand),
+
     /// Task mutation operations
     Task(TaskSubcommand),
     /// Source management commands (federation)
@@ -98,6 +101,24 @@ impl From<CliResourceKind> for ResourceKind {
             CliResourceKind::Block => ResourceKind::Block,
         }
     }
+}
+
+#[derive(Args, Debug)]
+pub struct LinkSubcommand {
+    #[command(subcommand)]
+    pub command: LinkCommands,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum LinkCommands {
+    /// List link occurrences for a resource
+    List {
+        r_ref: String,
+    },
+    /// List resolved relations for a resource
+    Resolved {
+        r_ref: String,
+    },
 }
 
 #[derive(Args, Debug)]
