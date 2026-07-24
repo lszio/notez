@@ -82,7 +82,6 @@ fn default_log_level() -> String {
 #[serde(deny_unknown_fields)]
 pub struct SpaceConfig {
     pub version: u32,
-    #[serde(default)]
     pub space: SpaceIdentity,
     #[serde(default)]
     pub workflow: WorkflowConfig,
@@ -92,6 +91,17 @@ pub struct SpaceConfig {
     pub link_overrides: JsonValue,
 }
 
+pub fn default_database() -> PathBuf {
+    PathBuf::from(".notez/index.sqlite")
+}
+
+pub fn default_todo() -> Vec<String> {
+    vec!["TODO".into(), "NEXT".into(), "WAIT".into()]
+}
+
+pub fn default_done() -> Vec<String> {
+    vec!["DONE".into(), "QUIT".into()]
+}
 impl SpaceConfig {
     pub fn parse(text: &str) -> Result<Self, ConfigError> {
         let cfg: SpaceConfig = toml::from_str(text)?;
@@ -107,19 +117,6 @@ impl SpaceConfig {
 
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct SpaceIdentity {
-    #[serde(default)]
-    pub name: String,
-    #[serde(default = "default_database")]
-    pub database: PathBuf,
-}
-
-fn default_database() -> PathBuf {
-    PathBuf::from(".notez/index.sqlite")
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct WorkflowConfig {
     #[serde(default = "default_todo")]
     pub todo: Vec<String>,
@@ -127,11 +124,13 @@ pub struct WorkflowConfig {
     pub done: Vec<String>,
 }
 
-fn default_todo() -> Vec<String> {
-    vec!["TODO".into(), "NEXT".into(), "WAIT".into()]
-}
-fn default_done() -> Vec<String> {
-    vec!["DONE".into(), "QUIT".into()]
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SpaceIdentity {
+    #[serde(default)]
+    pub name: String,
+    #[serde(default = "default_database")]
+    pub database: PathBuf,
 }
 
 /// Source entry inside `[[sources]]`. Mirrors [`source::SourceConfig`] but
