@@ -1,6 +1,6 @@
 {
   "mcpServers": {
-    "notez-docs": {
+    "notez": {
       "command": "cargo",
       "args": [
         "run",
@@ -8,7 +8,7 @@
         "cli",
         "--",
         "--space",
-        "docs",
+        "notez",
         "mcp",
         "serve"
       ]

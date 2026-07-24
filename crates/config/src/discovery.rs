@@ -198,7 +198,7 @@ space_config: cfg.clone(),
 }
 
 impl SelectedSpace {
-    fn with_space(mut self, cfg: &SpaceConfig) -> Result<Self, ConfigError> {
+    fn with_space(self, cfg: &SpaceConfig) -> Result<Self, ConfigError> {
         // If the global registration pointed at a different `notez.toml` we
         // keep the one inside the space; this method exists so callers
         // receive a fully populated `SelectedSpace`.

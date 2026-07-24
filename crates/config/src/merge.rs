@@ -1,6 +1,6 @@
-use crate::model::{ConfigError, Preferences, RuntimeConfig, SpaceConfig};
 use crate::discovery::{ConfigPaths, SelectedSpace};
-use crate::defaults::{built_in_link_profiles, merge_link_overrides, resolve_path};
+use crate::defaults::resolve_path;
+use crate::model::{ConfigError, RuntimeConfig};
 use std::collections::BTreeMap;
 use std::ffi::OsString;
 

@@ -1,0 +1,16 @@
+version = 1
+
+[space]
+name = "notez"
+database = ".notez/index.sqlite"
+
+[workflow]
+todo = ["TODO", "NEXT", "WAIT"]
+done = ["DONE", "QUIT"]
+
+[[sources]]
+id = "docs"
+kind = "native"
+path = "docs"
+include_paths = ["docs"]
+exclude_paths = [".notez"]
