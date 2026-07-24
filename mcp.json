@@ -1,0 +1,17 @@
+{
+  "mcpServers": {
+    "notez-docs": {
+      "command": "cargo",
+      "args": [
+        "run",
+        "-p",
+        "cli",
+        "--",
+        "--space",
+        "docs",
+        "mcp",
+        "serve"
+      ]
+    }
+  }
+}

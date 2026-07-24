@@ -331,6 +331,7 @@ impl<S: ProjectionStore> ApplicationService<S> {
         for res in page.items {
             let scheduled = res.properties.get("SCHEDULED").cloned();
             let deadline = res.properties.get("DEADLINE").cloned();
+            let closed = res.properties.get("CLOSED").cloned();
             let todo = res.properties.get("TODO").cloned();
 
             if scheduled.is_some() || deadline.is_some() || todo.is_some() {
@@ -340,6 +341,7 @@ impl<S: ProjectionStore> ApplicationService<S> {
                     todo,
                     scheduled,
                     deadline,
+                    closed,
                     locator: res.locator,
                 });
             }
@@ -393,20 +395,45 @@ impl<S: ProjectionStore> ApplicationService<S> {
         let mut resources = Vec::new();
         let mut archives = Vec::new();
 
+        let mut parent_to_tasks: std::collections::BTreeMap<String, Vec<crate::task_para::AgendaItem>> = std::collections::BTreeMap::new();
+
+        // First pass: collect all tasks and map them to their parents
+        for res in &page.items {
+            let todo = res.properties.get("TODO").cloned();
+            if todo.is_some() {
+                if let Some(parent_ref) = res.properties.get("PARENT_REF") {
+                    let item = crate::task_para::AgendaItem {
+                        r_ref: res.r#ref.to_string(),
+                        title: res.title.clone(),
+                        todo,
+                        scheduled: res.properties.get("SCHEDULED").cloned(),
+                        deadline: res.properties.get("DEADLINE").cloned(),
+                        closed: res.properties.get("CLOSED").cloned(),
+                        locator: res.locator.clone(),
+                    };
+                    parent_to_tasks.entry(parent_ref.to_string()).or_default().push(item);
+                }
+            }
+        }
+
         for res in page.items {
             let inspect_res = self.inspect_rules(&res.r#ref)?;
             let para_val = inspect_res
                 .as_ref()
-                .and_then(|i| i.derived_properties.get("para").map(|s| s.as_str()))
-                .or_else(|| res.properties.get("para").map(|s| s.as_str()))
-                .or_else(|| res.properties.get("TYPE").map(|s| s.as_str()));
+                .and_then(|i| i.derived_properties.get("para").map(|s| s.to_string()))
+                .or_else(|| res.properties.get("para").map(|s| s.to_string()))
+                .or_else(|| res.properties.get("TYPE").map(|s| s.to_string()));
 
-            match para_val {
-                Some("projects") | Some("project") => projects.push(res),
-                Some("areas") | Some("area") => areas.push(res),
-                Some("resources") | Some("resource") => resources.push(res),
-                Some("archives") | Some("archive") => archives.push(res),
-                _ => {}
+            if let Some(pv) = para_val {
+                let tasks = parent_to_tasks.remove(&res.r#ref.to_string()).unwrap_or_default();
+                let node = crate::task_para::ParaNode { resource: res, tasks };
+                match pv.as_str() {
+                    "projects" | "project" => projects.push(node),
+                    "areas" | "area" => areas.push(node),
+                    "resources" | "resource" => resources.push(node),
+                    "archives" | "archive" => archives.push(node),
+                    _ => {}
+                }
             }
         }
 

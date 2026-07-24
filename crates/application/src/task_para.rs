@@ -8,6 +8,7 @@ pub struct AgendaItem {
     pub todo: Option<String>,
     pub scheduled: Option<String>,
     pub deadline: Option<String>,
+    pub closed: Option<String>,
     pub locator: String,
 }
 
@@ -16,10 +17,16 @@ pub struct AgendaView {
     pub items: Vec<AgendaItem>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ParaNode {
+    pub resource: Resource,
+    pub tasks: Vec<AgendaItem>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct ParaOverview {
-    pub projects: Vec<Resource>,
-    pub areas: Vec<Resource>,
-    pub resources: Vec<Resource>,
-    pub archives: Vec<Resource>,
+    pub projects: Vec<ParaNode>,
+    pub areas: Vec<ParaNode>,
+    pub resources: Vec<ParaNode>,
+    pub archives: Vec<ParaNode>,
 }

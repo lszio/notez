@@ -274,39 +274,201 @@ fn main() {
             }
         },
 
-        Commands::Task(commands::TaskSubcommand {
-            command:
-                commands::TaskCommands::Transition {
-                    r_ref,
-                    to,
-                    timestamp,
-                },
-        }) => {
-            let parsed_ref = match ResourceRef::parse(&r_ref) {
-                Ok(r) => r,
-                Err(e) => {
-                    eprintln!("Invalid resource ref format '{r_ref}': {e}");
-                    exit(2);
-                }
-            };
+        Commands::Task(commands::TaskSubcommand { command }) => {
+            let cmd = command.unwrap_or(commands::TaskCommands::Agenda);
+            match cmd {
+                commands::TaskCommands::Transition { r_ref, to, timestamp } => {
+                    let parsed_ref = match ResourceRef::parse(&r_ref) {
+                        Ok(r) => r,
+                        Err(e) => {
+                            eprintln!("Invalid resource ref format '{r_ref}': {e}");
+                            exit(2);
+                        }
+                    };
 
-            match service.transition_task(&parsed_ref, &to, &timestamp) {
-                Ok(transition) => {
-                    if cli.json {
-                        println!("{}", serde_json::to_string(&transition).unwrap());
-                    } else {
-                        println!(
-                            "Transitioned {} from {} to {}",
-                            r_ref, transition.from_state, transition.to_state
-                        );
+                    match service.transition_task(&parsed_ref, &to, &timestamp) {
+                        Ok(transition) => {
+                            if cli.json {
+                                println!("{}", serde_json::to_string(&transition).unwrap());
+                            } else {
+                                println!(
+                                    "Transitioned {} from {} to {}",
+                                    r_ref, transition.from_state, transition.to_state
+                                );
+                            }
+                        }
+                        Err(e) => {
+                            eprintln!("Transition error: {e}");
+                            exit(5);
+                        }
                     }
                 }
-                Err(e) => {
-                    eprintln!("Task transition error: {e}");
-                    exit(5);
-                }
+                commands::TaskCommands::List => match service.agenda() {
+                    Ok(agenda) => {
+                        if cli.json {
+                            println!("{}", serde_json::to_string(&agenda).unwrap());
+                        } else {
+                            // Group by TODO state
+                            let mut by_state: std::collections::BTreeMap<String, Vec<&application::task_para::AgendaItem>> = std::collections::BTreeMap::new();
+                            for item in &agenda.items {
+                                let state = item.todo.clone().unwrap_or_else(|| "NONE".to_string());
+                                by_state.entry(state).or_default().push(item);
+                            }
+                            for (state, items) in by_state {
+                                println!("=== {} ===", state);
+                                for item in items {
+                                    let date_info = if let Some(ref d) = item.deadline {
+                                        format!(" (DEADLINE: {d})")
+                                    } else if let Some(ref s) = item.scheduled {
+                                        format!(" (SCHEDULED: {s})")
+                                    } else {
+                                        String::new()
+                                    };
+                                    println!("- {}{} [{}]", item.title, date_info, item.r_ref);
+                                }
+                                println!();
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("List error: {e}");
+                        exit(5);
+                    }
+                },
+                commands::TaskCommands::Agenda => match service.agenda() {
+                    Ok(agenda) => {
+                        if cli.json {
+                            println!("{}", serde_json::to_string(&agenda).unwrap());
+                        } else {
+                            // Extract YYYY-MM-DD and group
+                            let mut by_date: std::collections::BTreeMap<String, Vec<(&application::task_para::AgendaItem, String)>> = std::collections::BTreeMap::new();
+                            let mut unscheduled = Vec::new();
+                            let mut completed = Vec::new();
+
+                            let extract_date = |s: &str| -> Option<String> {
+                                // Look for YYYY-MM-DD inside < > or [ ]
+                                let s = s.trim_matches(|c| c == '<' || c == '>' || c == '[' || c == ']');
+                                if s.len() >= 10 {
+                                    Some(s[0..10].to_string())
+                                } else {
+                                    None
+                                }
+                            };
+
+                            for item in &agenda.items {
+                                let is_done = item.todo.as_deref() == Some("DONE") || item.todo.as_deref() == Some("QUIT");
+                                
+                                if is_done {
+                                    let date_str = item.closed.as_deref()
+                                        .or(item.deadline.as_deref())
+                                        .or(item.scheduled.as_deref())
+                                        .unwrap_or("");
+                                    completed.push((item, date_str.to_string()));
+                                    continue;
+                                }
+
+                                let mut has_date = false;
+                                if let Some(ref d) = item.deadline {
+                                    if let Some(date) = extract_date(d) {
+                                        by_date.entry(date).or_default().push((item, format!("Deadline: {}", d)));
+                                        has_date = true;
+                                    }
+                                }
+                                if let Some(ref s) = item.scheduled {
+                                    if let Some(date) = extract_date(s) {
+                                        by_date.entry(date).or_default().push((item, format!("Scheduled: {}", s)));
+                                        has_date = true;
+                                    }
+                                }
+                                if !has_date {
+                                    unscheduled.push(item);
+                                }
+                            }
+
+                            println!("=== Agenda View ===");
+                            for (date, items) in by_date {
+                                println!("\n{}", date);
+                                println!("{:-<30}", "");
+                                for (item, time_info) in items {
+                                    let todo = item.todo.as_deref().unwrap_or("");
+                                    let state_str = if todo.is_empty() { String::new() } else { format!("[{}] ", todo) };
+                                    println!("  {time_info:<25} | {state_str}{}", item.title);
+                                }
+                            }
+                            if !unscheduled.is_empty() {
+                                println!("\n=== Unscheduled Active Tasks ===");
+                                for item in unscheduled {
+                                    let todo = item.todo.as_deref().unwrap_or("");
+                                    let state_str = if todo.is_empty() { String::new() } else { format!("[{}] ", todo) };
+                                    println!("  {state_str}{}", item.title);
+                                }
+                            }
+
+                            if !completed.is_empty() {
+                                println!("\n=== Completed ===");
+                                // Sort completed roughly by closed date
+                                completed.sort_by(|a, b| b.1.cmp(&a.1));
+                                for (item, date_str) in completed {
+                                    let state_str = format!("[{}] ", item.todo.as_deref().unwrap_or("DONE"));
+                                    let time_info = if date_str.is_empty() { String::new() } else { format!(" Closed: {:<20} |", date_str) };
+                                    println!(" {time_info} {state_str}{}", item.title);
+                                }
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("Agenda error: {e}");
+                        exit(5);
+                    }
+                },
+                commands::TaskCommands::Para => match service.para_overview() {
+                    Ok(para) => {
+                        if cli.json {
+                            println!("{}", serde_json::to_string(&para).unwrap());
+                        } else {
+                            let print_nodes = |nodes: Vec<application::task_para::ParaNode>| {
+                                for node in nodes {
+                                    let todo_str = node.resource.properties.get("TODO").map(|s| format!("[{}] ", s)).unwrap_or_default();
+                                    println!("- {}{} ({})", todo_str, node.resource.title, node.resource.r#ref);
+                                    for task in node.tasks {
+                                        let t_todo = task.todo.map(|s| format!("[{}] ", s)).unwrap_or_default();
+                                        println!("    * {}{} ({})", t_todo, task.title, task.r_ref);
+                                    }
+                                }
+                            };
+                            println!("=== Projects ===");
+                            print_nodes(para.projects);
+                            println!("\n=== Areas ===");
+                            print_nodes(para.areas);
+                            println!("\n=== Resources ===");
+                            print_nodes(para.resources);
+                            println!("\n=== Archives ===");
+                            print_nodes(para.archives);
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("Para overview error: {e}");
+                        exit(5);
+                    }
+                },
+                commands::TaskCommands::Jobs => match service.list_jobs() {
+                    Ok(jobs) => {
+                        if cli.json {
+                            println!("{}", json!(jobs));
+                        } else {
+                            println!("=== Background System Jobs ===");
+                            for j in jobs {
+                                println!("Job {} ({}) -> {}", j.job_id, j.job_type, j.status);
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("Job list error: {e}");
+                        exit(5);
+                    }
+                },
             }
-        }
+        },
         Commands::Source(commands::SourceSubcommand { command }) => match command {
             commands::SourceCommands::Add {
                 id,
@@ -650,23 +812,6 @@ fn main() {
                     exit(5);
                 }
             },
-        },
-        Commands::Job(commands::JobSubcommand {
-            command: commands::JobCommands::List,
-        }) => match service.list_jobs() {
-            Ok(jobs) => {
-                if cli.json {
-                    println!("{}", serde_json::to_string(&jobs).unwrap());
-                } else {
-                    for j in jobs {
-                        println!("Job {} ({}) -> {}", j.job_id, j.job_type, j.status);
-                    }
-                }
-            }
-            Err(e) => {
-                eprintln!("List jobs error: {e}");
-                exit(5);
-            }
         },
 
         Commands::Artifact(commands::ArtifactSubcommand {

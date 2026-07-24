@@ -1,8 +1,9 @@
 #+title: Notez Roadmap
 #+STARTUP: showeverything
 
-* 基线状态
-当前实现已具备 Rust 模块化单内核、Org/Markdown 扫描、SQLite 投影、CLI/MCP、来源挂载、附件、社区、派生产物及 folder/relay 同步的纵向切片。主要技术债是配置分散以及 CLI/MCP 能力漂移（无损链接与稳定身份的债务已在 0.3 中解决）。
+当前实现已具备 Rust 模块化单内核、Org/Markdown 扫描、SQLite 投影、CLI/MCP、来源挂载、附件、社区、派生产物及 folder/relay 同步的纵向切片。
+在此基础上，已完成 **Task 与 PARA 模型（项目/领域/资源/归档）的深度融合与 CLI 终端嵌套渲染**。
+主要技术债是配置分散以及 CLI/MCP 能力漂移（无损链接与稳定身份的债务已在 0.3 中解决）。
 
 * 里程碑计划
 

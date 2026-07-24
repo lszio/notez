@@ -61,39 +61,67 @@ Sub-acceptance scripts:
 
 * CLI Usage
 
-** Scan Native Space
+** Space & Resource Management
+
 Scans =.org= and =.md= documents into the SQLite projection store:
 #+begin_src bash
 notez --space /path/to/space scan
-notez --space /path/to/space scan --json
 #+end_src
 
-** Query Resources
 Search resources by kind or title substring:
 #+begin_src bash
 notez --space /path/to/space query --kind heading --title-contains "sync" --json
 #+end_src
 
-** Resolve Reference
-Resolves a ULID, exact =ResourceRef=, file path locator, or title query:
-#+begin_src bash
-notez --space /path/to/space resolve "01J00000000000000000000001"
-#+end_src
-
-** Read Resource Details
 Fetch full resource metadata and properties:
 #+begin_src bash
 notez --space /path/to/space read heading:01J00000000000000000000001 --json
 #+end_src
 
-** Link Diagnoses
+Deletes index cache and rescans space from raw files:
+#+begin_src bash
+notez --space /path/to/space space rebuild
+#+end_src
+
+** Links & References
+
+Resolves a ULID, exact =ResourceRef=, file path locator, or title query:
+#+begin_src bash
+notez --space /path/to/space resolve "01J00000000000000000000001"
+#+end_src
+
 List occurrences and resolved links for a given resource:
 #+begin_src bash
 notez --space /path/to/space link list document:01J0000000000000000000000A
 notez --space /path/to/space link resolved document:01J0000000000000000000000A --json
 #+end_src
 
-** Source Management (Federation)
+Fine-grained paragraph and code block entities use =block:<ULID>= references:
+#+begin_src bash
+notez --space /path/to/space query --kind block --json
+#+end_src
+
+** Task & PARA Workflow
+
+Notez unifies Task and PARA (Projects, Areas, Resources, Archives) workflows. Every PARA node can act as a container for nested tasks, and a Project itself can bear a task state (e.g. =TODO= or =NEXT=).
+
+Overview of PARA structures with their nested tasks:
+#+begin_src bash
+notez --space /path/to/space task para
+#+end_src
+
+Agenda view of scheduled, deadline, or actionable items:
+#+begin_src bash
+notez --space /path/to/space task agenda --json
+#+end_src
+
+Atomic Org TODO state transition with CLOSED timestamp and LOGBOOK entry:
+#+begin_src bash
+notez --space /path/to/space task transition heading:01J00000000000000000000001 --to DONE
+#+end_src
+
+** Federation & Data Sources
+
 Mount external sources such as Obsidian Vaults or Git repositories:
 #+begin_src bash
 notez --space /path/to/space source add --id vault_src --kind obsidian --path /path/to/vault --read-only
@@ -101,43 +129,14 @@ notez --space /path/to/space source list --json
 notez --space /path/to/space source sync --json
 #+end_src
 
-** Anytype Source Adapter & Writeback
 Mount Anytype sources and execute atomic writeback mutations:
 #+begin_src bash
 notez --space /path/to/space source add --id anytype_src --kind anytype --path /anytype/path --read-only
 notez --space /path/to/space source writeback --id anytype_src --r-ref heading:01J00000000000000000000001 --payload "Updated Title"
 #+end_src
 
-** Block-Level References
-Fine-grained paragraph and code block entities use =block:<ULID>= references:
-#+begin_src bash
-notez --space /path/to/space query --kind block --json
-#+end_src
+** Attachments & Content Extraction
 
-** Relay/P2P Sync Transport
-Sync via Relay server (the folder-based transport is the default):
-#+begin_src bash
-notez --space /path/to/space sync relay --id anytype_src
-#+end_src
-
-** Inspect Rule Traces
-#+begin_src bash
-notez --space /path/to/space inspect heading:01J00000000000000000000001 --rules --json
-#+end_src
-
-** Agenda View
-Query scheduled or deadline items across space:
-#+begin_src bash
-notez --space /path/to/space agenda --json
-#+end_src
-
-** Task State Transition
-Atomic Org TODO state transition with CLOSED timestamp and LOGBOOK entry:
-#+begin_src bash
-notez --space /path/to/space task transition heading:01J00000000000000000000001 --to DONE
-#+end_src
-
-** Attachment Operations & Text Extraction
 Add attachments, run text/metadata extraction jobs, and query extracted segments:
 #+begin_src bash
 notez --space /path/to/space attachment add --path /path/to/file.txt --mime text/plain
@@ -145,26 +144,26 @@ notez --space /path/to/space attachment extract attachment:01J000000000000000000
 notez --space /path/to/space attachment segments attachment:01J00000000000000000000001 --json
 #+end_src
 
-** Community Management
+** Agent Context & Skill Derivation
+
 Create and list communities bound by selectors:
 #+begin_src bash
 notez --space /path/to/space community create --id dev_comm --name "DevSync" --title-contains "sync"
 notez --space /path/to/space community list --json
 #+end_src
 
-** Derive Recipe Artifacts
 Derive =summary=, =llms.txt=, =context-pack=, or =skill-ir= artifacts:
 #+begin_src bash
 notez --space /path/to/space derive --community dev_comm --recipe summary --json
 #+end_src
 
-** Agent Skill Export
 Export a standalone =SKILL.md= package containing prompt directives and references:
 #+begin_src bash
 notez --space /path/to/space skill export --community dev_comm --description "DevSync Prompt Skill" --out /path/to/skill
 #+end_src
 
-** Folder Synchronization
+** P2P Sync & Diagnostics
+
 Synchronize notes offline between devices via a shared folder (=heads/=, =manifests/=, =objects/=, =tombstones/=):
 #+begin_src bash
 notez --space /path/to/space_a sync push --actor device_a --folder /path/to/shared
@@ -172,26 +171,24 @@ notez --space /path/to/space_b sync pull --actor device_b --folder /path/to/shar
 notez --space /path/to/space_b sync conflicts --json
 #+end_src
 
-** Space Doctor & Diagnostics
+Sync via Relay server (the folder-based transport is the default):
+#+begin_src bash
+notez --space /path/to/space sync relay --id anytype_src
+#+end_src
+
 Run space integrity checks (broken links, missing files, corrupt indexes):
 #+begin_src bash
 notez --space /path/to/space space doctor --json
 #+end_src
 
-** Job Management & Artifact Freshness
 List background jobs and check artifact freshness:
 #+begin_src bash
 notez --space /path/to/space job list --json
 notez --space /path/to/space artifact stale --json
 #+end_src
 
-** Rebuild Projection Index
-Deletes index cache and rescans space from raw files:
-#+begin_src bash
-notez --space /path/to/space space rebuild
-#+end_src
+** MCP Integration
 
-** MCP Stdio Server
 Exposes query, resolve, read, inspect, agenda, task transition, attachment, community, derive, skill export, source management, and sync tools over stdio using newline-delimited JSON-RPC:
 #+begin_src bash
 notez --space /path/to/space mcp serve

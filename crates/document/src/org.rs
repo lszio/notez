@@ -125,6 +125,12 @@ impl OrgScanner {
                     });
                     heading_count += 1;
                 }
+            } else if trimmed.starts_with("SCHEDULED:") || trimmed.starts_with("DEADLINE:") || trimmed.starts_with("CLOSED:") {
+                if let Some(cur_heading) = headings.last_mut() {
+                    if let Some((key, val)) = trimmed.split_once(':') {
+                        cur_heading.properties.insert(key.trim().to_uppercase(), val.trim().to_string());
+                    }
+                }
             } else if trimmed.eq_ignore_ascii_case(":PROPERTIES:") {
                 line_idx += 1;
                 while line_idx < lines.len() {

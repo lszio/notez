@@ -39,7 +39,7 @@ pub enum Commands {
         rules: bool,
     },
 
-    /// Agenda view of scheduled/deadline items
+    /// Agenda view of scheduled/deadline items (Legacy alias for `task agenda`)
     Agenda,
 
     /// Link commands (list, resolve, diagnose)
@@ -59,8 +59,7 @@ pub enum Commands {
 
     /// Agent Skill export commands
     Skill(SkillSubcommand),
-    /// Job and background task management
-    Job(JobSubcommand),
+    // Job is now merged into Task
 
     /// Derived artifact management
     Artifact(ArtifactSubcommand),
@@ -141,12 +140,12 @@ pub enum McpCommands {
 #[derive(Args, Debug)]
 pub struct TaskSubcommand {
     #[command(subcommand)]
-    pub command: TaskCommands,
+    pub command: Option<TaskCommands>,
 }
 
 #[derive(Subcommand, Debug)]
 pub enum TaskCommands {
-    /// Transition task state
+    /// Transition task state (e.g., TODO -> DONE)
     Transition {
         r_ref: String,
         #[arg(long)]
@@ -154,6 +153,18 @@ pub enum TaskCommands {
         #[arg(long, default_value = "2026-07-22 Wed 16:00")]
         timestamp: String,
     },
+    
+    /// List all tasks grouped by status
+    List,
+
+    /// Agenda view of scheduled, deadline, or actionable items
+    Agenda,
+
+    /// Overview of PARA (Projects, Areas, Resources, Archives) structures
+    Para,
+
+    /// List background system tasks/jobs
+    Jobs,
 }
 #[derive(Args, Debug)]
 pub struct AttachmentSubcommand {
@@ -227,17 +238,6 @@ pub enum SpaceCommands {
     Doctor,
 }
 
-#[derive(Args, Debug)]
-pub struct JobSubcommand {
-    #[command(subcommand)]
-    pub command: JobCommands,
-}
-
-#[derive(Subcommand, Debug)]
-pub enum JobCommands {
-    /// List background tasks and jobs
-    List,
-}
 
 #[derive(Args, Debug)]
 pub struct ArtifactSubcommand {

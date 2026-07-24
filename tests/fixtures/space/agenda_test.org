@@ -1,0 +1,12 @@
+#+title: Agenda Test
+
+* TODO Task 1
+SCHEDULED: <2026-07-24 Wed>
+
+* NEXT Task 2
+DEADLINE: <2026-07-25 Thu 15:00>
+
+* DONE Task 3
+CLOSED: [2026-07-22 Mon]
+
+* TODO Task 4 without date
