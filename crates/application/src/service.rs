@@ -137,6 +137,14 @@ impl<S: ProjectionStore> ApplicationService<S> {
                     let adapter = source::AnytypeSourceAdapter::new(src_cfg.clone());
                     adapter.scan()
                 }
+                source::SourceKind::AppleNotes => {
+                    let adapter = source::AppleNotesSourceAdapter::new(src_cfg.clone());
+                    adapter.scan()
+                }
+                source::SourceKind::AppleCalendar => {
+                    let adapter = source::AppleCalendarSourceAdapter::new(src_cfg.clone());
+                    adapter.scan()
+                }
             }
             .map_err(|e| ApplicationError::Storage(e.to_string()))?;
 
@@ -507,6 +515,18 @@ impl<S: ProjectionStore> ApplicationService<S> {
         }
 
         let source_id = res.source_id.clone();
+        
+        // First write back to the authoritative source
+        // We serialize the state change into a JSON payload for the adapter's mutate interface
+        let payload = serde_json::json!({
+            "action": "UpdateTaskStatus",
+            "to_state": transition.to_state,
+            "closed_timestamp": transition.closed_timestamp
+        }).to_string();
+        
+        self.writeback_resource(&source_id, &res.locator, &payload)?;
+
+        // Then update the local projection
         self.store
             .replace_source(&source_id, vec![res], vec![], vec![])
             .map_err(|e| ApplicationError::Storage(e.to_string()))?;
@@ -867,27 +887,35 @@ impl<S: ProjectionStore> ApplicationService<S> {
         target_ref: &str,
         payload: &str,
     ) -> Result<crate::writeback::WritebackReport, ApplicationError> {
-        use source::SourceAdapter;
-        let sources_cfg = crate::federation::SpaceSourcesConfig::load(Path::new("."))?;
+        use source::{SourceAdapter, SourceKind, AnytypeSourceAdapter, AppleNotesSourceAdapter, AppleCalendarSourceAdapter, NativeSourceAdapter};
+        
+        let sources_cfg = crate::federation::SpaceSourcesConfig::load(std::path::Path::new("."))?;
+        
         if let Some(src_cfg) = sources_cfg.sources.iter().find(|s| s.id == source_id) {
-            match src_cfg.kind {
-                source::SourceKind::Anytype => {
-                    let adapter = source::AnytypeSourceAdapter::new(src_cfg.clone());
-                    let prep = adapter
-                        .prepare_write(target_ref, payload)
-                        .map_err(|e| ApplicationError::Storage(e.to_string()))?;
-                    let commit_res = adapter
-                        .commit_write(&prep)
-                        .map_err(|e| ApplicationError::Storage(e.to_string()))?;
-                    Ok(crate::writeback::WritebackReport {
-                        target_ref: commit_res.target_ref,
-                        committed: commit_res.committed,
-                    })
+            let adapter: Box<dyn SourceAdapter> = match src_cfg.kind {
+                SourceKind::Anytype => Box::new(AnytypeSourceAdapter::new(src_cfg.clone())),
+                SourceKind::AppleNotes => Box::new(AppleNotesSourceAdapter::new(src_cfg.clone())),
+                SourceKind::AppleCalendar => Box::new(AppleCalendarSourceAdapter::new(src_cfg.clone())),
+                SourceKind::Native => Box::new(NativeSourceAdapter::new(src_cfg.clone())),
+                _ => {
+                    return Err(ApplicationError::Storage(format!(
+                        "source {source_id} does not support writeback"
+                    )))
                 }
-                _ => Err(ApplicationError::Storage(format!(
-                    "source {source_id} does not support writeback"
-                ))),
-            }
+            };
+
+            let prep = adapter
+                .prepare_write(target_ref, payload)
+                .map_err(|e| ApplicationError::Storage(e.to_string()))?;
+            
+            let commit_res = adapter
+                .commit_write(&prep)
+                .map_err(|e| ApplicationError::Storage(e.to_string()))?;
+                
+            Ok(crate::writeback::WritebackReport {
+                target_ref: commit_res.target_ref,
+                committed: commit_res.committed,
+            })
         } else {
             Ok(crate::writeback::WritebackReport {
                 target_ref: target_ref.to_string(),

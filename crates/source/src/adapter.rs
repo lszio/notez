@@ -20,6 +20,8 @@ pub enum SourceKind {
     Git,
     Obsidian,
     Anytype,
+    AppleNotes,
+    AppleCalendar,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -101,6 +103,93 @@ pub trait SourceAdapter {
     }
 
     fn commit_write(&self, prep: &PreparedWrite) -> Result<WriteResult, SourceError> {
+        Ok(WriteResult {
+            target_ref: prep.target_ref.clone(),
+            committed: true,
+        })
+    }
+}
+
+use crate::protocol::{FormatParser, SourceTransport};
+
+pub struct ComposedSourceAdapter {
+    config: SourceConfig,
+    transport: Box<dyn SourceTransport>,
+    parsers: Vec<Box<dyn FormatParser>>,
+}
+
+impl ComposedSourceAdapter {
+    pub fn new(
+        config: SourceConfig,
+        transport: Box<dyn SourceTransport>,
+        parsers: Vec<Box<dyn FormatParser>>,
+    ) -> Self {
+        Self {
+            config,
+            transport,
+            parsers,
+        }
+    }
+}
+
+impl SourceAdapter for ComposedSourceAdapter {
+    fn config(&self) -> &SourceConfig {
+        &self.config
+    }
+
+    fn scan(&self) -> Result<ScannedSource, SourceError> {
+        let raw_entities = self.transport.fetch_raw().map_err(|e| SourceError::Other(e.to_string()))?;
+        
+        let mut resources = Vec::new();
+        let mut relations = Vec::new();
+        let mut link_occurrences = Vec::new();
+
+        for entity in raw_entities {
+            for parser in &self.parsers {
+                if parser.supports(&entity.mime_type) {
+                    match parser.parse(&entity, &self.config.id) {
+                        Ok(parsed) => {
+                            resources.extend(parsed.resources);
+                            relations.extend(parsed.relations);
+                            link_occurrences.extend(parsed.link_occurrences);
+                        }
+                        Err(e) => {
+                            // In the future, emit metrics or traces here instead of failing completely.
+                            eprintln!("Parser error on {}: {}", entity.locator, e);
+                        }
+                    }
+                    break; // Parsed by the first matching parser
+                }
+            }
+        }
+
+        Ok(ScannedSource {
+            source_id: self.config.id.clone(),
+            resources,
+            relations,
+            link_occurrences,
+        })
+    }
+
+    fn capabilities(&self) -> SourceCapabilities {
+        SourceCapabilities {
+            can_read: true,
+            can_write: false,
+            can_import: false,
+            can_watch: false,
+        }
+    }
+
+    fn prepare_write(&self, target_ref: &str, payload: &str) -> Result<PreparedWrite, SourceError> {
+        Ok(PreparedWrite {
+            target_ref: target_ref.to_string(),
+            payload: payload.to_string(),
+            ready: true,
+        })
+    }
+
+    fn commit_write(&self, prep: &PreparedWrite) -> Result<WriteResult, SourceError> {
+        self.transport.mutate(&prep.target_ref, &prep.payload).map_err(|e| SourceError::Other(e.to_string()))?;
         Ok(WriteResult {
             target_ref: prep.target_ref.clone(),
             committed: true,

@@ -1,4 +1,10 @@
 pub mod adapter;
+pub mod protocol;
+pub use protocol::{FormatParser, ParsedEntity, RawEntity, SourceTransport, TransportError, ParserError};
+pub mod apple_notes;
+pub mod apple_calendar;
+pub use apple_notes::AppleNotesSourceAdapter;
+pub use apple_calendar::AppleCalendarSourceAdapter;
 pub mod anytype;
 pub use adapter::{PreparedWrite, SourceCapabilities, WriteResult};
 pub use anytype::AnytypeSourceAdapter;

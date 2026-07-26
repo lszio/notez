@@ -1,0 +1,74 @@
+#+title: 统一数据层：Transport 与 Parser 的解耦架构 (ADR)
+#+STARTUP: showeverything
+
+* 1. 本质问题 (Core Problem)
+目前系统的 `NativeSourceAdapter` 将“文件系统遍历 (Transport)”与“Org/Markdown 格式解析 (Parser)”硬编码耦合。
+当系统需要扩展 Apple Notes 或 Calendar 等非文件系统数据源时，如果依然把“拉取方式”和“解析方式”绑死在一个巨大的 Adapter 类中，会导致代码急速膨胀，无法实现逻辑复用（例如读取本地 JSON 文件和通过 HTTP 读取 JSON 无法复用同一个解析器）。
+
+**目标**：将所有外部数据源彻底抽象为两大独立维度的组合：**传输层 (Transport)** 和 **解析层 (Parser)**。所有差异均在此被抹平，应用层只面对统一的 `Resource` 信息模型。
+
+* 2. 核心模型与边界契约 (Core Models & Protocols)
+
+我们要将 `SourceAdapter` 拆解为一套协议接口：
+
+**2.1 `RawEntity`：抽象的物理数据块**
+无论是本地的一个 `.org` 文件，还是 Apple Notes 返回的一段 JSON，都被抽象为一个 `RawEntity`：
+#+begin_src rust
+pub struct RawEntity {
+    pub locator: String,   // 定位符（相对路径或外部系统的 ID）
+    pub mime_type: String, // 用于决定分发给哪个 Parser
+    pub payload: Vec<u8>,  // 原始字节 / JSON 串
+}
+#+end_src
+
+**2.2 `SourceTransport`：解决“去哪儿拿”**
+负责网络协议、文件系统 I/O 或 OS RPC，并提供外科手术式的回写能力：
+#+begin_src rust
+pub trait SourceTransport {
+    // 遍历源，产生原始物理实体流
+    fn fetch_raw(&self) -> Result<Vec<RawEntity>, TransportError>;
+    
+    // 执行基于原子属性的回写（外科手术式更新），而非覆盖整个文件
+    fn mutate(&self, locator: &str, payload: &MutationPayload) -> Result<(), TransportError>;
+}
+#+end_src
+
+**2.3 `FormatParser`：解决“怎么懂”**
+负责将 `RawEntity` 的字节流结构化为 Notez 的全局标准协议模型：
+#+begin_src rust
+pub trait FormatParser {
+    fn supports(&self, mime_type: &str) -> bool;
+    
+    // 将单条原始数据解析为投影引擎认识的标准模型
+    fn parse(&self, entity: &RawEntity, source_id: &str) -> Result<ParsedEntity, ParserError>;
+}
+
+pub struct ParsedEntity {
+    pub resources: Vec<Resource>, // 领域模型，携带 TODO/SCHEDULED 等属性
+    pub link_occurrences: Vec<LinkOccurrence>, // 提取出的链接
+}
+#+end_src
+
+**2.4 `ComposedSourceAdapter`：统一收口**
+最终的 `SourceAdapter` 只是 Transport 和多个 Parser 的拼装工厂。
+
+* 3. 面向 Apple 生态的事件流设计 (Event Flow)
+
+在这个抽象下，新需求的实现路径非常清晰，不再是“黑盒”：
+
+**场景一：读取并投影 Apple Notes 任务**
+1. `JxaNotesTransport::fetch_raw` 触发 AppleScript，抓取所有 Checklist，返回 `[RawEntity { locator: "x-coredata://..", mime_type: "application/vnd.apple.notes+json", payload: "{...}" }]`。
+2. 调度器根据 mime-type 将其分配给 `AppleNotesParser`。
+3. `AppleNotesParser::parse` 将其转化为 `Resource(Heading, todo="TODO")` 并返回给应用层。
+
+**场景二：将 Notez 的任务状态同步回 Apple Notes**
+1. 应用层发起 `TaskTransition(heading_ref, "DONE")`。
+2. Notez 解析出目标属于 Apple Source，定位到 `JxaNotesTransport`。
+3. 调用 `JxaNotesTransport::mutate("x-coredata://..", MutationPayload::ChangeStatus("DONE"))`。
+4. JXA Transport 针对目标 ID 执行微小的状态切换请求，避免覆写富文本正文。
+
+* 4. 演化验证与可观察性 (Evolution & Observability)
+
+- **组合能力 (Composability)**：如果未来我们需要读取放在 AWS S3 上的 Org-mode 笔记，无需重写解析器，只需实现一个 `S3Transport`，然后将 `S3Transport + OrgParser` 组合即可。
+- **韧性与隔离 (Isolation)**：`FormatParser` 是纯函数（Pure Function），非常适合用 Fuzzing 和 Property-based testing 进行测试。`Transport` 层是 I/O，可以独立挂载 Retry 和 Timeout 策略。
+- **可观察性 (Observability)**：可以在 `fetch_raw` 和 `parse` 两个切面分别埋点。Transport 监控“拉取延迟和系统权限错误”，Parser 监控“解析失败的脏数据”。两者的报错是完全隔离的。
