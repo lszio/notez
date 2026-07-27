@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Notez Dashboard (Static Landing)</title>
+    <style>
+        body { font-family: system-ui, sans-serif; max-width: 900px; margin: 0 auto; padding: 2rem; background: #f9fafb; color: #111827; }
+        h1 { border-bottom: 2px solid #e5e7eb; padding-bottom: 0.5rem; }
+        .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 2rem; }
+        .card { background: white; padding: 1.5rem; border-radius: 0.5rem; box-shadow: 0 1px 3px rgba(0,0,0,0.1); margin-bottom: 1rem; }
+        ul { list-style-type: none; padding-left: 0; }
+        li { padding: 0.5rem 0; border-bottom: 1px solid #f3f4f6; display: flex; align-items: center; }
+        .badge { display: inline-block; padding: 0.25rem 0.5rem; border-radius: 0.25rem; font-size: 0.875rem; font-weight: bold; margin-right: 0.5rem; }
+        .todo { background: #fee2e2; color: #991b1b; }
+        .done { background: #dcfce7; color: #166534; }
+        .source { background: #e0e7ff; color: #3730a3; font-size: 0.75rem; margin-left: auto; padding: 0.2rem 0.4rem; border-radius: 0.2rem; }
+        .nav { margin-bottom: 2rem; display: flex; gap: 1rem; }
+        .nav a { color: #4f46e5; text-decoration: none; font-weight: 500; }
+        .nav a:hover { text-decoration: underline; }
+    </style>
+</head>
+<body>
+    <h1>🪐 Notez Knowledge Federation</h1>
+    
+    <div class="nav">
+        <a href="#agenda">📅 议程</a>
+        <a href="#projects">🚀 项目</a>
+        <a href="#areas">🌐 领域</a>
+    </div>
+
+    <div class="grid">
+        <!-- 左侧: Tasks -->
+        <div>
+            <div class="card" id="agenda">
+                <h2>📅 议程 (Agenda)</h2>
+                <ul>
+                    <li>
+                        <span class="badge todo">TODO</span> 
+                        <span>审阅 Apple Notes 同步架构</span>
+                        <span class="source">notez</span>
+                    </li>
+                    <li>
+                        <span class="badge todo">TODO</span> 
+                        <span>完成 JXA 交互脚本编写</span>
+                        <span class="source">apple_notes</span>
+                    </li>
+                    <li>
+                        <span class="badge done">DONE</span> 
+                        <span>解耦 Transport 与 Parser</span>
+                        <span class="source">notez</span>
+                    </li>
+                </ul>
+            </div>
+        </div>
+
+        <!-- 右侧: PARA -->
+        <div>
+            <div class="card" id="projects">
+                <h2>🚀 项目 (Projects)</h2>
+                <ul>
+                    <li>
+                        <strong>Notez 底层数据层解耦重构 (v0.4)</strong> 
+                    </li>
+                    <li>
+                        <strong>跨平台同步方案设计</strong> 
+                    </li>
+                </ul>
+            </div>
+
+            <div class="card" id="areas">
+                <h2>🌐 领域 (Areas)</h2>
+                <ul>
+                    <li><strong>软件架构设计</strong></li>
+                    <li><strong>知识管理与自动化</strong></li>
+                </ul>
+            </div>
+        </div>
+    </div>
+</body>
+</html>
