@@ -323,6 +323,14 @@ impl ProjectionStore for SqliteProjection {
             sql.push(')');
         }
 
+        if let Some(ref src) = selector.source_id {
+            sql.push_str(" AND source_id = ?");
+            query_params.push(Box::new(src.clone()));
+        }
+
+        // Stable ordering so the same query on the same database returns
+        // identical results — necessary for snapshot tests and for predictable
+        // user-facing listings like "Recent activity".
         sql.push_str(" ORDER BY ref ASC");
 
         let mut stmt = self.conn.prepare(&sql)?;
@@ -369,6 +377,40 @@ impl ProjectionStore for SqliteProjection {
             items,
             next_cursor: None,
         })
+    }
+
+    fn upsert_resource(&mut self, resource: &Resource) -> Result<(), StorageError> {
+        let ref_str = resource.r#ref.to_string();
+        let kind_str = resource.kind.as_str();
+        let props_json = serde_json::to_string(&resource.properties)?;
+        self.conn.execute(
+            "INSERT INTO resources (ref, kind, title, revision, source_id, locator, properties_json)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+             ON CONFLICT(ref) DO UPDATE SET
+                 kind = excluded.kind,
+                 title = excluded.title,
+                 revision = excluded.revision,
+                 source_id = excluded.source_id,
+                 locator = excluded.locator,
+                 properties_json = excluded.properties_json",
+            params![
+                ref_str,
+                kind_str,
+                resource.title,
+                resource.revision,
+                resource.source_id,
+                resource.locator,
+                props_json,
+            ],
+        )?;
+        Ok(())
+    }
+
+    fn delete_resource(&mut self, r_ref: &ResourceRef) -> Result<(), StorageError> {
+        let ref_str = r_ref.to_string();
+        self.conn
+            .execute("DELETE FROM resources WHERE ref = ?1", params![ref_str])?;
+        Ok(())
     }
 
     fn clear(&mut self) -> Result<(), StorageError> {

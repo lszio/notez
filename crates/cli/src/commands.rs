@@ -20,7 +20,6 @@ pub struct Cli {
 
 #[derive(Subcommand, Debug)]
 pub enum Commands {
-    /// Scan native Org space
     Scan,
 
     /// Resolve a query string (ID, ref, locator, title)
@@ -31,6 +30,15 @@ pub enum Commands {
 
     /// Read details of a specific resource ref
     Read { r_ref: String },
+
+    /// Recent activity feed (most-recently-touched first)
+    Recent {
+        #[arg(long, default_value_t = 20)]
+        limit: usize,
+    },
+
+    /// Per-resource mutation operations (upsert, delete)
+    Resource(ResourceSubcommand),
 
     /// Inspect resource or rule traces
     Inspect {
@@ -51,10 +59,11 @@ pub enum Commands {
     Source(SourceSubcommand),
     /// Attachment operations and extraction jobs
     Attachment(AttachmentSubcommand),
-    /// Community management commands
+
+    /// Community membership / grouping
     Community(CommunitySubcommand),
 
-    /// Derive recipe artifacts (summary, llms.txt, context-pack, skill-ir)
+    /// Derive an artifact (summary, llms.txt, context-pack, skill-ir)
     Derive(DeriveArgs),
 
     /// Agent Skill export commands
@@ -83,7 +92,44 @@ pub struct QueryArgs {
 
     #[arg(long)]
     pub exact_ref: Option<String>,
+
+    /// Restrict results to a particular source adapter
+    #[arg(long)]
+    pub source: Option<String>,
+
+    /// Maximum number of results (default 100)
+    #[arg(long, default_value_t = 100)]
+    pub limit: usize,
 }
+
+#[derive(Args, Debug)]
+pub struct ResourceSubcommand {
+    #[command(subcommand)]
+    pub command: ResourceCommands,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum ResourceCommands {
+    /// Insert or update a resource from a JSON file on disk
+    Upsert {
+        /// Path to a JSON file containing a `Resource`
+        #[arg(long)]
+        from: PathBuf,
+    },
+    /// Delete a resource by its `ResourceRef`
+    Delete {
+        /// `kind:ULID` reference, e.g. `heading:01J...`
+        r_ref: String,
+    },
+    /// List resources from a single source adapter
+    Ls {
+        /// Source adapter id (e.g. `native`, `apple_notes`)
+        source: String,
+        #[arg(long, default_value_t = 100)]
+        limit: usize,
+    },
+}
+
 #[derive(ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CliResourceKind {
     Document,

@@ -7,6 +7,10 @@ pub struct Selector {
     pub kind: Option<ResourceKind>,
     pub exact_refs: Vec<ResourceRef>,
     pub title_contains: Option<String>,
+    /// Restrict results to a particular source adapter (e.g. `native`,
+    /// `apple_notes`). When `None`, every source is searched.
+    #[serde(default)]
+    pub source_id: Option<String>,
 }
 
 impl Selector {
@@ -28,6 +32,12 @@ impl Selector {
 
     pub fn with_exact_ref(mut self, r: ResourceRef) -> Self {
         self.exact_refs.push(r);
+        self
+    }
+
+    /// Restrict the selector to a single source adapter.
+    pub fn with_source(mut self, source_id: impl Into<String>) -> Self {
+        self.source_id = Some(source_id.into());
         self
     }
 }
@@ -62,6 +72,20 @@ pub trait ProjectionStore {
     fn get(&self, r#ref: &ResourceRef) -> Result<Option<Resource>, Self::Error>;
 
     fn query(&self, selector: &Selector) -> Result<QueryPage, Self::Error>;
+
+    /// Insert or update a single resource keyed by its `ResourceRef`. Default
+    /// no-op so test stubs don't break. Real projections (e.g. SQLite) MUST
+    /// override this to make per-resource writes possible without a full
+    /// source rescan.
+    fn upsert_resource(&mut self, _resource: &Resource) -> Result<(), Self::Error> {
+        Ok(())
+    }
+
+    /// Delete a single resource by its `ResourceRef`. Idempotent: deleting an
+    /// absent resource is not an error.
+    fn delete_resource(&mut self, _r_ref: &ResourceRef) -> Result<(), Self::Error> {
+        Ok(())
+    }
 
     fn clear(&mut self) -> Result<(), Self::Error>;
     fn insert_segments(&mut self, _segments: &[SegmentRecord]) -> Result<(), Self::Error> {

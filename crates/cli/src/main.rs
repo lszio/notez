@@ -4,7 +4,7 @@ use application::{ApplicationService, ResolveResult};
 use clap::Parser;
 use commands::LinkCommands;
 use commands::{Cli, Commands, McpCommands, McpSubcommand, SpaceCommands, SpaceSubcommand};
-use domain::{ResourceKind, ResourceRef, Selector};
+use domain::{Resource, ResourceKind, ResourceRef, Selector};
 use serde_json::json;
 use std::fs;
 use std::process::exit;
@@ -256,13 +256,20 @@ fn main() {
                     }
                 }
             }
+            if let Some(src) = args.source {
+                selector.source_id = Some(src);
+            }
 
             match service.query(&selector) {
                 Ok(page) => {
+                    let mut items = page.items;
+                    if items.len() > args.limit {
+                        items.truncate(args.limit);
+                    }
                     if cli.json {
-                        println!("{}", serde_json::to_string(&page).unwrap());
+                        println!("{}", serde_json::to_string(&items).unwrap());
                     } else {
-                        for res in page.items {
+                        for res in items {
                             println!("{} {}", res.r#ref, res.title);
                         }
                     }
@@ -273,6 +280,93 @@ fn main() {
                 }
             }
         }
+
+        Commands::Recent { limit } => match service.list_recent(limit) {
+            Ok(items) => {
+                if cli.json {
+                    println!("{}", serde_json::to_string(&items).unwrap());
+                } else {
+                    for res in items {
+                        println!("{} {} ({})", res.r#ref, res.title, res.source_id);
+                    }
+                }
+            }
+            Err(e) => {
+                eprintln!("Recent error: {e}");
+                exit(5);
+            }
+        },
+
+        Commands::Resource(sub) => match sub.command {
+            commands::ResourceCommands::Upsert { from } => {
+                let bytes = match std::fs::read(&from) {
+                    Ok(b) => b,
+                    Err(e) => {
+                        eprintln!("Failed to read {}: {e}", from.display());
+                        exit(2);
+                    }
+                };
+                let res: Resource = match serde_json::from_slice(&bytes) {
+                    Ok(r) => r,
+                    Err(e) => {
+                        eprintln!("Invalid resource JSON: {e}");
+                        exit(2);
+                    }
+                };
+                match service.upsert_resource(res.clone()) {
+                    Ok(()) => {
+                        if cli.json {
+                            println!("{}", serde_json::to_string(&res).unwrap());
+                        } else {
+                            println!("Upserted {}", res.r#ref);
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("Upsert error: {e}");
+                        exit(5);
+                    }
+                }
+            }
+            commands::ResourceCommands::Delete { r_ref } => {
+                let parsed = match ResourceRef::parse(&r_ref) {
+                    Ok(r) => r,
+                    Err(e) => {
+                        eprintln!("Invalid resource ref '{r_ref}': {e}");
+                        exit(2);
+                    }
+                };
+                match service.delete_resource(&parsed) {
+                    Ok(()) => {
+                        if cli.json {
+                            println!("{}", serde_json::to_string(&parsed).unwrap());
+                        } else {
+                            println!("Deleted {}", parsed);
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("Delete error: {e}");
+                        exit(5);
+                    }
+                }
+            }
+            commands::ResourceCommands::Ls { source, limit } => {
+                match service.list_by_source(&source, limit) {
+                    Ok(items) => {
+                        if cli.json {
+                            println!("{}", serde_json::to_string(&items).unwrap());
+                        } else {
+                            for res in items {
+                                println!("{} {}", res.r#ref, res.title);
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("List error: {e}");
+                        exit(5);
+                    }
+                }
+            }
+        },
 
         Commands::Read { r_ref } => {
             let parsed_ref = match ResourceRef::parse(&r_ref) {

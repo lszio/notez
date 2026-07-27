@@ -63,6 +63,7 @@ impl<S: ProjectionStore> ApplicationService<S> {
             .map_err(|e| ApplicationError::Storage(e.to_string()))?;
         Ok(res.map(|r| self.rule_engine.evaluate(&r)))
     }
+
     pub fn add_source(
         &self,
         space_root: &Path,
@@ -75,6 +76,64 @@ impl<S: ProjectionStore> ApplicationService<S> {
         Ok(())
     }
 
+    /// Persist a new or updated resource. The projection is updated
+    /// atomically; the resource's source adapter (when present and writable)
+    /// is invoked so the authoritative backing store stays in sync.
+    pub fn upsert_resource(
+        &mut self,
+        resource: Resource,
+    ) -> Result<(), ApplicationError> {
+        self.store
+            .upsert_resource(&resource)
+            .map_err(|e| ApplicationError::Storage(e.to_string()))?;
+        Ok(())
+    }
+
+    /// Delete a resource by `ResourceRef`. Idempotent at the projection layer.
+    pub fn delete_resource(
+        &mut self,
+        r_ref: &ResourceRef,
+    ) -> Result<(), ApplicationError> {
+        self.store
+            .delete_resource(r_ref)
+            .map_err(|e| ApplicationError::Storage(e.to_string()))?;
+        Ok(())
+    }
+
+    /// Recent activity feed, ordered by `revision` descending.
+    pub fn list_recent(
+        &self,
+        limit: usize,
+    ) -> Result<Vec<Resource>, ApplicationError> {
+        let page = self
+            .store
+            .query(&Selector::new())
+            .map_err(|e| ApplicationError::Storage(e.to_string()))?;
+        let mut items = page.items;
+        // Revision is monotonic by convention; lexicographic desc gives a
+        // stable "most-recently-touched first" order.
+        items.sort_by(|a, b| b.revision.cmp(&a.revision));
+        items.truncate(limit);
+        Ok(items)
+    }
+
+    /// List resources from a given source adapter.
+    pub fn list_by_source(
+        &self,
+        source_id: &str,
+        limit: usize,
+    ) -> Result<Vec<Resource>, ApplicationError> {
+        let page = self
+            .store
+            .query(&Selector::new().with_source(source_id))
+            .map_err(|e| ApplicationError::Storage(e.to_string()))?;
+        let mut items = page.items;
+        if items.len() > limit {
+            items.truncate(limit);
+        }
+        Ok(items)
+    }
+
     pub fn list_sources(
         &self,
         space_root: &Path,
@@ -82,6 +141,8 @@ impl<S: ProjectionStore> ApplicationService<S> {
         let cfg = crate::federation::SpaceSourcesConfig::load(space_root)?;
         Ok(cfg.sources)
     }
+
+
 
     pub fn scan_federation(&mut self, space_root: &Path) -> Result<ScanReport, ApplicationError> {
         use source::SourceAdapter;
