@@ -7,6 +7,6 @@ pub use skill::{SkillExporter, SkillIr, SkillPackage};
 
 pub use domain::SegmentRecord;
 pub use extractor::{
-    ExtractedContent, ExtractionError, Extractor, ImageMetadataExtractor, SegmentSlicer,
-    TextExtractor,
+    ExtractedContent, ExtractionError, Extractor, ImageMetadataExtractor, PdfExtractor,
+    PptxExtractor, SegmentSlicer, TextExtractor, XlsxExtractor, ZipExtractor,
 };

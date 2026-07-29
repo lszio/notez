@@ -114,3 +114,114 @@ impl SegmentSlicer {
         segments
     }
 }
+
+// -----------------------------------------------------------------------------
+// Binary-format extractors (PDF / XLSX / PPTX / ZIP).
+//
+// Each extractor guards on MIME type and rejects empty buffers. Phase A only
+// asserts the shape: the four types exist, target their extension, and fail
+// cleanly for empty bytes. Per-format fixture-based tests are deferred to a
+// follow-up that synthesises fixtures via the real crates (see plan §A3).
+// -----------------------------------------------------------------------------
+
+const PDF_MIMES: &[&str] = &["application/pdf"];
+const XLSX_MIMES: &[&str] = &[
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    "application/vnd.ms-excel",
+];
+const PPTX_MIMES: &[&str] = &[
+    "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    "application/vnd.ms-powerpoint",
+];
+const ZIP_MIMES: &[&str] = &["application/zip", "application/x-zip-compressed"];
+
+fn mime_matches(mime: &str, allowed: &[&str]) -> bool {
+    let lower = mime.to_ascii_lowercase();
+    allowed.iter().any(|m| m.eq_ignore_ascii_case(&lower))
+}
+
+fn reject_if_empty(bytes: &[u8], label: &str) -> Result<(), ExtractionError> {
+    if bytes.is_empty() {
+        return Err(ExtractionError::Failed(format!("{label}: empty buffer")));
+    }
+    Ok(())
+}
+
+pub struct PdfExtractor;
+
+impl PdfExtractor {
+    pub fn target_extension(&self) -> Option<&'static str> { Some("pdf") }
+}
+
+impl Extractor for PdfExtractor {
+    fn extract(&self, bytes: &[u8], mime_type: &str) -> Result<ExtractedContent, ExtractionError> {
+        if !mime_matches(mime_type, PDF_MIMES) {
+            return Err(ExtractionError::UnsupportedMime(mime_type.to_string()));
+        }
+        reject_if_empty(bytes, "pdf")?;
+        let doc = lopdf::Document::load_mem(bytes)
+            .map_err(|e| ExtractionError::Failed(format!("lopdf load: {e}")))?;
+        let page_count = doc.get_pages().len() as u64;
+        let mut metadata = BTreeMap::new();
+        metadata.insert("format".to_string(), "pdf".to_string());
+        metadata.insert("pages".to_string(), page_count.to_string());
+        Ok(ExtractedContent { text: String::new(), metadata })
+    }
+}
+
+pub struct XlsxExtractor;
+
+impl XlsxExtractor {
+    pub fn target_extension(&self) -> Option<&'static str> { Some("xlsx") }
+}
+
+impl Extractor for XlsxExtractor {
+    fn extract(&self, bytes: &[u8], mime_type: &str) -> Result<ExtractedContent, ExtractionError> {
+        if !mime_matches(mime_type, XLSX_MIMES) {
+            return Err(ExtractionError::UnsupportedMime(mime_type.to_string()));
+        }
+        reject_if_empty(bytes, "xlsx")?;
+        let mut metadata = BTreeMap::new();
+        metadata.insert("format".to_string(), "xlsx".to_string());
+        metadata.insert("byte_size".to_string(), bytes.len().to_string());
+        Ok(ExtractedContent { text: String::new(), metadata })
+    }
+}
+
+pub struct PptxExtractor;
+
+impl PptxExtractor {
+    pub fn target_extension(&self) -> Option<&'static str> { Some("pptx") }
+}
+
+impl Extractor for PptxExtractor {
+    fn extract(&self, bytes: &[u8], mime_type: &str) -> Result<ExtractedContent, ExtractionError> {
+        if !mime_matches(mime_type, PPTX_MIMES) {
+            return Err(ExtractionError::UnsupportedMime(mime_type.to_string()));
+        }
+        reject_if_empty(bytes, "pptx")?;
+        let mut metadata = BTreeMap::new();
+        metadata.insert("format".to_string(), "pptx".to_string());
+        metadata.insert("byte_size".to_string(), bytes.len().to_string());
+        Ok(ExtractedContent { text: String::new(), metadata })
+    }
+}
+
+pub struct ZipExtractor;
+
+impl ZipExtractor {
+    pub fn target_extension(&self) -> Option<&'static str> { Some("zip") }
+}
+
+impl Extractor for ZipExtractor {
+    fn extract(&self, bytes: &[u8], mime_type: &str) -> Result<ExtractedContent, ExtractionError> {
+        if !mime_matches(mime_type, ZIP_MIMES) {
+            return Err(ExtractionError::UnsupportedMime(mime_type.to_string()));
+        }
+        reject_if_empty(bytes, "zip")?;
+        let mut metadata = BTreeMap::new();
+        metadata.insert("format".to_string(), "zip".to_string());
+        metadata.insert("byte_size".to_string(), bytes.len().to_string());
+        Ok(ExtractedContent { text: String::new(), metadata })
+    }
+}
