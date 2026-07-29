@@ -5,7 +5,12 @@ edition = "2024"
 
 [dependencies]
 domain    = { path = "../domain" }
+application = { path = "../application" }
+storage = { path = "../storage" }
 bytes     = "1"
 serde     = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
+
+[dev-dependencies]
+ulid = { workspace = true }

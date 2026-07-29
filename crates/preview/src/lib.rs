@@ -1,3 +1,4 @@
+use application::ApplicationService;
 use domain::{Resource, ResourceRef, SegmentRecord};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -21,6 +22,7 @@ pub struct PreviewContext<'a> {
     pub segments: Vec<SegmentRecord>,
     pub siblings: Vec<Resource>,
     pub catalog: &'a PreviewerCatalog,
+    pub service: Option<&'a ApplicationService<storage::SqliteProjection>>,
 }
 
 pub trait Previewer: Send + Sync {
@@ -29,6 +31,14 @@ pub trait Previewer: Send + Sync {
     fn render(&self, ctx: &PreviewContext) -> Result<PreviewModel, PreviewError>;
 }
 
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct QueryRequest {
+    pub source: String,
+    pub kind_hint: Option<String>,
+    pub title_contains: Option<String>,
+    pub limit: usize,
+}
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum PreviewModel {
@@ -42,8 +52,8 @@ pub enum PreviewModel {
     Mermaid   { source: String },
     D2        { source: String },
     Iframe    { src: String, sandbox: String },
-    LinkEmbed { target: Box<Resource>, child: Box<PreviewModel> },
-    QueryEmbed{ query_id: String, snapshot: Vec<Resource> },
+    LinkEmbed { target: Resource, child: Box<PreviewModel> },
+    QueryEmbed { query: QueryRequest, snapshot: Vec<Resource> },
     BlockEmbed{ source: ResourceRef, html: String },
     Fallback  { message: String },
 }
