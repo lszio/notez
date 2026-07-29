@@ -1100,11 +1100,14 @@ dependencies = [
 name = "preview"
 version = "0.1.0"
 dependencies = [
+ "application",
  "bytes",
  "domain",
  "serde",
  "serde_json",
+ "storage",
  "thiserror",
+ "ulid",
 ]
 
 [[package]]
