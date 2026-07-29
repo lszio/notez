@@ -118,3 +118,5 @@ impl PreviewerCatalog {
 impl Default for PreviewerCatalog {
     fn default() -> Self { Self::new() }
 }
+
+pub mod builders;
