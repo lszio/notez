@@ -48,14 +48,14 @@ impl Previewer for FallbackPreviewer {
 /// the Markdown previewer (which matches on the locator suffix or the
 /// declared MIME) rather than to the more permissive Org previewer (which
 /// matches on `ResourceKind::Document | Heading | Block`).
+/// Build a catalog with the canonical 14 previewers registered.
+///
+/// This is a thin alias for `preview::default_catalog()` retained for
+/// backward compatibility with the per-previewer test files in this
+/// directory; those tests exercise the previewer in isolation so the
+/// exact registration order is not interesting to them.
 pub fn phase_b_catalog() -> PreviewerCatalog {
-    let mut c = PreviewerCatalog::new();
-    c.register(MarkdownPreviewer);
-    c.register(OrgPreviewer);
-    PdfPreviewer::register(&mut c);
-    XlsxPreviewer::register(&mut c);
-    c.register(FallbackPreviewer);
-    c
+    preview::default_catalog()
 }
 
 /// Build a `PreviewContext` for an Org document resource whose body is `body`.

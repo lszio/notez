@@ -120,4 +120,70 @@ impl Default for PreviewerCatalog {
     fn default() -> Self { Self::new() }
 }
 
+/// Build the canonical `PreviewerCatalog` containing all 14 built-in
+/// previewers.
+///
+/// The registration order is deliberate and matters: each entry is
+/// consulted in turn by `PreviewerCatalog::resolve` and the first match
+/// wins. Registration groups:
+///
+/// 1. Markdown                                                      (matches: `.md` / `text/markdown`)
+/// 2. Mermaid                                                       (matches: `body` contains "mermaid")
+/// 3. D2                                                            (matches: `body` contains "d2")
+/// 4. Iframe                                                        (matches: `body` starts with `[[iframe:`)
+/// 5. BlockEmbed                                                    (matches: `body` starts with `[[block:`)
+/// 6. QueryEmbed                                                    (matches: `body` contains `#+BEGIN_SRC query`)
+/// 7. Pdf                                                           (matches: `.pdf` / `application/pdf`)
+/// 8. Xlsx                                                          (matches: `.xlsx` / xlsx MIME)
+/// 9. Pptx                                                          (matches: `.pptx` / pptx MIME)
+/// 10. Zip                                                          (matches: `.zip` / zip MIME)
+/// 11. Image                                                        (matches: `image/*`)
+/// 12. Org                                                          (matches: Document / Heading / Block)
+/// 13. LinkEmbed                                                    (override-only — `matches` always false)
+/// 14. Fallback                                                     (matches: always)
+///
+/// Notes:
+/// - The abstract previewers (Mermaid/D2/Iframe/BlockEmbed/QueryEmbed) are
+///   registered BEFORE Org because Org matches every document-shaped
+///   resource and would otherwise always win.
+/// - `LinkEmbedPreviewer` is override-only by design, so its position does
+///   not affect match-order resolution.
+/// - `FallbackPreviewer` is registered LAST so every other previewer gets
+///   a chance to claim the context first.
+pub fn default_catalog() -> PreviewerCatalog {
+    use builders::{
+        block_embed::BlockEmbedPreviewer,
+        d2::D2Previewer,
+        fallback::FallbackPreviewer,
+        iframe::IframePreviewer,
+        image::ImagePreviewer,
+        link_embed::LinkEmbedPreviewer,
+        markdown::MarkdownPreviewer,
+        mermaid::MermaidPreviewer,
+        org::OrgPreviewer,
+        pdf::PdfPreviewer,
+        pptx::PptxPreviewer,
+        query_embed::QueryEmbedPreviewer,
+        xlsx::XlsxPreviewer,
+        zip::ZipPreviewer,
+    };
+
+    let mut c = PreviewerCatalog::new();
+    c.register(MarkdownPreviewer);
+    c.register(MermaidPreviewer);
+    c.register(D2Previewer);
+    c.register(IframePreviewer);
+    c.register(BlockEmbedPreviewer);
+    c.register(QueryEmbedPreviewer);
+    c.register(PdfPreviewer);
+    c.register(XlsxPreviewer);
+    c.register(PptxPreviewer);
+    c.register(ZipPreviewer);
+    c.register(ImagePreviewer);
+    c.register(OrgPreviewer);
+    c.register(LinkEmbedPreviewer);
+    c.register(FallbackPreviewer);
+    c
+}
+
 pub mod builders;
