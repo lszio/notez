@@ -4,10 +4,13 @@
 //! The crate exposes both a library (`web::…`) and a binary (`notez-web`).
 //! The `crates/cli` binary can also embed the same library under the
 //! `web` cargo feature and dispatch `notez web …` to it.
-
 pub mod preview;
 pub mod router;
 pub mod routes;
+pub mod send;
 pub mod server;
 pub mod state;
-// Re-exports of public functions live in their respective modules until D2/D3.
+
+pub use preview::default_catalog;
+pub use send::SendService;
+pub use state::WebState;
