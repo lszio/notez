@@ -15,6 +15,7 @@ use axum::{
 use domain::ResourceRef;
 use preview::{Heading, PreviewContext, PreviewModel};
 
+use crate::html_escape::{escape, escape_attr};
 use crate::state::WebState;
 
 #[derive(serde::Deserialize)]
@@ -194,8 +195,13 @@ fn render_model(model: &PreviewModel) -> String {
             height,
             mime,
         } => {
+            // `src` is rendered into a URL attribute and the locale-derived
+            // path; `mime` is user input from the resource body. Both must
+            // be attribute-escaped to defuse `" onload="…` style payloads.
             format!(
-                r#"<article><img src="{src}" width="{width}" height="{height}" alt="{mime}"></article>"#
+                r#"<article><img src="{src}" width="{width}" height="{height}" alt="{alt}"></article>"#,
+                src = escape_attr(src),
+                alt = escape_attr(mime),
             )
         }
         PreviewModel::Mermaid { source } => {
@@ -213,8 +219,14 @@ fn render_model(model: &PreviewModel) -> String {
             )
         }
         PreviewModel::Iframe { src, sandbox } => {
+            // Both fields come from user-authored body content
+            // (`[[iframe:<src> <sandbox>]]`) and must be attribute-escaped
+            // to defuse attribute-breakout payloads such as
+            // `" onload="alert(1)" sandbox=`.
             format!(
-                r#"<article><iframe src="{src}" sandbox="{sandbox}" style="width:100%;height:60vh;border:0"></iframe></article>"#
+                r#"<article><iframe src="{src}" sandbox="{sandbox}" style="width:100%;height:60vh;border:0"></iframe></article>"#,
+                src = escape_attr(src),
+                sandbox = escape_attr(sandbox),
             )
         }
         PreviewModel::LinkEmbed { target, child } => {
@@ -243,10 +255,20 @@ fn render_model(model: &PreviewModel) -> String {
             )
         }
         PreviewModel::BlockEmbed { source, html } => {
+            // The embedded `html` is the raw body of a (currently
+            // proxy) source resource, not a sanitised fragment — until the
+            // block target is resolved through the application service
+            // it may contain markup. Drop it inside a `<pre>` after
+            // HTML-escaping so any `<script>` / attribute-breakout
+            // payload becomes inert text.
+            //
+            // TODO(P3): when block resolution is wired through
+            // `PreviewContext::service`, replace this with the rendered
+            // target's preview HTML.
             format!(
-                r#"<article><p class="embed-source"><code>{}</code></p>{}</article>"#,
+                r#"<article><p class="embed-source"><code>{}</code></p><pre class="block-embed">{}</pre></article>"#,
                 escape(&source.to_string()),
-                html
+                escape(&html)
             )
         }
         PreviewModel::Fallback { message } => {
@@ -270,32 +292,4 @@ fn render_outline(outline: &[Heading]) -> String {
         })
         .collect();
     format!("<ul>{rows}</ul>")
-}
-
-fn escape(s: &str) -> String {
-    s.chars()
-        .map(|c| match c {
-            '&' => "&amp;".to_string(),
-            '<' => "&lt;".to_string(),
-            '>' => "&gt;".to_string(),
-            '"' => "&quot;".to_string(),
-            '\'' => "&#39;".to_string(),
-            other => other.to_string(),
-        })
-        .collect()
-}
-
-fn escape_attr(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    for c in s.chars() {
-        match c {
-            '&' => out.push_str("&amp;"),
-            '<' => out.push_str("&lt;"),
-            '>' => out.push_str("&gt;"),
-            '"' => out.push_str("&quot;"),
-            '\'' => out.push_str("&#39;"),
-            other => out.push(other),
-        }
-    }
-    out
 }

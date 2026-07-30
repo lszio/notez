@@ -6,10 +6,19 @@ use std::hash::{DefaultHasher, Hash, Hasher};
 ///
 /// Matches when the resource body starts with the literal `[[block:` prefix
 /// (resilient to leading whitespace). The referenced resource is encoded as
-/// a `ResourceRef`; the rendered HTML is the raw body of the source resource
-/// (the `BlockEmbed` payload is a placeholder for now — a future iteration
-/// will resolve the block target via the application service and render the
-/// referenced block directly).
+/// a `ResourceRef`.
+///
+/// ## Trust model (updated by Phase D review fix-up)
+///
+/// The block target is **not** resolved through the application service in
+/// this build — the preview context the web layer constructs does not carry
+/// a `service` handle (see `crates/web/src/routes/resource.rs`). The payload
+/// therefore piggybacks on the *source* body's raw text. The web route is
+/// responsible for HTML-escaping that text (`<pre class="block-embed">…</pre>`)
+/// so a malicious `[[block:…]]` body cannot inject markup into the host page.
+/// When the application service becomes available in `PreviewContext`,
+/// this previewer should resolve the block target and emit its rendered
+/// preview instead — at which point the route-side escape can be dropped.
 pub struct BlockEmbedPreviewer;
 
 impl Previewer for BlockEmbedPreviewer {
