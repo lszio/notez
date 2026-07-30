@@ -14,6 +14,7 @@ pub enum PreviewError {
     Io(#[from] std::io::Error),
 }
 
+#[derive(Clone)]
 pub struct PreviewContext<'a> {
     pub resource: Resource,
     pub bytes: Option<bytes::Bytes>,

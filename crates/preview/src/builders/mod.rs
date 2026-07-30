@@ -9,3 +9,7 @@ pub mod image;
 pub mod mermaid;
 pub mod d2;
 pub mod iframe;
+pub mod link_embed;
+pub mod block_embed;
+pub mod query_embed;
+pub mod fallback;
