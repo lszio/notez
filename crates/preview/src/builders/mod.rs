@@ -6,3 +6,6 @@ pub mod xlsx;
 pub mod pptx;
 pub mod zip;
 pub mod image;
+pub mod mermaid;
+pub mod d2;
+pub mod iframe;
