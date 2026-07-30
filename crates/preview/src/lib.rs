@@ -33,14 +33,14 @@ pub trait Previewer: Send + Sync {
 }
 
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct QueryRequest {
     pub source: String,
     pub kind_hint: Option<String>,
     pub title_contains: Option<String>,
     pub limit: usize,
 }
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum PreviewModel {
     Org       { html: String, outline: Vec<Heading> },
@@ -59,26 +59,26 @@ pub enum PreviewModel {
     Fallback  { message: String },
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Heading {
     pub level: u8,
     pub title: String,
     pub anchor: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PdfPage {
     pub index: u32,
     pub text: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Sheet {
     pub name: String,
     pub rows: Vec<Vec<String>>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Slide {
     pub index: u32,
     pub title: Option<String>,
@@ -86,7 +86,7 @@ pub struct Slide {
     pub notes: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ZipEntry {
     pub path: String,
     pub size: u64,

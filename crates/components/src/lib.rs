@@ -5,5 +5,19 @@
 //! intentionally plain — no client-side runtime is needed; the generated
 //! HTML is suitable for axum responses.
 
+use serde::{Deserialize, Serialize};
+
+/// Top-level summary of a `notez` space as displayed in the hub index.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SpaceSummary {
+    pub name: String,
+    pub root: std::path::PathBuf,
+}
+
 pub mod escape;
 pub mod layout;
+pub mod agenda_list;
+pub mod attachment_panel;
+pub mod resource_card;
+pub mod space_hub;
+pub mod space_list;
