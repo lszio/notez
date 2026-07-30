@@ -4,3 +4,9 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+dioxus = { version = "0.6", features = ["html"] }
+preview = { path = "../preview" }
+domain = { path = "../domain" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+html-escape = "0.2"
