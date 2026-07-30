@@ -114,7 +114,15 @@ fn pptx_renders_slide_text() {
     assert_eq!(slides.len(), 2, "expected two slides, got {slides:?}");
     assert_eq!(slides[0].index, 1);
     assert_eq!(slides[0].title.as_deref(), Some("First Slide Title"));
-    assert!(slides[0].body.contains(&"body line".to_string()));
+    // Slide 1 has two distinct <a:r> runs; the previewer must keep them as
+    // separate entries rather than merging them.
+    assert_eq!(
+        slides[0].body,
+        vec!["First Slide Title".to_string(), "body line".to_string()],
+        "body entries should be split per <a:r> run"
+    );
+    // Slide 2 has a single run; the body should hold exactly that.
+    assert_eq!(slides[1].body, vec!["Second Slide".to_string()]);
     assert_eq!(slides[1].title.as_deref(), Some("Second Slide"));
     assert!(slides[1].notes.is_none());
 }
