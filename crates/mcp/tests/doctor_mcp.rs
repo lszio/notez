@@ -1,12 +1,14 @@
+mod common;
+
 use application::ApplicationService;
-use mcp::McpServer;
+use common::{initialize_request, run_session};
 use serde_json::{Value, json};
+use std::collections::HashMap;
 use std::fs;
-use std::io::Cursor;
 use storage::SqliteProjection;
 
-#[test]
-fn mcp_space_doctor_job_list_and_artifact_stale() {
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn mcp_space_doctor_job_list_and_artifact_stale() {
     let temp_dir = tempfile::tempdir().unwrap();
     let space_root = temp_dir.path();
 
@@ -23,32 +25,40 @@ fn mcp_space_doctor_job_list_and_artifact_stale() {
     let mut service = ApplicationService::new(store);
     service.scan_native(space_root).unwrap();
 
-    let input_lines = [
-        json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "space_doctor", "arguments": {"space": space_root.to_string_lossy()}}}).to_string(),
-        json!({"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "job_list", "arguments": {"space": space_root.to_string_lossy()}}}).to_string(),
-        json!({"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {"name": "artifact_stale", "arguments": {"space": space_root.to_string_lossy()}}}).to_string(),
-    ].join("\n") + "\n";
+    let requests = vec![
+        initialize_request(1).to_string(),
+        json!({"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "space_doctor", "arguments": {"space": space_root.to_string_lossy()}}}).to_string(),
+        json!({"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {"name": "job_list", "arguments": {"space": space_root.to_string_lossy()}}}).to_string(),
+        json!({"jsonrpc": "2.0", "id": 4, "method": "tools/call", "params": {"name": "artifact_stale", "arguments": {"space": space_root.to_string_lossy()}}}).to_string(),
+    ];
 
-    let reader = Cursor::new(input_lines);
-    let mut output = Vec::new();
+    let responses = run_session(service, requests).await;
+    assert_eq!(responses.len(), 4);
 
-    McpServer::serve(reader, &mut output, &mut service).unwrap();
-
-    let output_str = String::from_utf8(output).unwrap();
-    let responses: Vec<Value> = output_str
-        .lines()
-        .filter(|l| !l.trim().is_empty())
-        .map(|l| serde_json::from_str(l).unwrap())
+    let by_id: HashMap<u64, &Value> = responses
+        .iter()
+        .map(|v| (v["id"].as_u64().expect("id is u64"), v))
         .collect();
 
-    assert_eq!(responses.len(), 3);
-    assert_eq!(responses[0]["id"], 1);
-    assert_eq!(responses[1]["id"], 2);
-    assert_eq!(responses[2]["id"], 3);
+    let init = by_id.get(&1).expect("initialize");
+    assert!(init["result"].is_object());
+
+    let doctor = by_id.get(&2).expect("space_doctor");
+    let text = doctor["result"]["content"][0]["text"].as_str().unwrap();
     assert!(
-        responses[0]["result"]["content"][0]["text"]
-            .as_str()
-            .unwrap()
-            .contains("healthy")
+        text.contains("healthy"),
+        "space_doctor response missing 'healthy': {text}"
+    );
+
+    let jobs = by_id.get(&3).expect("job_list");
+    assert_eq!(
+        jobs["result"]["isError"], false,
+        "job_list should succeed: {jobs:?}"
+    );
+
+    let stale = by_id.get(&4).expect("artifact_stale");
+    assert_eq!(
+        stale["result"]["isError"], false,
+        "artifact_stale should succeed: {stale:?}"
     );
 }

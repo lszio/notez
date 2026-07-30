@@ -1,12 +1,14 @@
+mod common;
+
 use application::ApplicationService;
-use mcp::McpServer;
+use common::{initialize_request, run_session};
 use serde_json::{Value, json};
+use std::collections::HashMap;
 use std::fs;
-use std::io::Cursor;
 use storage::SqliteProjection;
 
-#[test]
-fn mcp_rules_agenda_and_task_transition() {
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn mcp_rules_agenda_and_task_transition() {
     let temp_dir = tempfile::tempdir().unwrap();
     let space_root = temp_dir.path();
 
@@ -20,50 +22,48 @@ fn mcp_rules_agenda_and_task_transition() {
     let mut service = ApplicationService::new(store);
     service.scan_native(space_root).unwrap();
 
-    let input_lines = [
-        json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "agenda", "arguments": {}}}).to_string(),
-        json!({"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "inspect_rules", "arguments": {"ref": "heading:01J00000000000000000000801"}}}).to_string(),
-        json!({"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {"name": "task_transition", "arguments": {"ref": "heading:01J00000000000000000000801", "to": "DONE"}}}).to_string(),
-    ].join("\n") + "\n";
+    let requests = vec![
+        initialize_request(1).to_string(),
+        json!({"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "agenda", "arguments": {}}}).to_string(),
+        json!({"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {"name": "inspect_rules", "arguments": {"ref": "heading:01J00000000000000000000801"}}}).to_string(),
+        json!({"jsonrpc": "2.0", "id": 4, "method": "tools/call", "params": {"name": "task_transition", "arguments": {"ref": "heading:01J00000000000000000000801", "to": "DONE"}}}).to_string(),
+    ];
 
-    let reader = Cursor::new(input_lines);
-    let mut output = Vec::new();
+    let responses = run_session(service, requests).await;
+    assert_eq!(responses.len(), 4);
 
-    McpServer::serve(reader, &mut output, &mut service).unwrap();
-
-    let output_str = String::from_utf8(output).unwrap();
-    let responses: Vec<Value> = output_str
-        .lines()
-        .filter(|l| !l.trim().is_empty())
-        .map(|l| serde_json::from_str(l).unwrap())
+    let by_id: HashMap<u64, &Value> = responses
+        .iter()
+        .map(|v| (v["id"].as_u64().expect("id is u64"), v))
         .collect();
 
-    assert_eq!(responses.len(), 3);
+    // 1. initialize
+    let init = by_id.get(&1).expect("initialize response");
+    assert!(init["result"].is_object());
 
-    // 1. agenda
-    assert_eq!(responses[0]["id"], 1);
+    // 2. agenda
+    let agenda = by_id.get(&2).expect("agenda response");
+    let text = agenda["result"]["content"][0]["text"].as_str().unwrap();
     assert!(
-        responses[0]["result"]["content"][0]["text"]
-            .as_str()
-            .unwrap()
-            .contains("MCP Task")
+        text.contains("MCP Task"),
+        "agenda response missing 'MCP Task': {text}"
     );
 
-    // 2. inspect_rules
-    assert_eq!(responses[1]["id"], 2);
+    // 3. inspect_rules
+    let inspect = by_id.get(&3).expect("inspect_rules response");
+    let text = inspect["result"]["content"][0]["text"].as_str().unwrap();
     assert!(
-        responses[1]["result"]["content"][0]["text"]
-            .as_str()
-            .unwrap()
-            .contains("classified_type")
+        text.contains("classified_type"),
+        "inspect_rules response missing 'classified_type': {text}"
     );
 
-    // 3. task_transition
-    assert_eq!(responses[2]["id"], 3);
+    // 4. task_transition
+    let transition = by_id.get(&4).expect("task_transition response");
+    let text = transition["result"]["content"][0]["text"]
+        .as_str()
+        .unwrap();
     assert!(
-        responses[2]["result"]["content"][0]["text"]
-            .as_str()
-            .unwrap()
-            .contains("to_state")
+        text.contains("to_state"),
+        "task_transition response missing 'to_state': {text}"
     );
 }

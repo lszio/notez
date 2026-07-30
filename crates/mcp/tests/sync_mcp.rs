@@ -1,12 +1,14 @@
+mod common;
+
 use application::ApplicationService;
-use mcp::McpServer;
+use common::{initialize_request, run_session};
 use serde_json::{Value, json};
+use std::collections::HashMap;
 use std::fs;
-use std::io::Cursor;
 use storage::SqliteProjection;
 
-#[test]
-fn mcp_sync_push_pull_and_conflicts() {
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn mcp_sync_push_pull_and_conflicts() {
     let temp_dir = tempfile::tempdir().unwrap();
     let space_a = temp_dir.path().join("space_a");
     let space_b = temp_dir.path().join("space_b");
@@ -29,26 +31,39 @@ fn mcp_sync_push_pull_and_conflicts() {
     let store_a = SqliteProjection::open(&space_a.join(".notez/index.sqlite")).unwrap();
     let mut service_a = ApplicationService::new(store_a);
 
-    let input_lines = [
-        json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "sync_push", "arguments": {"space": space_a.to_string_lossy(), "actor": "actor_a", "folder": shared.to_string_lossy()}}}).to_string(),
-        json!({"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "sync_pull", "arguments": {"space": space_b.to_string_lossy(), "actor": "actor_b", "folder": shared.to_string_lossy()}}}).to_string(),
-        json!({"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {"name": "sync_conflicts", "arguments": {"space": space_b.to_string_lossy()}}}).to_string(),
-    ].join("\n") + "\n";
+    let requests = vec![
+        initialize_request(1).to_string(),
+        json!({"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "sync_push", "arguments": {"space": space_a.to_string_lossy(), "actor": "actor_a", "folder": shared.to_string_lossy()}}}).to_string(),
+        json!({"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {"name": "sync_pull", "arguments": {"space": space_b.to_string_lossy(), "actor": "actor_b", "folder": shared.to_string_lossy()}}}).to_string(),
+        json!({"jsonrpc": "2.0", "id": 4, "method": "tools/call", "params": {"name": "sync_conflicts", "arguments": {"space": space_b.to_string_lossy()}}}).to_string(),
+    ];
 
-    let reader = Cursor::new(input_lines);
-    let mut output = Vec::new();
+    let responses = run_session(service_a, requests).await;
+    assert_eq!(responses.len(), 4);
 
-    McpServer::serve(reader, &mut output, &mut service_a).unwrap();
-
-    let output_str = String::from_utf8(output).unwrap();
-    let responses: Vec<Value> = output_str
-        .lines()
-        .filter(|l| !l.trim().is_empty())
-        .map(|l| serde_json::from_str(l).unwrap())
+    let by_id: HashMap<u64, &Value> = responses
+        .iter()
+        .map(|v| (v["id"].as_u64().expect("id is u64"), v))
         .collect();
 
-    assert_eq!(responses.len(), 3);
-    assert_eq!(responses[0]["id"], 1);
-    assert_eq!(responses[1]["id"], 2);
-    assert_eq!(responses[2]["id"], 3);
+    let init = by_id.get(&1).expect("initialize");
+    assert!(init["result"].is_object());
+
+    let push = by_id.get(&2).expect("sync_push");
+    assert_eq!(
+        push["result"]["isError"], false,
+        "sync_push should succeed: {push:?}"
+    );
+
+    let pull = by_id.get(&3).expect("sync_pull");
+    assert_eq!(
+        pull["result"]["isError"], false,
+        "sync_pull should succeed: {pull:?}"
+    );
+
+    let conflicts = by_id.get(&4).expect("sync_conflicts");
+    assert_eq!(
+        conflicts["result"]["isError"], false,
+        "sync_conflicts should succeed: {conflicts:?}"
+    );
 }
