@@ -81,6 +81,10 @@ pub enum Commands {
 
     /// Synchronization commands (folder push/pull/conflicts)
     Sync(SyncSubcommand),
+
+    /// Launch the local web server over the active space.
+    #[cfg(feature = "web")]
+    Web(WebArgs),
 }
 #[derive(Args, Debug)]
 pub struct QueryArgs {
@@ -451,4 +455,13 @@ impl From<CliSourceKind> for source::SourceKind {
             CliSourceKind::Anytype => source::SourceKind::Anytype,
         }
     }
+}
+
+#[cfg(feature = "web")]
+#[derive(Args, Debug)]
+pub struct WebArgs {
+    #[arg(long, default_value = "127.0.0.1:3030")]
+    pub bind: String,
+    #[arg(long, default_value_t = false)]
+    pub open: bool,
 }

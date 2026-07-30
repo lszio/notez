@@ -1285,5 +1285,29 @@ fn main() {
                 }
             }
         },
+        #[cfg(feature = "web")]
+        Commands::Web(args) => {
+            let state = match web::state::WebState::from_space(&r_config.space_root) {
+                Ok(s) => s,
+                Err(e) => {
+                    eprintln!("WebState error: {e}");
+                    exit(5);
+                }
+            };
+            let runtime = match tokio::runtime::Builder::new_multi_thread()
+                .enable_all()
+                .build()
+            {
+                Ok(rt) => rt,
+                Err(e) => {
+                    eprintln!("Tokio runtime error: {e}");
+                    exit(5);
+                }
+            };
+            if let Err(e) = runtime.block_on(web::server::serve(state, &args.bind, args.open)) {
+                eprintln!("Web server error: {e}");
+                exit(5);
+            }
+        }
     }
 }
