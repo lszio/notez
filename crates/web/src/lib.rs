@@ -10,7 +10,7 @@ pub mod routes;
 pub mod send;
 pub mod server;
 pub mod state;
-
+pub mod static_assets;
 pub use preview::default_catalog;
 pub use send::SendService;
 pub use state::WebState;
