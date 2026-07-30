@@ -8,8 +8,28 @@
 //!
 //! The web server is intentionally a viewer (no mutations). Synchronous
 //! locking is fine for the expected workload.
-
-use std::sync::{Arc, Mutex, MutexGuard};
+//!
+//! ## Phase D deviation: no `Arc<ApplicationService<SqliteProjection>>` in `WebState`
+//!
+//! `WebState` holds a [`SendService`] — not an
+//! `Arc<ApplicationService<SqliteProjection>>`. Adding the latter would
+//! require exclusive ownership of `SqliteProjection`, which conflicts
+//! with the existing `Arc<Mutex<SqliteProjection>>` indirection needed
+//! for concurrent read access from arbitrary axum tasks. Constructing a
+//! fresh `ApplicationService<SqliteProjectionRef<'_>>` per call (already
+//! done by [`SendService::agenda`] and [`SendService::list_recent`]) is
+//! the cheapest correct alternative.
+//!
+//! **Consequence:** the SSR route handlers pass `service: None` to
+//! [`preview::PreviewContext`]. Previewers that need cross-resource
+//! resolution — currently only
+//! `preview::builders::LinkEmbedPreviewer` — fall back to whatever
+//! siblings are present in the context; they cannot resolve a target
+//! resource by `ResourceRef` from the projection until a future
+//! milestone either (a) changes `SendService` to also expose an
+//! `&ApplicationService<SqliteProjectionRef<'_>>` borrow handle, or
+//! (b) refactors `WebState` to own the projection outright and switch
+//! the executor model.
 
 use application::ApplicationService;
 use domain::{LinkOccurrence, QueryPage, Resource, ResourceRef, SegmentRecord};

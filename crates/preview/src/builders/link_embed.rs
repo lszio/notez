@@ -13,11 +13,23 @@ use std::collections::BTreeMap;
 ///   child resource.
 /// - Otherwise a synthetic `Resource` is constructed from the ref so the
 ///   catalog can still attempt to render it.
-/// The result is rendered recursively via the catalog and emitted as a
-/// `PreviewModel::LinkEmbed { target, child }` payload.
+///
+/// The rendered `PreviewModel::LinkEmbed { target, child }` payload is
+/// recursively rendered via the catalog and emitted as the preview HTML.
+///
+/// ## Phase D limitation
+///
+/// `PreviewContext::service` is `None` for handlers built on the current
+/// `WebState` (see `crates/web/src/send.rs`), so this previewer cannot
+/// resolve cross-resource targets by hitting the projection. It only
+/// uses the `ctx.siblings` short-circuit above. Full target resolution
+/// requires plumping an `ApplicationService` handle through `WebState`
+/// or constructing a per-handle `ApplicationService<SqliteProjectionRef>`;
+/// see the comment on `SendService` for the deviation rationale.
 pub struct LinkEmbedPreviewer;
 
 impl Previewer for LinkEmbedPreviewer {
+
     fn id(&self) -> &'static str {
         "link_embed"
     }
