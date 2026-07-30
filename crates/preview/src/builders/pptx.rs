@@ -48,7 +48,7 @@ impl Previewer for PptxPreviewer {
             entry
                 .read_to_string(&mut xml)
                 .map_err(PreviewError::Io)?;
-            let body = extract_text_runs(&xml);
+            let body = extract_text_runs(&xml)?;
             let title = body.first().cloned();
             slides.push(Slide {
                 index: idx,
@@ -64,7 +64,13 @@ impl Previewer for PptxPreviewer {
 }
 
 /// Parse a slide XML document and collect every text run under `<a:t>` elements.
-fn extract_text_runs(xml: &str) -> Vec<String> {
+///
+/// Text inside `<a:t>` may appear either as character data (`Event::Text`,
+/// already XML-decoded by `quick_xml`) or inside a CDATA section
+/// (`Event::CData`, raw bytes). We accept both. XML parse errors are
+/// surfaced to the caller rather than silently swallowed, since a
+/// truncated or malformed slide is a real bug, not an empty result.
+fn extract_text_runs(xml: &str) -> Result<Vec<String>, PreviewError> {
     let mut reader = Reader::from_str(xml);
     reader.config_mut().trim_text(true);
     let mut out = Vec::new();
@@ -81,6 +87,10 @@ fn extract_text_runs(xml: &str) -> Vec<String> {
                     buf.push_str(&unescaped);
                 }
             }
+            Ok(Event::CData(c)) if in_t => {
+                let chunk = c.into_inner();
+                buf.push_str(&String::from_utf8_lossy(&chunk));
+            }
             Ok(Event::End(e)) if e.name().as_ref() == b"a:t" => {
                 in_t = false;
                 if !buf.is_empty() {
@@ -88,9 +98,13 @@ fn extract_text_runs(xml: &str) -> Vec<String> {
                 }
             }
             Ok(Event::Eof) => break,
-            Err(_) => break,
+            Err(e) => {
+                return Err(PreviewError::Extraction(format!(
+                    "pptx xml parse error: {e}"
+                )));
+            }
             _ => {}
         }
     }
-    out
+    Ok(out)
 }

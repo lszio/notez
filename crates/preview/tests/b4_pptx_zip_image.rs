@@ -127,6 +127,71 @@ fn pptx_does_not_match_non_pptx_locator() {
     let c = ctx_for(&catalog, r, Some("text/plain"), None);
     assert!(!p.matches(&c));
 }
+#[test]
+fn pptx_renders_cdata_text_run() {
+    // A slide whose <a:t> contains a CDATA section must yield the CDATA
+    // payload as text; before the fix it was silently dropped.
+    let p = PptxPreviewer;
+    let mut buf = Vec::new();
+    {
+        let cursor = std::io::Cursor::new(&mut buf);
+        let mut zip = zip::ZipWriter::new(cursor);
+        let opts = zip::write::FileOptions::default()
+            .compression_method(zip::CompressionMethod::Stored);
+        zip.start_file("ppt/slides/slide1.xml", opts).unwrap();
+        zip.write_all(
+            br#"<?xml version="1.0"?>
+<p:sld>
+  <p:cSld><p:sp><p:txBody><a:p><a:r><a:t><![CDATA[Hello&<World>]]></a:t></a:r></a:p></p:txBody></p:sp></p:cSld>
+</p:sld>"#,
+        )
+        .unwrap();
+        zip.finish().unwrap();
+    }
+    let bytes = Bytes::from(buf);
+    let r = attachment_resource("deck.pptx", None);
+    let catalog = PreviewerCatalog::new();
+    let c = ctx_for(&catalog, r, None, Some(bytes));
+    let m = p.render(&c).expect("render ok");
+    let PreviewModel::Pptx { slides } = m else {
+        panic!("expected PreviewModel::Pptx");
+    };
+    assert_eq!(slides.len(), 1, "expected one slide, got {slides:?}");
+    assert_eq!(slides[0].body, vec!["Hello&<World>".to_string()]);
+    assert_eq!(slides[0].title.as_deref(), Some("Hello&<World>"));
+}
+
+#[test]
+fn pptx_returns_parse_error_for_malformed_slide_xml() {
+    // A truncated slide XML must surface as PreviewError::Extraction,
+    // not be silently swallowed.
+    let p = PptxPreviewer;
+    let mut buf = Vec::new();
+    {
+        let cursor = std::io::Cursor::new(&mut buf);
+        let mut zip = zip::ZipWriter::new(cursor);
+        let opts = zip::write::FileOptions::default()
+            .compression_method(zip::CompressionMethod::Stored);
+        zip.start_file("ppt/slides/slide1.xml", opts).unwrap();
+        // Unterminated tag with a malformed attribute value — quick-xml
+        // surfaces this as a parse error from `read_event`.
+        zip.write_all(b"<a:t attr=\"<broken").unwrap();
+        zip.finish().unwrap();
+    }
+    let bytes = Bytes::from(buf);
+    let r = attachment_resource("deck.pptx", None);
+    let catalog = PreviewerCatalog::new();
+    let c = ctx_for(&catalog, r, None, Some(bytes));
+    match p.render(&c) {
+        Err(preview::PreviewError::Extraction(msg)) => {
+            assert!(
+                msg.contains("pptx xml parse error"),
+                "unexpected message: {msg}"
+            );
+        }
+        other => panic!("expected Extraction error, got {other:?}"),
+    }
+}
 
 // ---- ZIP ----
 
