@@ -1111,9 +1111,17 @@ fn main() {
         Commands::Mcp(McpSubcommand {
             command: McpCommands::Serve,
         }) => {
-            let stdin = std::io::stdin().lock();
-            let stdout = std::io::stdout().lock();
-            if let Err(e) = mcp::McpServer::serve(stdin, stdout, &mut service) {
+            let runtime = match tokio::runtime::Builder::new_multi_thread()
+                .enable_all()
+                .build()
+            {
+                Ok(rt) => rt,
+                Err(e) => {
+                    eprintln!("Tokio runtime error: {e}");
+                    exit(5);
+                }
+            };
+            if let Err(e) = runtime.block_on(mcp::serve(service)) {
                 eprintln!("MCP server error: {e}");
                 exit(5);
             }
