@@ -43,11 +43,20 @@ pub async fn raw(
         .or_else(|| resource.properties.get("HASH"))
         .ok_or_else(|| (StatusCode::NOT_FOUND, "no blob hash".into()))?
         .clone();
-    let store = BlobStore::new(&state.space_root);
-    let bytes = store
-        .get(&hash)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-        .ok_or_else(|| (StatusCode::NOT_FOUND, "blob missing".into()))?;
+    // BlobStore::get is blocking I/O; offload it so the request task
+    // doesn't occupy a tokio worker thread while we read the blob.
+    let blob_hash = hash.clone();
+    let space_root = state.space_root.clone();
+    let bytes = tokio::task::spawn_blocking(move || {
+        let store = BlobStore::new(&space_root);
+        match store.get(&blob_hash) {
+            Ok(Some(b)) => Ok(b),
+            Ok(None) => Err((StatusCode::NOT_FOUND, "blob missing".into())),
+            Err(e) => Err((StatusCode::INTERNAL_SERVER_ERROR, e.to_string())),
+        }
+    })
+    .await
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))??;
     let meta = BlobMeta {
         hash: hash.clone(),
         size_bytes: bytes.len() as u64,
@@ -73,6 +82,7 @@ pub async fn preview_json(
         .ok_or_else(|| (StatusCode::NOT_FOUND, "attachment not found".into()))?;
 
     let (bytes, mime) = load_blob(&state, &resource)
+        .await
         .ok_or_else(|| (StatusCode::NOT_FOUND, "blob missing".into()))?;
     let ctx = PreviewContext {
         resource: resource.clone(),
@@ -99,20 +109,25 @@ pub async fn preview_json(
         json,
     ))
 }
-
-fn load_blob(state: &WebState, resource: &domain::Resource) -> Option<(Vec<u8>, String)> {
+async fn load_blob(state: &WebState, resource: &domain::Resource) -> Option<(Vec<u8>, String)> {
     let hash = resource
         .properties
         .get("blob_hash")
         .or_else(|| resource.properties.get("HASH"))?
         .clone();
-    let store = BlobStore::new(&state.space_root);
-    let bytes = store.get(&hash).ok().flatten()?;
     let mime = resource
         .properties
         .get("mime_type")
         .cloned()
         .unwrap_or_else(|| "application/octet-stream".into());
+    let space_root = state.space_root.clone();
+    let bytes = tokio::task::spawn_blocking(move || {
+        let store = BlobStore::new(&space_root);
+        store.get(&hash).ok().flatten()
+    })
+    .await
+    .ok()
+    .flatten()?;
     Some((bytes, mime))
 }
 
