@@ -7,6 +7,7 @@
 pub mod agenda;
 pub mod attachment;
 pub mod healthz;
+pub mod query;
 pub mod resource;
 pub mod root;
 pub mod space_hub;

@@ -16,6 +16,10 @@ pub fn router(state: WebState) -> Router {
         .route("/s/:space", get(routes::space_hub::hub))
         .route("/s/:space/", get(routes::space_hub::hub))
         .route("/s/:space/agenda", get(routes::agenda::agenda))
+        .route(
+            "/s/:space/q",
+            get(routes::query::query),
+        )
         .route("/s/:space/r/:ref", get(routes::resource::show))
         .route(
             "/s/:space/r/:ref/preview.json",
