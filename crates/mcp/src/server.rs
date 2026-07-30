@@ -1,971 +1,845 @@
+//! notez MCP stdio server.
+//!
+//! Built on the `rmcp` SDK. Speaks MCP protocol version `2025-11-25`
+//! (rmcp's `LATEST`). All tools are callable immediately after `initialize`
+//! returns; the server does NOT track `notifications/initialized` and does
+//! NOT gate tool calls on any client handshake.
+
+use std::sync::{Arc, Mutex};
+
 use application::{ApplicationService, ResolveResult};
-use domain::{ProjectionStore, ResourceKind, ResourceRef, Selector};
+use domain::{ResourceKind, ResourceRef, Selector};
+use rmcp::{
+    ErrorData as McpError, ServerHandler, ServiceExt,
+    handler::server::{
+        tool::ToolRouter,
+        wrapper::{Json, Parameters},
+    },
+    model::*,
+    tool, tool_handler, tool_router,
+};
+use serde::Deserialize;
 use serde_json::{Value, json};
-use std::io::{BufRead, Write};
-use thiserror::Error;
+use storage::SqliteProjection;
 
-#[derive(Error, Debug)]
-pub enum McpError {
-    #[error("I/O error: {0}")]
-    Io(#[from] std::io::Error),
-    #[error("JSON error: {0}")]
-    Json(#[from] serde_json::Error),
+// ─────────────────────────────────────────────────────────────────────────────
+// Argument DTOs
+//
+// Each `schemars`-derived struct becomes the JSON schema exposed via
+// `tools/list`. Field names match the legacy hand-rolled server EXACTLY —
+// clients depend on them.
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub struct ResolveArgs {
+    /// Query string to resolve. Accepts bare IDs and fully qualified
+    /// addresses (`document:01J...`).
+    pub query: String,
 }
 
-pub struct McpServer;
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub struct QueryArgs {
+    /// Optional resource kind filter (`document`, `heading`, `attachment`).
+    pub kind: Option<String>,
+    /// Optional case-sensitive substring filter on the resource title.
+    pub title_contains: Option<String>,
+}
 
-fn parse_path_list(value: Option<&Value>) -> Vec<std::path::PathBuf> {
-    let Some(v) = value else {
-        return Vec::new();
-    };
-    if let Some(arr) = v.as_array() {
-        arr.iter()
-            .filter_map(|item| item.as_str().map(std::path::PathBuf::from))
-            .collect()
-    } else if let Some(s) = v.as_str() {
-        vec![std::path::PathBuf::from(s)]
-    } else {
-        Vec::new()
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub struct RefArgs {
+    /// A `ResourceRef` string (e.g. `heading:01J...`).
+    pub r#ref: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub struct InspectArgs {
+    /// Optional resource ref. When present, returns occurrences, resolved
+    /// relations, and diagnostics for that resource.
+    pub r#ref: Option<String>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub struct SpaceArgs {
+    /// Filesystem path to the space root. Defaults to `.` when omitted.
+    pub space: Option<String>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub struct SourceAddArgs {
+    pub space: Option<String>,
+    pub id: String,
+    pub kind: String,
+    pub path: String,
+    pub read_only: Option<bool>,
+    pub include_paths: Option<Vec<String>>,
+    pub exclude_paths: Option<Vec<String>>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub struct AttachmentAddArgs {
+    pub space: Option<String>,
+    pub path: String,
+    pub mime: Option<String>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub struct AttachmentExtractArgs {
+    pub space: Option<String>,
+    pub r#ref: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub struct CommunityCreateArgs {
+    pub space: Option<String>,
+    pub id: String,
+    pub name: String,
+    pub kind: Option<String>,
+    pub title_contains: Option<String>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub struct DeriveArtifactArgs {
+    pub space: Option<String>,
+    pub community: String,
+    pub recipe: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub struct ExportSkillArgs {
+    pub space: Option<String>,
+    pub community: String,
+    pub description: Option<String>,
+    pub out: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub struct SyncArgs {
+    pub space: Option<String>,
+    pub actor: Option<String>,
+    pub folder: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub struct TaskTransitionArgs {
+    pub r#ref: String,
+    pub to: String,
+    pub timestamp: Option<String>,
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Result helpers
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Serialize a JSON value into a text content block wrapped in a successful
+/// tool result.
+fn text_ok(value: Value) -> Result<CallToolResult, McpError> {
+    let text = serde_json::to_string(&value)
+        .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+    Ok(CallToolResult::success(vec![Content::text(text)]))
+}
+
+/// Wrap a tool-domain error into a `CallToolResult::error` so the SDK
+/// reports it as `isError: true` rather than a JSON-RPC error.
+fn text_err(message: impl Into<String>) -> Result<CallToolResult, McpError> {
+    Ok(CallToolResult::error(vec![Content::text(message.into())]))
+}
+
+fn space_path(arg: Option<&str>) -> std::path::PathBuf {
+    std::path::PathBuf::from(arg.unwrap_or("."))
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Server
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// MCP stdio server exposing notez operations as tools.
+///
+/// Wraps an `ApplicationService<SqliteProjection>` (the production
+/// concrete type) behind a `Mutex` because several notez methods (e.g.
+/// `transition_task`, `sync_push`, `resolve_links`) require `&mut self`.
+/// The mutex is never held across an `.await` point — tool handlers call
+/// sync methods, serialize the result, and return — so a `std::sync::Mutex`
+/// is sufficient.
+#[derive(Clone)]
+pub struct NotezMcpServer {
+    service: Arc<Mutex<ApplicationService<SqliteProjection>>>,
+    tool_router: ToolRouter<Self>,
+}
+
+impl NotezMcpServer {
+    pub fn new(service: ApplicationService<SqliteProjection>) -> Self {
+        Self {
+            service: Arc::new(Mutex::new(service)),
+            tool_router: Self::tool_router(),
+        }
+    }
+
+    /// Read-only view over the wrapped service.
+    fn with_service<R>(
+        &self,
+        f: impl FnOnce(&ApplicationService<SqliteProjection>) -> R,
+    ) -> R {
+        let guard = self.service.lock().expect("service mutex poisoned");
+        f(&*guard)
+    }
+
+    /// Mutable view, for tool handlers that need `&mut self`.
+    fn with_service_mut<R>(
+        &self,
+        f: impl FnOnce(&mut ApplicationService<SqliteProjection>) -> R,
+    ) -> R {
+        let mut guard = self.service.lock().expect("service mutex poisoned");
+        f(&mut *guard)
     }
 }
 
-impl McpServer {
-    pub fn serve<R: BufRead, W: Write, S: ProjectionStore>(
-        mut reader: R,
-        mut writer: W,
-        service: &mut ApplicationService<S>,
-    ) -> Result<(), McpError> {
-        let mut line = String::new();
-
-        while reader.read_line(&mut line)? > 0 {
-            let trimmed = line.trim();
-            if trimmed.is_empty() {
-                line.clear();
-                continue;
-            }
-
-            let req_value: Result<Value, _> = serde_json::from_str(trimmed);
-            match req_value {
-                Ok(req) => {
-                    let id = req.get("id").cloned();
-                    let method = req
-                        .get("method")
-                        .and_then(|m| m.as_str())
-                        .unwrap_or_default();
-                    let params = req.get("params").cloned().unwrap_or(Value::Null);
-
-                    if method == "notifications/initialized" {
-                        line.clear();
-                        continue;
+#[tool_router]
+impl NotezMcpServer {
+    #[tool(description = "Resolve a query string to a ResourceRef")]
+    fn resolve(
+        &self,
+        Parameters(args): Parameters<ResolveArgs>,
+    ) -> Result<CallToolResult, McpError> {
+        self.with_service(|svc| {
+            let address_str: &str = &args.query;
+            if let Ok(addr) = domain::ResourceAddress::parse(address_str) {
+                match svc.resolve_address(&addr) {
+                    Ok(ResolveResult::Found(r_ref)) => {
+                        text_ok(json!({ "ref": r_ref.to_string() }))
                     }
-
-                    let response = Self::handle_request(id, method, params, service);
-                    if let Some(resp) = response {
-                        let resp_json = serde_json::to_string(&resp)?;
-                        writeln!(writer, "{resp_json}")?;
-                        writer.flush()?;
+                    Ok(ResolveResult::NotFound) => {
+                        text_err(format!("Resource not found: {address_str}"))
                     }
+                    Ok(ResolveResult::Ambiguous(refs)) => {
+                        let str_refs: Vec<String> =
+                            refs.iter().map(|r| r.to_string()).collect();
+                        text_err(format!(
+                            "Ambiguous resolve '{address_str}': matches {str_refs:?}"
+                        ))
+                    }
+                    Err(e) => text_err(format!("Internal resolve error: {e}")),
                 }
+            } else {
+                match svc.resolve(address_str) {
+                    Ok(ResolveResult::Found(r_ref)) => {
+                        text_ok(json!({ "ref": r_ref.to_string() }))
+                    }
+                    Ok(ResolveResult::NotFound) => {
+                        text_err(format!("Resource not found: {address_str}"))
+                    }
+                    Ok(ResolveResult::Ambiguous(refs)) => {
+                        let str_refs: Vec<String> =
+                            refs.iter().map(|r| r.to_string()).collect();
+                        text_err(format!(
+                            "Ambiguous resolve '{address_str}': matches {str_refs:?}"
+                        ))
+                    }
+                    Err(e) => text_err(format!("Internal resolve error: {e}")),
+                }
+            }
+        })
+    }
+
+    #[tool(description = "Query resources in the space")]
+    fn query(
+        &self,
+        Parameters(args): Parameters<QueryArgs>,
+    ) -> Result<CallToolResult, McpError> {
+        self.with_service(|svc| {
+            let mut selector: Selector = Selector::default();
+            if let Some(kind_str) = args.kind.as_deref() {
+                match kind_str {
+                    "document" => selector.kind = Some(ResourceKind::Document),
+                    "heading" => selector.kind = Some(ResourceKind::Heading),
+                    "attachment" => selector.kind = Some(ResourceKind::Attachment),
+                    other => return text_err(format!("Unknown resource kind: {other}")),
+                }
+            }
+            if let Some(title_sub) = args.title_contains.as_deref() {
+                selector.title_contains = Some(title_sub.to_owned());
+            }
+            match svc.query(&selector) {
+                Ok(page) => match serde_json::to_value(&page) {
+                    Ok(v) => text_ok(v),
+                    Err(e) => text_err(format!("Internal query serialization error: {e}")),
+                },
+                Err(e) => text_err(format!("Internal query error: {e}")),
+            }
+        })
+    }
+
+    #[tool(description = "Read details of a resource by ref")]
+    fn read(
+        &self,
+        Parameters(args): Parameters<RefArgs>,
+    ) -> Result<CallToolResult, McpError> {
+        self.with_service(|svc| {
+            let r_ref = match ResourceRef::parse(&args.r#ref) {
+                Ok(r) => r,
                 Err(e) => {
-                    let err_resp = json!({
-                        "jsonrpc": "2.0",
-                        "id": Value::Null,
-                        "error": {
-                            "code": -32700,
-                            "message": format!("Parse error: {e}")
-                        }
-                    });
-                    writeln!(writer, "{}", serde_json::to_string(&err_resp)?)?;
-                    writer.flush()?;
+                    return text_err(format!(
+                        "Invalid resource ref '{}': {e}",
+                        args.r#ref
+                    ));
                 }
+            };
+            match svc.read(&r_ref) {
+                Ok(Some(res)) => match serde_json::to_value(&res) {
+                    Ok(v) => text_ok(v),
+                    Err(e) => text_err(format!("Internal read serialization error: {e}")),
+                },
+                Ok(None) => text_err(format!("Resource not found: {}", args.r#ref)),
+                Err(e) => text_err(format!("Internal read error: {e}")),
             }
-
-            line.clear();
-        }
-
-        Ok(())
+        })
     }
 
-    fn handle_request<S: ProjectionStore>(
-        id: Option<Value>,
-        method: &str,
-        params: Value,
-        service: &mut ApplicationService<S>,
-    ) -> Option<Value> {
-        let req_id = id?;
-
-        match method {
-            "initialize" => Some(json!({
-                "jsonrpc": "2.0",
-                "id": req_id,
-                "result": {
-                    "protocolVersion": "2024-11-05",
-                    "capabilities": {
-                        "tools": {}
-                    },
-                    "serverInfo": {
-                        "name": "notez-mcp",
-                        "version": "0.1.0"
-                    }
+    #[tool(description = "Inspect projection status and resources. With no ref, returns a project-level snapshot.")]
+    fn inspect(
+        &self,
+        Parameters(args): Parameters<InspectArgs>,
+    ) -> Result<CallToolResult, McpError> {
+        // resolve_links + reindex_links need &mut self, so take the mutex
+        // mutably. The link_list + diagnose_link + query variants are read-only
+        // but we run them all through the same mutex to keep the snapshot
+        // consistent.
+        self.with_service_mut(|svc| {
+            if let Some(ref_str) = args.r#ref.as_deref() {
+                let parsed = match ResourceRef::parse(ref_str) {
+                    Ok(r) => r,
+                    Err(e) => return text_err(format!("Invalid resource ref '{ref_str}': {e}")),
+                };
+                let occs = match svc.list_links(&parsed) {
+                    Ok(o) => o,
+                    Err(e) => return text_err(format!("Internal inspect error: {e}")),
+                };
+                let resolved = match svc.resolve_links(&parsed) {
+                    Ok(r) => r,
+                    Err(e) => return text_err(format!("Internal inspect error: {e}")),
+                };
+                let diags = match svc.diagnose_link(&parsed) {
+                    Ok(d) => d,
+                    Err(e) => return text_err(format!("Internal inspect error: {e}")),
+                };
+                let mut by_status = serde_json::Map::new();
+                for d in &diags {
+                    let key = format!("{:?}", d.status);
+                    let count = by_status.get(&key).and_then(|v| v.as_u64()).unwrap_or(0);
+                    by_status.insert(key, serde_json::json!(count + 1));
                 }
-            })),
-
-            "tools/list" => Some(json!({
-                "jsonrpc": "2.0",
-                "id": req_id,
-                "result": {
-                    "tools": [
-                        {
-                            "name": "resolve",
-                            "description": "Resolve a query string to a ResourceRef",
-                            "inputSchema": {
-                                "type": "object",
-                                "properties": {
-                                    "query": { "type": "string" }
-                                },
-                                "required": ["query"],
-                                "additionalProperties": false
-                            }
-                        },
-                        {
-                            "name": "query",
-                            "description": "Query resources in the space",
-                            "inputSchema": {
-                                "type": "object",
-                                "properties": {
-                                    "kind": { "type": "string" },
-                                    "title_contains": { "type": "string" }
-                                },
-                                "additionalProperties": false
-                            }
-                        },
-                        {
-                            "name": "read",
-                            "description": "Read details of a resource by ref",
-                            "inputSchema": {
-                                "type": "object",
-                                "properties": {
-                                    "ref": { "type": "string" }
-                                },
-                                "required": ["ref"],
-                                "additionalProperties": false
-                            }
-                        },
-                        {
-                            "name": "inspect",
-                            "description": "Inspect projection status and resources",
-                            "inputSchema": {
-                                "type": "object",
-                                "properties": {},
-                                "additionalProperties": false
-                            }
-                        },
-                        {
-                            "name": "inspect_rules",
-                            "description": "Inspect rule traces for a resource ref",
-                            "inputSchema": {
-                                "type": "object",
-                                "properties": {
-                                    "ref": { "type": "string" }
-                                },
-                                "required": ["ref"],
-                                "additionalProperties": false
-                            }
-                        },
-                        {
-                            "name": "link_list",
-                            "description": "List link occurrences for a resource",
-                            "inputSchema": {
-                                "type": "object",
-                                "properties": {
-                                    "ref": { "type": "string" }
-                                },
-                                "required": ["ref"],
-                                "additionalProperties": false
-                            }
-                        },
-                        {
-                            "name": "link_resolve",
-                            "description": "Re-resolve link occurrences for a resource and return relations",
-                            "inputSchema": {
-                                "type": "object",
-                                "properties": {
-                                    "ref": { "type": "string" }
-                                },
-                                "required": ["ref"],
-                                "additionalProperties": false
-                            }
-                        },
-                        {
-                            "name": "link_diagnose",
-                            "description": "Diagnose link occurrences (status + candidates) for a resource",
-                            "inputSchema": {
-                                "type": "object",
-                                "properties": {
-                                    "ref": { "type": "string" }
-                                },
-                                "required": ["ref"],
-                                "additionalProperties": false
-                            }
-                        },
-                        {
-                            "name": "link_reindex",
-                            "description": "Reindex link status counts for the whole space",
-                            "inputSchema": {
-                                "type": "object",
-                                "properties": {
-                                    "space": { "type": "string" }
-                                },
-                                "additionalProperties": false
-                            }
-                        },
-                        {
-                            "name": "inspect",
-                            "description": "Inspect projection status and resources",
-                            "inputSchema": {
-                                "type": "object",
-                                "properties": {
-                                    "ref": { "type": "string" }
-                                },
-                                "additionalProperties": false
-                            }
-                        },
-                        {
-                            "name": "agenda",
-                            "inputSchema": {
-                                "type": "object",
-                                "properties": {},
-                                "additionalProperties": false
-                            }
-                        },
-                        {
-                            "name": "task_transition",
-                            "description": "Transition task state",
-                            "inputSchema": {
-                                "type": "object",
-                                "properties": {
-                                    "ref": { "type": "string" },
-                                    "to": { "type": "string" },
-                                    "timestamp": { "type": "string" }
-                                },
-                                "required": ["ref", "to"],
-                                "additionalProperties": false
-                            }
-                        },
-                        {
-                            "name": "source_list",
-                            "description": "List configured sources in the space",
-                            "inputSchema": {
-                                "type": "object",
-                                "properties": {
-                                    "space": { "type": "string" }
-                                },
-                                "additionalProperties": false
-                            }
-                        },
-                        {
-                            "name": "source_add",
-                            "description": "Add an external source to the space",
-                            "inputSchema": {
-                                "type": "object",
-                                "properties": {
-                                    "space": { "type": "string" },
-                                    "id": { "type": "string" },
-                                    "kind": { "type": "string" },
-                                    "path": { "type": "string" },
-                                    "read_only": { "type": "boolean" }
-                                },
-                                "required": ["id", "kind", "path"],
-                                "additionalProperties": false
-                            }
-                        },
-                        {
-                            "name": "attachment_add",
-                            "description": "Add an attachment file to space",
-                            "inputSchema": {
-                                "type": "object",
-                                "properties": {
-                                    "space": { "type": "string" },
-                                    "path": { "type": "string" },
-                                    "mime": { "type": "string" }
-                                },
-                                "required": ["path"],
-                                "additionalProperties": false
-                            }
-                        },
-                        {
-                            "name": "attachment_extract",
-                            "description": "Run text/metadata extraction job on attachment ref",
-                            "inputSchema": {
-                                "type": "object",
-                                "properties": {
-                                    "space": { "type": "string" },
-                                    "ref": { "type": "string" }
-                                },
-                                "required": ["ref"],
-                                "additionalProperties": false
-                            }
-                        },
-                        {
-                            "name": "query_segments",
-                            "description": "Query extracted text segments for attachment ref",
-                            "inputSchema": {
-                                "type": "object",
-                                "properties": {
-                                    "ref": { "type": "string" }
-                                },
-                                "required": ["ref"],
-                                "additionalProperties": false
-                            }
-                        },
-                        {
-                            "name": "community_create",
-                            "description": "Create a community in space",
-                            "inputSchema": {
-                                "type": "object",
-                                "properties": {
-                                    "space": { "type": "string" },
-                                    "id": { "type": "string" },
-                                    "name": { "type": "string" },
-                                    "kind": { "type": "string" },
-                                    "title_contains": { "type": "string" }
-                                },
-                                "required": ["id", "name"],
-                                "additionalProperties": false
-                            }
-                        },
-                        {
-                            "name": "derive_artifact",
-                            "description": "Derive a recipe artifact (summary, llms.txt, context-pack, skill-ir)",
-                            "inputSchema": {
-                                "type": "object",
-                                "properties": {
-                                    "space": { "type": "string" },
-                                    "community": { "type": "string" },
-                                    "recipe": { "type": "string" }
-                                },
-                                "required": ["community", "recipe"],
-                                "additionalProperties": false
-                            }
-                        },
-                        {
-                            "name": "export_skill",
-                            "description": "Export a SKILL.md package for a community",
-                            "inputSchema": {
-                                "type": "object",
-                                "properties": {
-                                    "space": { "type": "string" },
-                                    "community": { "type": "string" },
-                                    "description": { "type": "string" },
-                                    "out": { "type": "string" }
-                                },
-                                "required": ["community", "out"],
-                                "additionalProperties": false
-                            }
-                        },
-                        {
-                            "name": "sync_push",
-                            "description": "Push space changes to shared folder",
-                            "inputSchema": {
-                                "type": "object",
-                                "properties": {
-                                    "space": { "type": "string" },
-                                    "actor": { "type": "string" },
-                                    "folder": { "type": "string" }
-                                },
-                                "required": ["folder"],
-                                "additionalProperties": false
-                            }
-                        },
-                        {
-                            "name": "sync_pull",
-                            "description": "Pull changes from shared folder into space",
-                            "inputSchema": {
-                                "type": "object",
-                                "properties": {
-                                    "space": { "type": "string" },
-                                    "actor": { "type": "string" },
-                                    "folder": { "type": "string" }
-                                },
-                                "required": ["folder"],
-                                "additionalProperties": false
-                            }
-                        },
-                        {
-                            "name": "sync_conflicts",
-                            "description": "List active sync conflicts in space",
-                            "inputSchema": {
-                                "type": "object",
-                                "properties": {
-                                    "space": { "type": "string" }
-                                },
-                                "additionalProperties": false
-                            }
-                        },
-                        {
-                            "name": "space_doctor",
-                            "description": "Run space integrity diagnostics",
-                            "inputSchema": {
-                                "type": "object",
-                                "properties": {
-                                    "space": { "type": "string" }
-                                },
-                                "additionalProperties": false
-                            }
-                        },
-                        {
-                            "name": "job_list",
-                            "description": "List background jobs and tasks",
-                            "inputSchema": {
-                                "type": "object",
-                                "properties": {
-                                    "space": { "type": "string" }
-                                },
-                                "additionalProperties": false
-                            }
-                        },
-                        {
-                            "name": "artifact_stale",
-                            "description": "Check artifact freshness against source files",
-                            "inputSchema": {
-                                "type": "object",
-                                "properties": {
-                                    "space": { "type": "string" }
-                                },
-                                "additionalProperties": false
-                            }
-                        }
-                    ]
-                }
-            })),
-
-            "tools/call" => {
-                let tool_name = params
-                    .get("name")
-                    .and_then(|n| n.as_str())
-                    .unwrap_or_default();
-                let args = params.get("arguments").cloned().unwrap_or(json!({}));
-
-                let tool_res = Self::call_tool(tool_name, args, service);
-                Some(match tool_res {
-                    Ok(text) => json!({
-                        "jsonrpc": "2.0",
-                        "id": req_id,
-                        "result": {
-                            "content": [
-                                {
-                                    "type": "text",
-                                    "text": text
-                                }
-                            ]
-                        }
-                    }),
-                    Err((err_msg, is_tool_err)) => {
-                        if is_tool_err {
-                            json!({
-                                "jsonrpc": "2.0",
-                                "id": req_id,
-                                "result": {
-                                    "content": [
-                                        {
-                                            "type": "text",
-                                            "text": err_msg
-                                        }
-                                    ],
-                                    "isError": true
-                                }
-                            })
-                        } else {
-                            json!({
-                                "jsonrpc": "2.0",
-                                "id": req_id,
-                                "error": {
-                                    "code": -32602,
-                                    "message": err_msg
-                                }
-                            })
-                        }
-                    }
-                })
-            }
-
-            _ => Some(json!({
-                "jsonrpc": "2.0",
-                "id": req_id,
-                "error": {
-                    "code": -32601,
-                    "message": format!("Method not found: {method}")
-                }
-            })),
-        }
-    }
-
-    fn call_tool<S: ProjectionStore>(
-        name: &str,
-        args: Value,
-        service: &mut ApplicationService<S>,
-    ) -> Result<String, (String, bool)> {
-        match name {
-            "resolve" => {
-                let address_str = args
-                    .get("address")
-                    .or_else(|| args.get("query"))
-                    .and_then(|q| q.as_str())
-                    .ok_or_else(|| ("Invalid params: missing 'address'".to_string(), false))?;
-                if let Ok(addr) = domain::ResourceAddress::parse(address_str) {
-                    match service.resolve_address(&addr) {
-                        Ok(ResolveResult::Found(r_ref)) => {
-                            Ok(json!({ "ref": r_ref.to_string() }).to_string())
-                        }
-                        Ok(ResolveResult::NotFound) => {
-                            Err((format!("Resource not found: {address_str}"), true))
-                        }
-                        Ok(ResolveResult::Ambiguous(refs)) => {
-                            let str_refs: Vec<String> = refs.iter().map(|r| r.to_string()).collect();
-                            Err((
-                                format!("Ambiguous resolve '{address_str}': matches {str_refs:?}"),
-                                true,
-                            ))
-                        }
-                        Err(e) => Err((format!("Internal resolve error: {e}"), true)),
-                    }
-                } else {
-                    match service.resolve(address_str) {
-                        Ok(ResolveResult::Found(r_ref)) => {
-                            Ok(json!({ "ref": r_ref.to_string() }).to_string())
-                        }
-                        Ok(ResolveResult::NotFound) => {
-                            Err((format!("Resource not found: {address_str}"), true))
-                        }
-                        Ok(ResolveResult::Ambiguous(refs)) => {
-                            let str_refs: Vec<String> = refs.iter().map(|r| r.to_string()).collect();
-                            Err((
-                                format!("Ambiguous resolve '{address_str}': matches {str_refs:?}"),
-                                true,
-                            ))
-                        }
-                        Err(e) => Err((format!("Internal resolve error: {e}"), true)),
-                    }
-                }
-            }
-            "link_list" => {
-                let ref_str = args
-                    .get("ref")
-                    .and_then(|r| r.as_str())
-                    .ok_or_else(|| ("Invalid params: missing 'ref'".to_string(), false))?;
-                let parsed = ResourceRef::parse(ref_str)
-                    .map_err(|e| (format!("Invalid resource ref '{ref_str}': {e}"), false))?;
-                match service.list_links(&parsed) {
-                    Ok(occs) => Ok(serde_json::to_string(&occs).unwrap()),
-                    Err(e) => Err((format!("Internal link_list error: {e}"), true)),
-                }
-            }
-            "link_resolve" => {
-                let ref_str = args
-                    .get("ref")
-                    .and_then(|r| r.as_str())
-                    .ok_or_else(|| ("Invalid params: missing 'ref'".to_string(), false))?;
-                let parsed = ResourceRef::parse(ref_str)
-                    .map_err(|e| (format!("Invalid resource ref '{ref_str}': {e}"), false))?;
-                match service.resolve_links(&parsed) {
-                    Ok(rels) => Ok(serde_json::to_string(&rels).unwrap()),
-                    Err(e) => Err((format!("Internal link_resolve error: {e}"), true)),
-                }
-            }
-            "link_diagnose" => {
-                let ref_str = args
-                    .get("ref")
-                    .and_then(|r| r.as_str())
-                    .ok_or_else(|| ("Invalid params: missing 'ref'".to_string(), false))?;
-                let parsed = ResourceRef::parse(ref_str)
-                    .map_err(|e| (format!("Invalid resource ref '{ref_str}': {e}"), false))?;
-                match service.diagnose_link(&parsed) {
-                    Ok(diags) => Ok(serde_json::to_string(&diags).unwrap()),
-                    Err(e) => Err((format!("Internal link_diagnose error: {e}"), true)),
-                }
-            }
-            "link_reindex" => {
-                let space_str = args
-                    .get("space")
-                    .and_then(|s| s.as_str())
-                    .unwrap_or(".");
-                let space_path = std::path::Path::new(space_str);
-                match service.reindex_links(space_path) {
-                    Ok(report) => Ok(serde_json::to_string(&report).unwrap()),
-                    Err(e) => Err((format!("Internal link_reindex error: {e}"), true)),
-                }
-            }
-            "inspect" => {
-                if let Some(ref_str) = args.get("ref").and_then(|r| r.as_str()) {
-                    let parsed = ResourceRef::parse(ref_str).map_err(|e| {
-                        (format!("Invalid resource ref '{ref_str}': {e}"), false)
-                    })?;
-                    let occs = service.list_links(&parsed).map_err(|e| {
-                        (format!("Internal inspect error: {e}"), true)
-                    })?;
-                    let resolved = service.resolve_links(&parsed).map_err(|e| {
-                        (format!("Internal inspect error: {e}"), true)
-                    })?;
-                    let diags = service.diagnose_link(&parsed).map_err(|e| {
-                        (format!("Internal inspect error: {e}"), true)
-                    })?;
-                    let mut by_status = serde_json::Map::new();
-                    for d in &diags {
-                        let key = format!("{:?}", d.status);
-                        let count = by_status
-                            .get(&key)
-                            .and_then(|v| v.as_u64())
-                            .unwrap_or(0);
-                        by_status.insert(key, serde_json::json!(count + 1));
-                    }
-                    Ok(json!({
-                        "ref": parsed.to_string(),
-                        "occurrences": occs,
-                        "resolved_relations": resolved,
-                        "diagnostics": diags,
-                        "occurrences_by_status": by_status,
-                    })
-                    .to_string())
-                } else {
-                    // No ref provided: project-level snapshot.
-                    let page = service.query(&Selector::new()).map_err(|e| {
-                        (format!("Internal inspect error: {e}"), true)
-                    })?;
-                    Ok(json!({
+                text_ok(json!({
+                    "ref": parsed.to_string(),
+                    "occurrences": occs,
+                    "resolved_relations": resolved,
+                    "diagnostics": diags,
+                    "occurrences_by_status": by_status,
+                }))
+            } else {
+                let selector: Selector = Selector::default();
+                match svc.query(&selector) {
+                    Ok(page) => text_ok(json!({
                         "status": "ok",
                         "total_items": page.items.len(),
-                    })
-                    .to_string())
+                    })),
+                    Err(e) => text_err(format!("Internal inspect error: {e}")),
                 }
             }
-
-            "read" => {
-                let ref_str = args
-                    .get("ref")
-                    .and_then(|r| r.as_str())
-                    .ok_or_else(|| ("Invalid params: missing 'ref'".to_string(), false))?;
-                let r_ref = ResourceRef::parse(ref_str)
-                    .map_err(|e| (format!("Invalid resource ref '{ref_str}': {e}"), false))?;
-
-                match service.read(&r_ref) {
-                    Ok(Some(res)) => Ok(serde_json::to_string(&res).unwrap()),
-                    Ok(None) => Err((format!("Resource not found: {ref_str}"), true)),
-                    Err(e) => Err((format!("Internal read error: {e}"), true)),
-                }
-            }
-
-            "inspect_rules" => {
-                let ref_str = args
-                    .get("ref")
-                    .and_then(|r| r.as_str())
-                    .ok_or_else(|| ("Invalid params: missing 'ref'".to_string(), false))?;
-                let r_ref = ResourceRef::parse(ref_str)
-                    .map_err(|e| (format!("Invalid resource ref '{ref_str}': {e}"), false))?;
-
-                match service.inspect_rules(&r_ref) {
-                    Ok(Some(inspect_res)) => Ok(serde_json::to_string(&inspect_res).unwrap()),
-                    Ok(None) => Err((format!("Resource not found: {ref_str}"), true)),
-                    Err(e) => Err((format!("Internal inspect_rules error: {e}"), true)),
-                }
-            }
-
-            "agenda" => match service.agenda() {
-                Ok(agenda) => Ok(serde_json::to_string(&agenda).unwrap()),
-                Err(e) => Err((format!("Internal agenda error: {e}"), true)),
-            },
-
-            "task_transition" => {
-                let ref_str = args
-                    .get("ref")
-                    .and_then(|r| r.as_str())
-                    .ok_or_else(|| ("Invalid params: missing 'ref'".to_string(), false))?;
-                let to_state = args
-                    .get("to")
-                    .and_then(|t| t.as_str())
-                    .ok_or_else(|| ("Invalid params: missing 'to'".to_string(), false))?;
-                let timestamp = args
-                    .get("timestamp")
-                    .and_then(|ts| ts.as_str())
-                    .unwrap_or("2026-07-22 Wed 16:00");
-
-                let r_ref = ResourceRef::parse(ref_str)
-                    .map_err(|e| (format!("Invalid resource ref '{ref_str}': {e}"), false))?;
-
-                match service.transition_task(&r_ref, to_state, timestamp) {
-                    Ok(transition) => Ok(serde_json::to_string(&transition).unwrap()),
-                    Err(e) => Err((format!("Internal transition error: {e}"), true)),
-                }
-            }
-            "source_list" => {
-                let space_str = args.get("space").and_then(|s| s.as_str()).unwrap_or(".");
-                let space_path = std::path::Path::new(space_str);
-                match service.list_sources(space_path) {
-                    Ok(sources) => Ok(serde_json::to_string(&sources).unwrap()),
-                    Err(e) => Err((format!("Internal source_list error: {e}"), true)),
-                }
-            }
-            "source_add" => {
-                let space_str = args.get("space").and_then(|s| s.as_str()).unwrap_or(".");
-                let space_path = std::path::Path::new(space_str);
-
-                let id = args
-                    .get("id")
-                    .and_then(|i| i.as_str())
-                    .ok_or_else(|| ("Invalid params: missing 'id'".to_string(), false))?;
-                let kind_str = args
-                    .get("kind")
-                    .and_then(|k| k.as_str())
-                    .ok_or_else(|| ("Invalid params: missing 'kind'".to_string(), false))?;
-                let path_str = args
-                    .get("path")
-                    .and_then(|p| p.as_str())
-                    .ok_or_else(|| ("Invalid params: missing 'path'".to_string(), false))?;
-                let read_only = args
-                    .get("read_only")
-                    .and_then(|r| r.as_bool())
-                    .unwrap_or(false);
-                let include_paths = parse_path_list(args.get("include_paths"));
-                let exclude_paths = parse_path_list(args.get("exclude_paths"));
-
-                let kind = match kind_str {
-                    "native" => source::SourceKind::Native,
-                    "git" => source::SourceKind::Git,
-                    "obsidian" => source::SourceKind::Obsidian,
-                    _ => return Err((format!("Unknown source kind: {kind_str}"), false)),
-                };
-
-                let config = source::SourceConfig {
-                    id: id.to_string(),
-                    kind,
-                    path: std::path::PathBuf::from(path_str),
-                    read_only,
-                    include_paths,
-                    exclude_paths,
-                };
-
-                match service.add_source(space_path, config) {
-                    Ok(_) => Ok(json!({ "added": true }).to_string()),
-                    Err(e) => Err((format!("Internal source_add error: {e}"), true)),
-                }
-            }
-            "attachment_add" => {
-                let space_str = args.get("space").and_then(|s| s.as_str()).unwrap_or(".");
-                let space_path = std::path::Path::new(space_str);
-
-                let path_str = args
-                    .get("path")
-                    .and_then(|p| p.as_str())
-                    .ok_or_else(|| ("Invalid params: missing 'path'".to_string(), false))?;
-                let default_mime = args
-                    .get("mime")
-                    .and_then(|m| m.as_str())
-                    .unwrap_or("application/octet-stream");
-
-                let file_path = std::path::Path::new(path_str);
-                match service.add_attachment(space_path, file_path, default_mime) {
-                    Ok(att_ref) => Ok(json!({ "ref": att_ref.to_string() }).to_string()),
-                    Err(e) => Err((format!("Internal attachment_add error: {e}"), true)),
-                }
-            }
-
-            "attachment_extract" => {
-                let space_str = args.get("space").and_then(|s| s.as_str()).unwrap_or(".");
-                let space_path = std::path::Path::new(space_str);
-
-                let ref_str = args
-                    .get("ref")
-                    .and_then(|r| r.as_str())
-                    .ok_or_else(|| ("Invalid params: missing 'ref'".to_string(), false))?;
-                let r_ref = ResourceRef::parse(ref_str)
-                    .map_err(|e| (format!("Invalid resource ref '{ref_str}': {e}"), false))?;
-
-                match service.run_extraction(space_path, &r_ref) {
-                    Ok(segments) => Ok(json!({
-                        "attachment_ref": ref_str,
-                        "segments_count": segments.len()
-                    })
-                    .to_string()),
-                    Err(e) => Err((format!("Internal attachment_extract error: {e}"), true)),
-                }
-            }
-
-            "query_segments" => {
-                let ref_str = args
-                    .get("ref")
-                    .and_then(|r| r.as_str())
-                    .ok_or_else(|| ("Invalid params: missing 'ref'".to_string(), false))?;
-                let r_ref = ResourceRef::parse(ref_str)
-                    .map_err(|e| (format!("Invalid resource ref '{ref_str}': {e}"), false))?;
-
-                match service.query_segments(&r_ref) {
-                    Ok(segments) => Ok(serde_json::to_string(&segments).unwrap()),
-                    Err(e) => Err((format!("Internal query_segments error: {e}"), true)),
-                }
-            }
-            "community_create" => {
-                let space_str = args.get("space").and_then(|s| s.as_str()).unwrap_or(".");
-                let space_path = std::path::Path::new(space_str);
-
-                let id = args
-                    .get("id")
-                    .and_then(|i| i.as_str())
-                    .ok_or_else(|| ("Invalid params: missing 'id'".to_string(), false))?;
-                let name = args
-                    .get("name")
-                    .and_then(|n| n.as_str())
-                    .ok_or_else(|| ("Invalid params: missing 'name'".to_string(), false))?;
-
-                let mut selector = Selector::new();
-                if let Some(kind_str) = args.get("kind").and_then(|k| k.as_str()) {
-                    match kind_str {
-                        "document" => selector.kind = Some(ResourceKind::Document),
-                        "heading" => selector.kind = Some(ResourceKind::Heading),
-                        "attachment" => selector.kind = Some(ResourceKind::Attachment),
-                        _ => return Err((format!("Unknown resource kind: {kind_str}"), false)),
-                    }
-                }
-                if let Some(title_sub) = args.get("title_contains").and_then(|t| t.as_str()) {
-                    selector.title_contains = Some(title_sub.to_string());
-                }
-
-                let comm = domain::community::Community {
-                    id: id.to_string(),
-                    name: name.to_string(),
-                    selector,
-                    pinned_members: vec![],
-                    excluded_members: vec![],
-                };
-
-                match service.create_community(space_path, comm) {
-                    Ok(_) => Ok(json!({ "created": true }).to_string()),
-                    Err(e) => Err((format!("Internal community_create error: {e}"), true)),
-                }
-            }
-
-            "derive_artifact" => {
-                let space_str = args.get("space").and_then(|s| s.as_str()).unwrap_or(".");
-                let space_path = std::path::Path::new(space_str);
-
-                let community_id = args
-                    .get("community")
-                    .and_then(|c| c.as_str())
-                    .ok_or_else(|| ("Invalid params: missing 'community'".to_string(), false))?;
-                let recipe_name = args
-                    .get("recipe")
-                    .and_then(|r| r.as_str())
-                    .ok_or_else(|| ("Invalid params: missing 'recipe'".to_string(), false))?;
-
-                match service.derive_artifact(space_path, community_id, recipe_name) {
-                    Ok(derived) => Ok(json!({
-                        "recipe": recipe_name,
-                        "content": derived.content
-                    })
-                    .to_string()),
-                    Err(e) => Err((format!("Internal derive_artifact error: {e}"), true)),
-                }
-            }
-
-            "export_skill" => {
-                let space_str = args.get("space").and_then(|s| s.as_str()).unwrap_or(".");
-                let space_path = std::path::Path::new(space_str);
-
-                let community_id = args
-                    .get("community")
-                    .and_then(|c| c.as_str())
-                    .ok_or_else(|| ("Invalid params: missing 'community'".to_string(), false))?;
-                let description = args
-                    .get("description")
-                    .and_then(|d| d.as_str())
-                    .unwrap_or("Exported Agent Skill");
-                let out_str = args
-                    .get("out")
-                    .and_then(|o| o.as_str())
-                    .ok_or_else(|| ("Invalid params: missing 'out'".to_string(), false))?;
-                let out_path = std::path::Path::new(out_str);
-
-                match service.export_skill(space_path, community_id, description, out_path) {
-                    Ok(package) => Ok(json!({
-                        "name": package.name,
-                        "path": package.package_path.to_string_lossy()
-                    })
-                    .to_string()),
-                    Err(e) => Err((format!("Internal export_skill error: {e}"), true)),
-                }
-            }
-            "sync_push" => {
-                let space_str = args.get("space").and_then(|s| s.as_str()).unwrap_or(".");
-                let space_path = std::path::Path::new(space_str);
-                let actor = args
-                    .get("actor")
-                    .and_then(|a| a.as_str())
-                    .unwrap_or("mcp_actor");
-                let folder_str = args
-                    .get("folder")
-                    .and_then(|f| f.as_str())
-                    .ok_or_else(|| ("Invalid params: missing 'folder'".to_string(), false))?;
-                let folder_path = std::path::Path::new(folder_str);
-
-                match service.sync_push(actor, space_path, folder_path) {
-                    Ok(report) => Ok(json!({
-                        "pushed_files": report.pushed_files,
-                        "pushed_objects": report.pushed_objects
-                    })
-                    .to_string()),
-                    Err(e) => Err((format!("Internal sync_push error: {e}"), true)),
-                }
-            }
-
-            "sync_pull" => {
-                let space_str = args.get("space").and_then(|s| s.as_str()).unwrap_or(".");
-                let space_path = std::path::Path::new(space_str);
-                let actor = args
-                    .get("actor")
-                    .and_then(|a| a.as_str())
-                    .unwrap_or("mcp_actor");
-                let folder_str = args
-                    .get("folder")
-                    .and_then(|f| f.as_str())
-                    .ok_or_else(|| ("Invalid params: missing 'folder'".to_string(), false))?;
-                let folder_path = std::path::Path::new(folder_str);
-
-                match service.sync_pull(actor, space_path, folder_path) {
-                    Ok(report) => Ok(json!({
-                        "pulled_files": report.pulled_files,
-                        "merged_files": report.merged_files,
-                        "conflicts_count": report.conflicts.len()
-                    })
-                    .to_string()),
-                    Err(e) => Err((format!("Internal sync_pull error: {e}"), true)),
-                }
-            }
-
-            "sync_conflicts" => match service.list_conflicts() {
-                Ok(conflicts) => Ok(serde_json::to_string(&conflicts).unwrap()),
-                Err(e) => Err((format!("Internal sync_conflicts error: {e}"), true)),
-            },
-            "space_doctor" => {
-                let space_str = args.get("space").and_then(|s| s.as_str()).unwrap_or(".");
-                let space_path = std::path::Path::new(space_str);
-                match service.space_doctor(space_path) {
-                    Ok(report) => Ok(serde_json::to_string(&report).unwrap()),
-                    Err(e) => Err((format!("Internal space_doctor error: {e}"), true)),
-                }
-            }
-
-            "job_list" => match service.list_jobs() {
-                Ok(jobs) => Ok(serde_json::to_string(&jobs).unwrap()),
-                Err(e) => Err((format!("Internal job_list error: {e}"), true)),
-            },
-
-            "artifact_stale" => {
-                let space_str = args.get("space").and_then(|s| s.as_str()).unwrap_or(".");
-                let space_path = std::path::Path::new(space_str);
-                match service.check_artifact_freshness(space_path) {
-                    Ok(report) => Ok(serde_json::to_string(&report).unwrap()),
-                    Err(e) => Err((format!("Internal artifact_stale error: {e}"), true)),
-                }
-            }
-            _ => Err((format!("Unknown tool: {name}"), false)),
-        }
+        })
     }
+
+    #[tool(description = "Inspect rule traces for a resource ref")]
+    fn inspect_rules(
+        &self,
+        Parameters(args): Parameters<RefArgs>,
+    ) -> Result<CallToolResult, McpError> {
+        self.with_service(|svc| {
+            let r_ref = match ResourceRef::parse(&args.r#ref) {
+                Ok(r) => r,
+                Err(e) => {
+                    return text_err(format!(
+                        "Invalid resource ref '{}': {e}",
+                        args.r#ref
+                    ));
+                }
+            };
+            match svc.inspect_rules(&r_ref) {
+                Ok(Some(inspect_res)) => match serde_json::to_value(&inspect_res) {
+                    Ok(v) => text_ok(v),
+                    Err(e) => {
+                        text_err(format!("Internal inspect_rules serialization error: {e}"))
+                    }
+                },
+                Ok(None) => text_err(format!("Resource not found: {}", args.r#ref)),
+                Err(e) => text_err(format!("Internal inspect_rules error: {e}")),
+            }
+        })
+    }
+
+    #[tool(description = "List link occurrences for a resource")]
+    fn link_list(
+        &self,
+        Parameters(args): Parameters<RefArgs>,
+    ) -> Result<CallToolResult, McpError> {
+        self.with_service(|svc| {
+            let r_ref = match ResourceRef::parse(&args.r#ref) {
+                Ok(r) => r,
+                Err(e) => {
+                    return text_err(format!(
+                        "Invalid resource ref '{}': {e}",
+                        args.r#ref
+                    ));
+                }
+            };
+            match svc.list_links(&r_ref) {
+                Ok(occs) => match serde_json::to_value(&occs) {
+                    Ok(v) => text_ok(v),
+                    Err(e) => text_err(format!("Internal link_list serialization error: {e}")),
+                },
+                Err(e) => text_err(format!("Internal link_list error: {e}")),
+            }
+        })
+    }
+
+    #[tool(description = "Re-resolve link occurrences for a resource and return relations")]
+    fn link_resolve(
+        &self,
+        Parameters(args): Parameters<RefArgs>,
+    ) -> Result<CallToolResult, McpError> {
+        self.with_service_mut(|svc| {
+            let r_ref = match ResourceRef::parse(&args.r#ref) {
+                Ok(r) => r,
+                Err(e) => {
+                    return text_err(format!(
+                        "Invalid resource ref '{}': {e}",
+                        args.r#ref
+                    ));
+                }
+            };
+            match svc.resolve_links(&r_ref) {
+                Ok(rels) => match serde_json::to_value(&rels) {
+                    Ok(v) => text_ok(v),
+                    Err(e) => {
+                        text_err(format!("Internal link_resolve serialization error: {e}"))
+                    }
+                },
+                Err(e) => text_err(format!("Internal link_resolve error: {e}")),
+            }
+        })
+    }
+
+    #[tool(description = "Diagnose link occurrences (status + candidates) for a resource")]
+    fn link_diagnose(
+        &self,
+        Parameters(args): Parameters<RefArgs>,
+    ) -> Result<CallToolResult, McpError> {
+        self.with_service(|svc| {
+            let r_ref = match ResourceRef::parse(&args.r#ref) {
+                Ok(r) => r,
+                Err(e) => {
+                    return text_err(format!(
+                        "Invalid resource ref '{}': {e}",
+                        args.r#ref
+                    ));
+                }
+            };
+            match svc.diagnose_link(&r_ref) {
+                Ok(diags) => match serde_json::to_value(&diags) {
+                    Ok(v) => text_ok(v),
+                    Err(e) => {
+                        text_err(format!("Internal link_diagnose serialization error: {e}"))
+                    }
+                },
+                Err(e) => text_err(format!("Internal link_diagnose error: {e}")),
+            }
+        })
+    }
+
+    #[tool(description = "Reindex link status counts for the whole space")]
+    fn link_reindex(
+        &self,
+        Parameters(args): Parameters<SpaceArgs>,
+    ) -> Result<CallToolResult, McpError> {
+        self.with_service_mut(|svc| {
+            let space = space_path(args.space.as_deref());
+            match svc.reindex_links(&space) {
+                Ok(report) => match serde_json::to_value(&report) {
+                    Ok(v) => text_ok(v),
+                    Err(e) => {
+                        text_err(format!("Internal link_reindex serialization error: {e}"))
+                    }
+                },
+                Err(e) => text_err(format!("Internal link_reindex error: {e}")),
+            }
+        })
+    }
+
+    #[tool(description = "Show the agenda (tasks + scheduled + deadline windows)")]
+    fn agenda(&self) -> Result<CallToolResult, McpError> {
+        self.with_service(|svc| match svc.agenda() {
+            Ok(agenda) => match serde_json::to_value(&agenda) {
+                Ok(v) => text_ok(v),
+                Err(e) => text_err(format!("Internal agenda serialization error: {e}")),
+            },
+            Err(e) => text_err(format!("Internal agenda error: {e}")),
+        })
+    }
+
+    #[tool(description = "Transition task state")]
+    fn task_transition(
+        &self,
+        Parameters(args): Parameters<TaskTransitionArgs>,
+    ) -> Result<CallToolResult, McpError> {
+        let r_ref = match ResourceRef::parse(&args.r#ref) {
+            Ok(r) => r,
+            Err(e) => {
+                return text_err(format!(
+                    "Invalid resource ref '{}': {e}",
+                    args.r#ref
+                ));
+            }
+        };
+        let timestamp = args.timestamp.as_deref().unwrap_or("2026-07-22 Wed 16:00");
+        self.with_service_mut(|svc| match svc.transition_task(&r_ref, &args.to, timestamp) {
+            Ok(transition) => match serde_json::to_value(&transition) {
+                Ok(v) => text_ok(v),
+                Err(e) => text_err(format!("Internal transition serialization error: {e}")),
+            },
+            Err(e) => text_err(format!("Internal transition error: {e}")),
+        })
+    }
+
+    #[tool(description = "List configured sources in the space")]
+    fn source_list(
+        &self,
+        Parameters(args): Parameters<SpaceArgs>,
+    ) -> Result<CallToolResult, McpError> {
+        self.with_service(|svc| {
+            let space = space_path(args.space.as_deref());
+            match svc.list_sources(&space) {
+                Ok(sources) => match serde_json::to_value(&sources) {
+                    Ok(v) => text_ok(v),
+                    Err(e) => text_err(format!("Internal source_list serialization error: {e}")),
+                },
+                Err(e) => text_err(format!("Internal source_list error: {e}")),
+            }
+        })
+    }
+
+    #[tool(description = "Add an external source to the space")]
+    fn source_add(
+        &self,
+        Parameters(args): Parameters<SourceAddArgs>,
+    ) -> Result<CallToolResult, McpError> {
+        let kind = match args.kind.as_str() {
+            "native" => source::SourceKind::Native,
+            "git" => source::SourceKind::Git,
+            "obsidian" => source::SourceKind::Obsidian,
+            other => return text_err(format!("Unknown source kind: {other}")),
+        };
+        let include_paths = args
+            .include_paths
+            .unwrap_or_default()
+            .into_iter()
+            .map(std::path::PathBuf::from)
+            .collect();
+        let exclude_paths = args
+            .exclude_paths
+            .unwrap_or_default()
+            .into_iter()
+            .map(std::path::PathBuf::from)
+            .collect();
+        let config = source::SourceConfig {
+            id: args.id.clone(),
+            kind,
+            path: std::path::PathBuf::from(&args.path),
+            read_only: args.read_only.unwrap_or(false),
+            include_paths,
+            exclude_paths,
+        };
+        let space = space_path(args.space.as_deref());
+        self.with_service_mut(|svc| match svc.add_source(&space, config) {
+            Ok(_) => text_ok(json!({ "added": true })),
+            Err(e) => text_err(format!("Internal source_add error: {e}")),
+        })
+    }
+
+    #[tool(description = "Add an attachment file to space")]
+    fn attachment_add(
+        &self,
+        Parameters(args): Parameters<AttachmentAddArgs>,
+    ) -> Result<CallToolResult, McpError> {
+        let space = space_path(args.space.as_deref());
+        let file_path = std::path::Path::new(&args.path);
+        let default_mime = args.mime.as_deref().unwrap_or("application/octet-stream");
+        self.with_service_mut(|svc| match svc.add_attachment(&space, file_path, default_mime) {
+            Ok(att_ref) => text_ok(json!({ "ref": att_ref.to_string() })),
+            Err(e) => text_err(format!("Internal attachment_add error: {e}")),
+        })
+    }
+
+    #[tool(description = "Run text/metadata extraction job on attachment ref")]
+    fn attachment_extract(
+        &self,
+        Parameters(args): Parameters<AttachmentExtractArgs>,
+    ) -> Result<CallToolResult, McpError> {
+        let space = space_path(args.space.as_deref());
+        let r_ref = match ResourceRef::parse(&args.r#ref) {
+            Ok(r) => r,
+            Err(e) => {
+                return text_err(format!(
+                    "Invalid resource ref '{}': {e}",
+                    args.r#ref
+                ));
+            }
+        };
+        self.with_service_mut(|svc| match svc.run_extraction(&space, &r_ref) {
+            Ok(segments) => text_ok(json!({
+                "attachment_ref": args.r#ref,
+                "segments_count": segments.len(),
+            })),
+            Err(e) => text_err(format!("Internal attachment_extract error: {e}")),
+        })
+    }
+
+    #[tool(description = "Query extracted text segments for attachment ref")]
+    fn query_segments(
+        &self,
+        Parameters(args): Parameters<RefArgs>,
+    ) -> Result<CallToolResult, McpError> {
+        self.with_service(|svc| {
+            let r_ref = match ResourceRef::parse(&args.r#ref) {
+                Ok(r) => r,
+                Err(e) => {
+                    return text_err(format!(
+                        "Invalid resource ref '{}': {e}",
+                        args.r#ref
+                    ));
+                }
+            };
+            match svc.query_segments(&r_ref) {
+                Ok(segments) => match serde_json::to_value(&segments) {
+                    Ok(v) => text_ok(v),
+                    Err(e) => {
+                        text_err(format!("Internal query_segments serialization error: {e}"))
+                    }
+                },
+                Err(e) => text_err(format!("Internal query_segments error: {e}")),
+            }
+        })
+    }
+
+    #[tool(description = "Create a community in space")]
+    fn community_create(
+        &self,
+        Parameters(args): Parameters<CommunityCreateArgs>,
+    ) -> Result<CallToolResult, McpError> {
+        let mut selector: Selector = Selector::default();
+        if let Some(kind_str) = args.kind.as_deref() {
+            match kind_str {
+                "document" => selector.kind = Some(ResourceKind::Document),
+                "heading" => selector.kind = Some(ResourceKind::Heading),
+                "attachment" => selector.kind = Some(ResourceKind::Attachment),
+                other => return text_err(format!("Unknown resource kind: {other}")),
+            }
+        }
+        if let Some(title_sub) = args.title_contains.as_deref() {
+            selector.title_contains = Some(title_sub.to_owned());
+        }
+        let comm = domain::community::Community {
+            id: args.id.clone(),
+            name: args.name.clone(),
+            selector,
+            pinned_members: vec![],
+            excluded_members: vec![],
+        };
+        let space = space_path(args.space.as_deref());
+        self.with_service_mut(|svc| match svc.create_community(&space, comm) {
+            Ok(_) => text_ok(json!({ "created": true })),
+            Err(e) => text_err(format!("Internal community_create error: {e}")),
+        })
+    }
+
+    #[tool(description = "Derive a recipe artifact (summary, llms.txt, context-pack, skill-ir)")]
+    fn derive_artifact(
+        &self,
+        Parameters(args): Parameters<DeriveArtifactArgs>,
+    ) -> Result<CallToolResult, McpError> {
+        let space = space_path(args.space.as_deref());
+        let recipe_name = args.recipe.clone();
+        self.with_service_mut(|svc| {
+            match svc.derive_artifact(&space, &args.community, &recipe_name) {
+                Ok(derived) => text_ok(json!({
+                    "recipe": recipe_name,
+                    "content": derived.content,
+                })),
+                Err(e) => text_err(format!("Internal derive_artifact error: {e}")),
+            }
+        })
+    }
+
+    #[tool(description = "Export a SKILL.md package for a community")]
+    fn export_skill(
+        &self,
+        Parameters(args): Parameters<ExportSkillArgs>,
+    ) -> Result<CallToolResult, McpError> {
+        let space = space_path(args.space.as_deref());
+        let description = args.description.as_deref().unwrap_or("Exported Agent Skill");
+        let out_path = std::path::Path::new(&args.out);
+        self.with_service_mut(|svc| {
+            match svc.export_skill(&space, &args.community, description, out_path) {
+                Ok(package) => text_ok(json!({
+                    "name": package.name,
+                    "path": package.package_path.to_string_lossy(),
+                })),
+                Err(e) => text_err(format!("Internal export_skill error: {e}")),
+            }
+        })
+    }
+
+    #[tool(description = "Push space changes to shared folder")]
+    fn sync_push(
+        &self,
+        Parameters(args): Parameters<SyncArgs>,
+    ) -> Result<CallToolResult, McpError> {
+        let space = space_path(args.space.as_deref());
+        let actor = args.actor.as_deref().unwrap_or("mcp_actor");
+        let folder_path = std::path::Path::new(&args.folder);
+        self.with_service_mut(|svc| match svc.sync_push(actor, &space, folder_path) {
+            Ok(report) => text_ok(json!({
+                "pushed_files": report.pushed_files,
+                "pushed_objects": report.pushed_objects,
+            })),
+            Err(e) => text_err(format!("Internal sync_push error: {e}")),
+        })
+    }
+
+    #[tool(description = "Pull changes from shared folder into space")]
+    fn sync_pull(
+        &self,
+        Parameters(args): Parameters<SyncArgs>,
+    ) -> Result<CallToolResult, McpError> {
+        let space = space_path(args.space.as_deref());
+        let actor = args.actor.as_deref().unwrap_or("mcp_actor");
+        let folder_path = std::path::Path::new(&args.folder);
+        self.with_service_mut(|svc| match svc.sync_pull(actor, &space, folder_path) {
+            Ok(report) => text_ok(json!({
+                "pulled_files": report.pulled_files,
+                "merged_files": report.merged_files,
+                "conflicts_count": report.conflicts.len(),
+            })),
+            Err(e) => text_err(format!("Internal sync_pull error: {e}")),
+        })
+    }
+
+    #[tool(description = "List active sync conflicts in space")]
+    fn sync_conflicts(&self) -> Result<CallToolResult, McpError> {
+        self.with_service(|svc| match svc.list_conflicts() {
+            Ok(conflicts) => match serde_json::to_value(&conflicts) {
+                Ok(v) => text_ok(v),
+                Err(e) => {
+                    text_err(format!("Internal sync_conflicts serialization error: {e}"))
+                }
+            },
+            Err(e) => text_err(format!("Internal sync_conflicts error: {e}")),
+        })
+    }
+
+    #[tool(description = "Run space integrity diagnostics")]
+    fn space_doctor(
+        &self,
+        Parameters(args): Parameters<SpaceArgs>,
+    ) -> Result<CallToolResult, McpError> {
+        self.with_service(|svc| {
+            let space = space_path(args.space.as_deref());
+            match svc.space_doctor(&space) {
+                Ok(report) => match serde_json::to_value(&report) {
+                    Ok(v) => text_ok(v),
+                    Err(e) => {
+                        text_err(format!("Internal space_doctor serialization error: {e}"))
+                    }
+                },
+                Err(e) => text_err(format!("Internal space_doctor error: {e}")),
+            }
+        })
+    }
+
+    #[tool(description = "List background jobs and tasks")]
+    fn job_list(&self) -> Result<CallToolResult, McpError> {
+        self.with_service(|svc| match svc.list_jobs() {
+            Ok(jobs) => match serde_json::to_value(&jobs) {
+                Ok(v) => text_ok(v),
+                Err(e) => text_err(format!("Internal job_list serialization error: {e}")),
+            },
+            Err(e) => text_err(format!("Internal job_list error: {e}")),
+        })
+    }
+
+    #[tool(description = "Check artifact freshness against source files")]
+    fn artifact_stale(
+        &self,
+        Parameters(args): Parameters<SpaceArgs>,
+    ) -> Result<CallToolResult, McpError> {
+        self.with_service(|svc| {
+            let space = space_path(args.space.as_deref());
+            match svc.check_artifact_freshness(&space) {
+                Ok(report) => match serde_json::to_value(&report) {
+                    Ok(v) => text_ok(v),
+                    Err(e) => {
+                        text_err(format!("Internal artifact_stale serialization error: {e}"))
+                    }
+                },
+                Err(e) => text_err(format!("Internal artifact_stale error: {e}")),
+            }
+        })
+    }
+}
+
+#[tool_handler]
+impl ServerHandler for NotezMcpServer {
+    fn get_info(&self) -> ServerInfo {
+        ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
+            .with_server_info(Implementation::new(
+                "notez-mcp",
+                env!("CARGO_PKG_VERSION"),
+            ))
+            .with_protocol_version(ProtocolVersion::LATEST)
+            .with_instructions(
+                "notez MCP server. Tools are callable immediately after `initialize`; \
+                 `notifications/initialized` is not required.",
+            )
+    }
+}
+
+// Silence unused warnings for the `Json` re-export carried over from the
+// legacy server. Available for any future structured-output tools.
+#[allow(dead_code)]
+fn _unused_reexports() {
+    let _ = std::any::type_name::<Json<()>>();
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Entry point
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Serve MCP over stdin/stdout. Blocks until the peer disconnects.
+pub async fn serve(service: ApplicationService<SqliteProjection>) -> anyhow::Result<()> {
+    let server = NotezMcpServer::new(service);
+    let (stdin, stdout) = rmcp::transport::io::stdio();
+    let running: rmcp::service::RunningService<rmcp::RoleServer, NotezMcpServer> =
+        server.serve((stdin, stdout)).await?;
+    let _ = running.waiting().await?;
+    Ok(())
 }

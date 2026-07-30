@@ -1,3 +1,3 @@
 pub mod server;
 
-pub use server::{McpError, McpServer};
+pub use server::{NotezMcpServer, serve};
