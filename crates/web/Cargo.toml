@@ -7,4 +7,23 @@ edition = "2024"
 name = "notez-web"
 path = "src/main.rs"
 
+[lib]
+name = "web"
+path = "src/lib.rs"
+
 [dependencies]
+axum = { version = "0.7", default-features = false, features = ["http1", "http2", "query", "matched-path"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "signal", "sync"] }
+tower-http = { version = "0.5", features = ["trace"] }
+anyhow = "1"
+tracing = "0.1"
+application = { path = "../application" }
+storage = { path = "../storage" }
+config = { path = "../config" }
+domain = { path = "../domain" }
+preview = { path = "../preview" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+ulid = { workspace = true }
+
+[build-dependencies]
