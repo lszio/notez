@@ -168,3 +168,65 @@ fn text_response(mime: &'static str, body: &'static str) -> Response<Body> {
         .body(Body::from(body))
         .unwrap()
 }
+
+#[cfg(test)] 
+mod tests {
+    use super::safe_disk_path;
+    use std::fs;
+    use std::os::unix::fs as unix_fs;
+    use std::path::PathBuf;
+
+    fn temp_space() -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "notez-web-test-{}-{}",
+            std::process::id(),
+            ulid::Ulid::new()
+        ));
+        fs::create_dir_all(dir.join("static")).unwrap();
+        dir
+    }
+
+    #[test]
+    fn rejects_symlink_under_static() {
+        let space = temp_space();
+        let target = space.join("outside.txt");
+        fs::write(&target, b"secret").unwrap();
+        let link = space.join("static").join("outside.txt");
+        unix_fs::symlink(&target, &link).unwrap();
+
+        let result = safe_disk_path(&link, &space).unwrap();
+        assert!(
+            result.is_none(),
+            "symlinked asset must be refused; got {:?}",
+            result
+        );
+
+        // tidy
+        let _ = fs::remove_dir_all(&space);
+        let _ = fs::remove_file(&target);
+    }
+
+    #[test]
+    fn accepts_real_file_under_static() {
+        let space = temp_space();
+        let f = space.join("static").join("plain.txt");
+        fs::write(&f, b"hi").unwrap();
+
+        let result = safe_disk_path(&f, &space).unwrap();
+        assert!(
+            result.is_some(),
+            "regular file under static/ must be accepted"
+        );
+
+        let _ = fs::remove_dir_all(&space);
+    }
+
+    #[test]
+    fn rejects_nonexistent_under_static() {
+        let space = temp_space();
+        let f = space.join("static").join("ghost.txt");
+        let result = safe_disk_path(&f, &space).unwrap();
+        assert!(result.is_none(), "missing file must be None");
+        let _ = fs::remove_dir_all(&space);
+    }
+}

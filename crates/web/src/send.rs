@@ -31,6 +31,8 @@
 //! (b) refactors `WebState` to own the projection outright and switch
 //! the executor model.
 
+use std::sync::{Arc, Mutex, MutexGuard};
+
 use application::ApplicationService;
 use domain::{LinkOccurrence, QueryPage, Resource, ResourceRef, SegmentRecord};
 use storage::{SqliteProjection, StorageError};
