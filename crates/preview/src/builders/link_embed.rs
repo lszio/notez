@@ -36,12 +36,20 @@ impl Previewer for LinkEmbedPreviewer {
         let target_ref: ResourceRef = serde_json::from_str(target_raw)
             .map_err(|e| PreviewError::Extraction(format!("link_target json: {e}")))?;
 
-        let child_resource = ctx
+        // Resolve the target to a concrete Resource we own: either a sibling
+        // already present in `ctx.siblings`, or a synthetic Document derived
+        // from the ref. We then move it directly into the child context and
+        // re-borrow it for the returned `target` field — avoiding a second
+        // clone of the (potentially large) `Resource` value.
+        let target_resource = if let Some(sibling) = ctx
             .siblings
             .iter()
             .find(|r| r.r#ref == target_ref)
             .cloned()
-            .unwrap_or_else(|| Resource {
+        {
+            sibling
+        } else {
+            Resource {
                 r#ref: target_ref.clone(),
                 kind: ResourceKind::Document,
                 title: target_ref.to_string(),
@@ -49,11 +57,13 @@ impl Previewer for LinkEmbedPreviewer {
                 source_id: ctx.resource.source_id.clone(),
                 locator: target_ref.to_string(),
                 properties: BTreeMap::new(),
-            });
+            }
+        };
 
+        let child_locator = std::path::PathBuf::from(target_resource.locator.clone());
         let child_ctx = PreviewContext {
-            resource: child_resource.clone(),
-            locator: std::path::PathBuf::from(child_resource.locator.clone()),
+            resource: target_resource,
+            locator: child_locator,
             ..ctx.clone()
         };
 
@@ -64,7 +74,7 @@ impl Previewer for LinkEmbedPreviewer {
         let child = previewer.render(&child_ctx)?;
 
         Ok(PreviewModel::LinkEmbed {
-            target: child_resource,
+            target: child_ctx.resource.clone(),
             child: Box::new(child),
         })
     }

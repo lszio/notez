@@ -13,7 +13,6 @@ serde_json = { workspace = true }
 thiserror = { workspace = true }
 ulid      = { workspace = true }
 pulldown-cmark = "0.10"
-html-escape = "0.2"
 lopdf = "0"
 calamine = "0"
 tempfile = "3"
