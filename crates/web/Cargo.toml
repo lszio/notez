@@ -26,7 +26,7 @@ serde_json = { workspace = true }
 storage = { path = "../storage" }
 thiserror = { workspace = true }
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "signal", "sync"] }
-tower-http = { version = "0.5", features = ["trace"] }
+tower-http = { version = "0.5", features = ["trace", "normalize-path"] }
 tracing = "0.1"
 ulid = { workspace = true }
 
