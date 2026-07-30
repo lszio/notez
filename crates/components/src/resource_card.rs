@@ -1,3 +1,7 @@
+use crate::{
+    block_embed::BlockEmbed, d2_block::D2Block, iframe_block::IframeBlock,
+    link_embed::LinkEmbed, mermaid_block::MermaidBlock, outline::Outline,
+};
 use dioxus::prelude::*;
 use domain::Resource;
 use preview::PreviewModel;
@@ -7,10 +11,6 @@ use preview::PreviewModel;
 /// previewer has its own dedicated rendering path. String fields that came
 /// from a file are escaped via `crate::escape::escape_html` before being
 /// emitted as HTML to prevent injection from untrusted source files.
-///
-/// C3 ships the data-rendering variants (Org, Markdown, Pdf, Xlsx, Pptx,
-/// Zip, Image, QueryEmbed, Fallback). The embed/diagram variants
-/// (Mermaid, D2, Iframe, LinkEmbed, BlockEmbed) are wired in C4.
 #[component]
 pub fn ResourceCard(resource: Resource, model: PreviewModel) -> Element {
     let title = crate::escape::escape_html(&resource.title);
@@ -32,10 +32,15 @@ pub fn ResourceCard(resource: Resource, model: PreviewModel) -> Element {
 
 fn render_body(model: PreviewModel) -> Element {
     match model {
-        PreviewModel::Org { html, outline: _ } => rsx! {
+        PreviewModel::Org { html, outline } => rsx! {
             div { class: "preview-org",
                 div { class: "preview-org-content",
                     div { dangerous_inner_html: "{html}" }
+                }
+                if !outline.is_empty() {
+                    aside { class: "preview-org-outline",
+                        Outline { headings: outline }
+                    }
                 }
             }
         },
@@ -123,31 +128,13 @@ fn render_body(model: PreviewModel) -> Element {
                 p { class: "preview-image-meta", "{mime} — {width}×{height}" }
             }
         },
-        PreviewModel::Mermaid { source: _ } => rsx! {
-            div { class: "preview-placeholder",
-                "Mermaid diagram (rendered in C4)"
-            }
-        },
-        PreviewModel::D2 { source: _ } => rsx! {
-            div { class: "preview-placeholder",
-                "D2 diagram (rendered in C4)"
-            }
-        },
-        PreviewModel::Iframe { src: _, sandbox: _ } => rsx! {
-            div { class: "preview-placeholder",
-                "Iframe embed (rendered in C4)"
-            }
-        },
-        PreviewModel::LinkEmbed { target: _, child: _ } => rsx! {
-            div { class: "preview-placeholder",
-                "Link embed (rendered in C4)"
-            }
-        },
-        PreviewModel::BlockEmbed { source: _, html: _ } => rsx! {
-            div { class: "preview-placeholder",
-                "Block embed (rendered in C4)"
-            }
-        },
+        PreviewModel::Mermaid { source } => rsx! { MermaidBlock { source } },
+        PreviewModel::D2 { source } => rsx! { D2Block { source } },
+        PreviewModel::Iframe { src, sandbox } => rsx! { IframeBlock { src, sandbox } },
+        PreviewModel::LinkEmbed { target, child } => {
+            rsx! { LinkEmbed { target, child: *child } }
+        }
+        PreviewModel::BlockEmbed { source, html } => rsx! { BlockEmbed { source, html } },
         PreviewModel::QueryEmbed { query, snapshot } => rsx! {
             div { class: "preview-query-embed",
                 header {
