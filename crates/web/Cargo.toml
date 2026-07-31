@@ -3,10 +3,6 @@ name = "web"
 version = "0.1.0"
 edition = "2024"
 
-[[bin]]
-name = "notez-web"
-path = "src/main.rs"
-
 [lib]
 name = "web"
 path = "src/lib.rs"

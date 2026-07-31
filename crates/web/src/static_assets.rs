@@ -1,4 +1,4 @@
-//! Static assets bundled into the `notez-web` binary.
+//! Static assets bundled into the `notez` binary.
 //!
 //! The contents of `crates/web/static/js/preview/*.mjs` are copied into
 //! `OUT_DIR/static/` at compile time by `build.rs`. We `include_str!` them

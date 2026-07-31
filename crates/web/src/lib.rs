@@ -1,9 +1,8 @@
 //! Crate `notez-web` — axum HTTP server that renders `notez` spaces,
 //! resources, and attachments through the `preview::PreviewerCatalog`.
 //!
-//! The crate exposes both a library (`web::…`) and a binary (`notez-web`).
-//! The `crates/cli` binary can also embed the same library under the
-//! `web` cargo feature and dispatch `notez web …` to it.
+//! This crate is library-only. The `notez` binary embeds it under the
+//! `web` cargo feature and dispatches `notez web …` to it.
 pub mod html_escape;
 pub mod preview;
 pub mod router;
