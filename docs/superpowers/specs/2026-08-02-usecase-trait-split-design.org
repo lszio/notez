@@ -1,0 +1,191 @@
+#+title: UseCase Trait 拆分设计
+#+date: 2026-08-02
+
+* 1. 目标
+
+把当前 `core::application::ApplicationService<S>` 单 god-object（44 个
+`pub fn`）拆为 9 个独立的 `UseCase` trait。`ApplicationFacade<S>` 保留
+作为统一入口，但其内部把方法转发到对应的 UseCase 实现。所有行为契约不
+变：现有 144 个测试（包括 9 个 API 集成测试）必须保持 0 回归。
+
+本轮不引入结构化错误、不引入 Capability 目录、不引入 Protocol DTO；那些是
+P0 后续切片。本轮只为 god-object 拆 trait，并在 facade 与 trait 之间保留
+`register_capability` hook 点（no-op）作为后续 P1 Capability 目录的
+接缝。
+
+* 2. 决策
+
+** 2.1 Trait 划分（9 个）
+
+按领域用例切：
+
+| Trait | 方法 |
+|---|---|
+| =ScanUseCase= | =scan_native=、=scan_federation= |
+| =ResourceUseCase= | =query=、=read=、=list_recent=、=list_by_source=、=upsert_resource=、=delete_resource=、=resolve=、=resolve_address= |
+| =LinkUseCase= | =query_link_occurrences=、=query_resolved_relations=、=list_links=、=resolve_links=、=diagnose_link=、=reindex_links= |
+| =TaskUseCase= | =agenda=、=para_overview=、=transition_task= |
+| =AttachmentUseCase= | =add_attachment=、=run_extraction=、=query_segments= |
+| =CommunityUseCase= | =create_community=、=list_communities= |
+| =ArtifactUseCase= | =derive_artifact=、=export_skill= |
+| =SyncUseCase= | =sync_push=、=sync_pull=、=relay_sync=、=list_conflicts= |
+| =InspectUseCase= | =inspect_rules=、=space_doctor=、=list_jobs=、=check_artifact_freshness= |
+
+** 2.2 类型重命名
+
+`ApplicationService<S>` → `ApplicationFacade<S>`。`ApplicationService`
+保留为 `pub type ApplicationService<S> = ApplicationFacade<S>;` 旧名称
+仍可用，避免大爆炸式 import break。CLI/MCP 调用方全部改为
+`ApplicationFacade`，但保留 `use notez_core::application::ApplicationService`
+导入路径，便于未来彻底迁移。
+
+** 2.3 Facade 转发实现
+
+`ApplicationFacade` 同时 `impl` 9 个 trait 与保留 44 个 `pub fn`。
+trait 方法体与 `pub fn` 方法体合并到同一 `impl ApplicationFacade<S>
+for ServiceState<...>` 块；44 个 `pub fn` 全部以一行 `delegate!` 调用
+对应 trait 方法（手写，不引入宏）。
+
+例如：
+
+#+begin_src rust
+impl<S: ProjectionStore> ApplicationFacade<S> {
+    pub fn scan_native(&mut self, root: &Path) -> Result<ScanReport, ApplicationError> {
+        <Self as ScanUseCase>::scan_native(self, root)
+    }
+}
+#+end_src
+
+** 2.4 Capability hook 点
+
+`ApplicationFacade` 暴露一个 no-op 的 =register_capability(&mut self,
+descriptor: &CapabilityDescriptor)= 方法。`CapabilityDescriptor` 是
+本轮新引入的最小结构（id + description + mutability），定义于
+`core::capability`。实现内部把 descriptor 存入 `Vec<CapabilityDescriptor>`，
+不对行为产生任何影响。本轮为后续 P1 Capability 目录铺路；不引入
+catalog/注册/查询 API。
+
+** 2.5 文件组织
+
+`core/src/application/use_cases/` 目录新增 9 个文件：
+
+#+begin_src text
+core/src/application/use_cases/
+  mod.rs           // 9 个 trait 公共 re-export
+  scan.rs          // ScanUseCase
+  resource.rs      // ResourceUseCase
+  link.rs          // LinkUseCase
+  task.rs          // TaskUseCase
+  attachment.rs    // AttachmentUseCase
+  community.rs     // CommunityUseCase
+  artifact.rs      // ArtifactUseCase
+  sync.rs          // SyncUseCase
+  inspect.rs       // InspectUseCase
+#+end_src
+
+`core/src/application/service.rs`（约 1047 行）拆为：
+
+- `service.rs`：=ApplicationFacade= 类型、=ApplicationService= 别名、44
+  个 `pub fn` 转发、register_format_parser / add_source / register_capability。
+- =application/context.rs=: 不变。
+- =application/mod.rs=: 增加 `pub mod use_cases;` 与重导出。
+
+`core/src/capability.rs`：新增最小 =CapabilityDescriptor=。
+
+** 2.6 CLI/MCP 调用方改造
+
+CLI main 与 MCP server 内部所有 `service.<fn>(...)` 调用全部改为
+通过 `use ...::application::ScanUseCase` / `use ...::ResourceUseCase` 等
+引入 trait 后 `ScanUseCase::scan_native(&mut service, ...)`。这是
+面上的破坏性变更但行为完全等价。
+
+** 2.7 测试策略
+
+新增 9 个 `core/tests/use_case_*.rs` 文件，每个覆盖一个 trait 的契约。
+测试使用 `in-mem` 假 `ProjectionStore`（已存在
+`core/tests/mutation_safety.rs` 中的 `CountingStore` 模式可复用），
+不引入 mockall 等新 dev-dependency。
+
+旧 144 测试必须保持 0 回归。旧 facade 仍编译，旧 facade 的 pub fn
+签名完全不变。
+
+* 3. 错误与边界
+
+- =ApplicationError= 不变（字符串 variant 暂时保留；本轮不动）。
+- =ScanReport=、=ResolveResult=、=QueryPage= 等公开 DTO 不变。
+- =ProjectionStore= trait 不变。
+- =SourceAdapter= / =FormatParser= / =SpaceContext= / =SourceRegistry=
+  全部不变（这些是 P1 切片目标）。
+- =ApplicationFacade::with_space= / =new= / =space= / =store= /
+  =store_mut= / =register_format_parser= / =add_source= 仍作为
+  facade 入口方法；不进入 trait，因为它们是构造/配置动作而非用例。
+
+* 4. 验证
+
+- =cargo test --workspace=：所有 144 测试 + 9 个新 use case 契约测试
+  全部通过。
+- =cargo check --workspace --all-targets=：exit 0。
+- CLI smoke =scan= → =query= → =read= 端到端仍工作。
+- 旧 API 别名 =ApplicationService= 在 CLI/MCP 与测试中仍可用。
+- =grep -rE "ApplicationService::" cli core/src core/tests | wc -l=
+  与初始值一致（保留为别名）；新增 =grep -rE "ScanUseCase::" ...= 有增长。
+
+* 5. 迁移顺序
+
+按 trait 逐个加 1 个文件、1 个 trait、1 个 impl 块、1 个测试文件。顺序：
+
+1. =ScanUseCase=（最独立，先做能验全链路）
+2. =ResourceUseCase=（query/read/upsert/delete，依赖 projection）
+3. =LinkUseCase=（依赖 storage 上的 link diagnostics/relations）
+4. =TaskUseCase=（依赖 workflow）
+5. =AttachmentUseCase=（依赖 blob store）
+6. =CommunityUseCase=（依赖 sources.json）
+7. =ArtifactUseCase=（依赖 resources）
+8. =SyncUseCase=（依赖 manifest/object/transport）
+9. =InspectUseCase=（依赖 store + space）
+
+每步完成后立即跑 =cargo test --workspace= 验证 0 回归，再继续下一步。
+
+* 6. 风险与缓解
+
+- 风险：拆分 =service.rs= 时 44 fn 与 9 trait 方法体合并容易引入
+  借用冲突（多个 trait 方法签名类似但参数不同）。缓解：每个 trait
+  方法体 =self= 引用，fn 转发体只取 =&mut self= / =&self= 不动内部
+  state；按 trait 顺序逐个迁移，每步小步提交可回滚。
+- 风险：CLI main 1300+ 行同步改 =service.fn → Trait::fn(&mut
+  service)= 量大。缓解：分阶段改；CLI main 在 9 个 trait 全部就绪
+  后做一次统一转换，转换前所有 trait 方法已存在；不会因中途
+  trait 缺失而编译失败。
+- 风险：本轮不动 ApplicationError，未来 144 测试中
+  "unsupported capability" 字符串断言仍会工作（错误消息不变）。
+  缓解：测试断言基于 Display 字符串，与错误类型结构无关；本轮
+  不引入结构化错误即无影响。
+
+* 7. 非目标
+
+本轮明确不做：
+
+- ApplicationError 结构化变体
+- Capability 目录实体（register_capability 只 hook，不行为）
+- Protocol DTO / ProtocolServer
+- Time / Clock 注入
+- Read-Only 空间模式
+- Audit Hook
+- SourceAdapterFactory / SourceRegistry 改造
+- ApplicationService 旧名彻底删除（保留为 =type alias= 永不过期）
+- performance / benchmark
+- app 端的 web/desktop/mobile entrypoint 实质实现
+
+* 8. 验收
+
+- 9 个 trait 在 =core/src/application/use_cases/= 下，公共可访问。
+- =ApplicationFacade<S>= impl 9 个 trait，CLI/MCP 可通过 trait 方法调用。
+- =ApplicationService<S>= 仍作为 =type alias= 可用。
+- =register_capability(&mut self, &CapabilityDescriptor)= 是 facade 的
+  no-op 方法。
+- CLI main 与 MCP server 内部对每个 service 调用点都改为 trait 方法
+  调用。
+- =cargo test --workspace= 通过；含 9 个新 use case 契约测试。
+- =cargo check --workspace --all-targets= 通过。
+- =cargo run -p cli -- --help= 正常输出。
+- 一份 git commit 描述本轮拆分。
