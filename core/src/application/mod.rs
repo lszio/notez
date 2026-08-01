@@ -23,5 +23,6 @@ pub use link_resolution::{LinkReindexReport, LinkResolver};
 pub use context::SpaceContext;
 pub use service::{ApplicationError, ApplicationFacade, ApplicationService, ResolveResult, ScanReport};
 pub use use_cases::{
-    AttachmentUseCase, LinkUseCase, ResourceUseCase, ScanUseCase, TaskUseCase,
+    AttachmentUseCase, CommunityUseCase, LinkUseCase, ResourceUseCase, ScanUseCase,
+    TaskUseCase,
 };

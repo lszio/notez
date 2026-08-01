@@ -931,6 +931,14 @@ impl<S: ProjectionStore> ApplicationFacade<S> {
         space_root: &Path,
         community: crate::domain::community::Community,
     ) -> Result<(), ApplicationError> {
+        <Self as crate::application::use_cases::CommunityUseCase>::create_community(self, space_root, community)
+    }
+
+    pub fn create_community_impl(
+        &self,
+        space_root: &Path,
+        community: crate::domain::community::Community,
+    ) -> Result<(), ApplicationError> {
         let mut cfg = crate::application::community_app::SpaceCommunitiesConfig::load(space_root)?;
         cfg.communities.retain(|c| c.id != community.id);
         cfg.communities.push(community);
@@ -942,10 +950,16 @@ impl<S: ProjectionStore> ApplicationFacade<S> {
         &self,
         space_root: &Path,
     ) -> Result<Vec<crate::domain::community::Community>, ApplicationError> {
+        <Self as crate::application::use_cases::CommunityUseCase>::list_communities(self, space_root)
+    }
+
+    pub fn list_communities_impl(
+        &self,
+        space_root: &Path,
+    ) -> Result<Vec<crate::domain::community::Community>, ApplicationError> {
         let cfg = crate::application::community_app::SpaceCommunitiesConfig::load(space_root)?;
         Ok(cfg.communities)
     }
-
     pub fn derive_artifact(
         &self,
         space_root: &Path,
@@ -1313,5 +1327,20 @@ impl<S: crate::domain::ProjectionStore> crate::application::use_cases::Attachmen
         att_ref: &ResourceRef,
     ) -> Result<Vec<crate::domain::SegmentRecord>, ApplicationError> {
         ApplicationFacade::query_segments_impl(self, att_ref)
+    }
+}
+impl<S: crate::domain::ProjectionStore> crate::application::use_cases::CommunityUseCase for ApplicationFacade<S> {
+    fn create_community(
+        &self,
+        space_root: &std::path::Path,
+        community: crate::domain::community::Community,
+    ) -> Result<(), ApplicationError> {
+        ApplicationFacade::create_community_impl(self, space_root, community)
+    }
+    fn list_communities(
+        &self,
+        space_root: &std::path::Path,
+    ) -> Result<Vec<crate::domain::community::Community>, ApplicationError> {
+        ApplicationFacade::list_communities_impl(self, space_root)
     }
 }
