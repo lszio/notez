@@ -966,7 +966,16 @@ impl<S: ProjectionStore> ApplicationFacade<S> {
         community_id: &str,
         recipe_name: &str,
     ) -> Result<crate::artifact::DerivedArtifact, ApplicationError> {
-        let communities = self.list_communities(space_root)?;
+        <Self as crate::application::use_cases::ArtifactUseCase>::derive_artifact(self, space_root, community_id, recipe_name)
+    }
+
+    pub fn derive_artifact_impl(
+        &self,
+        space_root: &Path,
+        community_id: &str,
+        recipe_name: &str,
+    ) -> Result<crate::artifact::DerivedArtifact, ApplicationError> {
+        let communities = self.list_communities_impl(space_root)?;
         let comm = communities
             .iter()
             .find(|c| c.id == community_id)
@@ -1011,7 +1020,17 @@ impl<S: ProjectionStore> ApplicationFacade<S> {
         description: &str,
         export_path: &Path,
     ) -> Result<crate::artifact::SkillPackage, ApplicationError> {
-        let communities = self.list_communities(space_root)?;
+        <Self as crate::application::use_cases::ArtifactUseCase>::export_skill(self, space_root, community_id, description, export_path)
+    }
+
+    pub fn export_skill_impl(
+        &self,
+        space_root: &Path,
+        community_id: &str,
+        description: &str,
+        export_path: &Path,
+    ) -> Result<crate::artifact::SkillPackage, ApplicationError> {
+        let communities = self.list_communities_impl(space_root)?;
         let comm = communities
             .iter()
             .find(|c| c.id == community_id)
@@ -1342,5 +1361,24 @@ impl<S: crate::domain::ProjectionStore> crate::application::use_cases::Community
         space_root: &std::path::Path,
     ) -> Result<Vec<crate::domain::community::Community>, ApplicationError> {
         ApplicationFacade::list_communities_impl(self, space_root)
+    }
+}
+impl<S: crate::domain::ProjectionStore> crate::application::use_cases::ArtifactUseCase for ApplicationFacade<S> {
+    fn derive_artifact(
+        &self,
+        space_root: &std::path::Path,
+        community_id: &str,
+        recipe_name: &str,
+    ) -> Result<crate::artifact::DerivedArtifact, ApplicationError> {
+        ApplicationFacade::derive_artifact_impl(self, space_root, community_id, recipe_name)
+    }
+    fn export_skill(
+        &self,
+        space_root: &std::path::Path,
+        community_id: &str,
+        description: &str,
+        export_path: &std::path::Path,
+    ) -> Result<crate::artifact::SkillPackage, ApplicationError> {
+        ApplicationFacade::export_skill_impl(self, space_root, community_id, description, export_path)
     }
 }

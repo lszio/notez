@@ -2,6 +2,7 @@
 //! that callers (CLI, MCP, integration tests) can request a narrow
 //! capability without depending on the full facade.
 
+mod artifact;
 mod attachment;
 mod community;
 mod link;
@@ -9,6 +10,7 @@ mod resource;
 mod scan;
 mod task;
 
+pub use artifact::ArtifactUseCase;
 pub use attachment::AttachmentUseCase;
 pub use community::CommunityUseCase;
 pub use link::LinkUseCase;
