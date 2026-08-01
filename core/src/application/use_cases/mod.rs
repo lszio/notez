@@ -2,8 +2,10 @@
 //! that callers (CLI, MCP, integration tests) can request a narrow
 //! capability without depending on the full facade.
 
+mod link;
 mod resource;
 mod scan;
 
+pub use link::LinkUseCase;
 pub use resource::ResourceUseCase;
 pub use scan::ScanUseCase;

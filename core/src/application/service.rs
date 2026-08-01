@@ -451,12 +451,26 @@ impl<S: ProjectionStore> ApplicationFacade<S> {
         &self,
         source_ref: &ResourceRef,
     ) -> Result<Vec<crate::domain::LinkOccurrence>, ApplicationError> {
+        <Self as crate::application::use_cases::LinkUseCase>::query_link_occurrences(self, source_ref)
+    }
+
+    pub fn query_link_occurrences_impl(
+        &self,
+        source_ref: &ResourceRef,
+    ) -> Result<Vec<crate::domain::LinkOccurrence>, ApplicationError> {
         self.store
             .query_link_occurrences(source_ref)
             .map_err(|e| ApplicationError::Storage(e.to_string()))
     }
 
     pub fn query_resolved_relations(
+        &self,
+        source_ref: &ResourceRef,
+    ) -> Result<Vec<crate::domain::ResolvedRelation>, ApplicationError> {
+        <Self as crate::application::use_cases::LinkUseCase>::query_resolved_relations(self, source_ref)
+    }
+
+    pub fn query_resolved_relations_impl(
         &self,
         source_ref: &ResourceRef,
     ) -> Result<Vec<crate::domain::ResolvedRelation>, ApplicationError> {
@@ -470,7 +484,14 @@ impl<S: ProjectionStore> ApplicationFacade<S> {
         &self,
         source_ref: &ResourceRef,
     ) -> Result<Vec<LinkOccurrence>, ApplicationError> {
-        self.query_link_occurrences(source_ref)
+        <Self as crate::application::use_cases::LinkUseCase>::list_links(self, source_ref)
+    }
+
+    pub fn list_links_impl(
+        &self,
+        source_ref: &ResourceRef,
+    ) -> Result<Vec<LinkOccurrence>, ApplicationError> {
+        self.query_link_occurrences_impl(source_ref)
     }
 
     /// Re-resolve every occurrence for `source_ref` and persist diagnostics.
@@ -478,7 +499,14 @@ impl<S: ProjectionStore> ApplicationFacade<S> {
         &mut self,
         source_ref: &ResourceRef,
     ) -> Result<Vec<ResolvedRelation>, ApplicationError> {
-        let occs = self.query_link_occurrences(source_ref)?;
+        <Self as crate::application::use_cases::LinkUseCase>::resolve_links(self, source_ref)
+    }
+
+    pub fn resolve_links_impl(
+        &mut self,
+        source_ref: &ResourceRef,
+    ) -> Result<Vec<ResolvedRelation>, ApplicationError> {
+        let occs = self.query_link_occurrences_impl(source_ref)?;
         // Determine the source_id by inspecting the existing diagnostics row.
         let source_id = occs
             .first()
@@ -500,6 +528,13 @@ impl<S: ProjectionStore> ApplicationFacade<S> {
         &self,
         source_ref: &ResourceRef,
     ) -> Result<Vec<LinkDiagnostic>, ApplicationError> {
+        <Self as crate::application::use_cases::LinkUseCase>::diagnose_link(self, source_ref)
+    }
+
+    pub fn diagnose_link_impl(
+        &self,
+        source_ref: &ResourceRef,
+    ) -> Result<Vec<LinkDiagnostic>, ApplicationError> {
         let rows = self
             .store
             .list_link_diagnostics(source_ref)
@@ -510,6 +545,13 @@ impl<S: ProjectionStore> ApplicationFacade<S> {
     /// Walk the native source under `space_root` again, resolve every link,
     /// and return a [`LinkReindexReport`].
     pub fn reindex_links(
+        &mut self,
+        space_root: &Path,
+    ) -> Result<crate::application::link_resolution::LinkReindexReport, ApplicationError> {
+        <Self as crate::application::use_cases::LinkUseCase>::reindex_links(self, space_root)
+    }
+
+    pub fn reindex_links_impl(
         &mut self,
         space_root: &Path,
     ) -> Result<crate::application::link_resolution::LinkReindexReport, ApplicationError> {
@@ -1153,5 +1195,43 @@ impl<S: crate::domain::ProjectionStore> crate::application::use_cases::ScanUseCa
         space_root: &std::path::Path,
     ) -> Result<ScanReport, ApplicationError> {
         ApplicationFacade::scan_federation_impl(self, space_root)
+    }
+}
+impl<S: crate::domain::ProjectionStore> crate::application::use_cases::LinkUseCase for ApplicationFacade<S> {
+    fn query_link_occurrences(
+        &self,
+        source_ref: &ResourceRef,
+    ) -> Result<Vec<crate::domain::LinkOccurrence>, ApplicationError> {
+        ApplicationFacade::query_link_occurrences_impl(self, source_ref)
+    }
+    fn query_resolved_relations(
+        &self,
+        source_ref: &ResourceRef,
+    ) -> Result<Vec<crate::domain::ResolvedRelation>, ApplicationError> {
+        ApplicationFacade::query_resolved_relations_impl(self, source_ref)
+    }
+    fn list_links(
+        &self,
+        source_ref: &ResourceRef,
+    ) -> Result<Vec<crate::domain::LinkOccurrence>, ApplicationError> {
+        ApplicationFacade::list_links_impl(self, source_ref)
+    }
+    fn resolve_links(
+        &mut self,
+        source_ref: &ResourceRef,
+    ) -> Result<Vec<crate::domain::ResolvedRelation>, ApplicationError> {
+        ApplicationFacade::resolve_links_impl(self, source_ref)
+    }
+    fn diagnose_link(
+        &self,
+        source_ref: &ResourceRef,
+    ) -> Result<Vec<crate::domain::LinkDiagnostic>, ApplicationError> {
+        ApplicationFacade::diagnose_link_impl(self, source_ref)
+    }
+    fn reindex_links(
+        &mut self,
+        space_root: &std::path::Path,
+    ) -> Result<crate::application::link_resolution::LinkReindexReport, ApplicationError> {
+        ApplicationFacade::reindex_links_impl(self, space_root)
     }
 }
