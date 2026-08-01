@@ -1,5 +1,11 @@
 use notez_cli::commands;
-use notez_core::application::{ApplicationService, ResolveResult, SpaceContext};
+use notez_core::application::{
+    use_cases::{
+        ArtifactUseCase, AttachmentUseCase, CommunityUseCase, InspectUseCase, LinkUseCase,
+        ResourceUseCase, ScanUseCase, SyncUseCase, TaskUseCase,
+    },
+    ApplicationService, ResolveResult, SpaceContext,
+};
 use notez_core::domain::{Resource, ResourceKind, ResourceRef, Selector};
 use notez_core::storage::SqliteProjection;
 use clap::Parser;
@@ -97,7 +103,7 @@ fn main() {
     service.register_format_parser(Box::new(orgmode::OrgParser::new()));
     service.register_format_parser(Box::new(markdown::MarkdownParser::new()));
     match cli.command {
-        Commands::Scan => match service.scan_native(&r_config.space_root) {
+        Commands::Scan => match ScanUseCase::scan_native(&mut service, &r_config.space_root) {
             Ok(report) => {
                 if cli.json {
                     println!(
@@ -121,7 +127,7 @@ fn main() {
             }
         },
 
-        Commands::Resolve { query } => match service.resolve(&query) {
+        Commands::Resolve { query } => match ResourceUseCase::resolve(&service, &query) {
             Ok(ResolveResult::Found(r_ref)) => {
                 if cli.json {
                     println!("{}", json!({ "ref": r_ref.to_string() }));
@@ -149,7 +155,7 @@ fn main() {
 
         Commands::Link(sub) => match sub.command {
             LinkCommands::List { r_ref } => match ResourceRef::parse(&r_ref) {
-                Ok(parsed_ref) => match service.query_link_occurrences(&parsed_ref) {
+                Ok(parsed_ref) => match LinkUseCase::query_link_occurrences(&service, &parsed_ref) {
                     Ok(occs) => {
                         if cli.json {
                             println!("{}", json!(occs));
@@ -176,7 +182,7 @@ fn main() {
                 }
             },
             LinkCommands::Resolved { r_ref } => match ResourceRef::parse(&r_ref) {
-                Ok(parsed_ref) => match service.query_resolved_relations(&parsed_ref) {
+                Ok(parsed_ref) => match LinkUseCase::query_resolved_relations(&service, &parsed_ref) {
                     Ok(rels) => {
                         if cli.json {
                             println!("{}", json!(rels));
@@ -200,7 +206,7 @@ fn main() {
                 }
             },
             LinkCommands::Diagnose { r_ref } => match ResourceRef::parse(&r_ref) {
-                Ok(parsed_ref) => match service.diagnose_link(&parsed_ref) {
+                Ok(parsed_ref) => match LinkUseCase::diagnose_link(&service, &parsed_ref) {
                     Ok(diags) => {
                         if cli.json {
                             println!("{}", json!(diags));
@@ -226,7 +232,7 @@ fn main() {
                     exit(2);
                 }
             },
-            LinkCommands::Reindex { space_root } => match service.reindex_links(&space_root) {
+            LinkCommands::Reindex { space_root } => match LinkUseCase::reindex_links(&mut service, &space_root) {
                 Ok(report) => {
                     if cli.json {
                         println!("{}", json!(report));
@@ -273,7 +279,7 @@ fn main() {
                 selector.source_id = Some(src);
             }
 
-            match service.query(&selector) {
+            match ResourceUseCase::query(&service, &selector) {
                 Ok(page) => {
                     let mut items = page.items;
                     if items.len() > args.limit {
@@ -294,7 +300,7 @@ fn main() {
             }
         }
 
-        Commands::Recent { limit } => match service.list_recent(limit) {
+        Commands::Recent { limit } => match ResourceUseCase::list_recent(&service, limit) {
             Ok(items) => {
                 if cli.json {
                     println!("{}", serde_json::to_string(&items).unwrap());
@@ -326,7 +332,7 @@ fn main() {
                         exit(2);
                     }
                 };
-                match service.upsert_resource(res.clone()) {
+                match ResourceUseCase::upsert_resource(&mut service, res.clone()) {
                     Ok(()) => {
                         if cli.json {
                             println!("{}", serde_json::to_string(&res).unwrap());
@@ -348,7 +354,7 @@ fn main() {
                         exit(2);
                     }
                 };
-                match service.delete_resource(&parsed) {
+                match ResourceUseCase::delete_resource(&mut service, &parsed) {
                     Ok(()) => {
                         if cli.json {
                             println!("{}", serde_json::to_string(&parsed).unwrap());
@@ -363,7 +369,7 @@ fn main() {
                 }
             }
             commands::ResourceCommands::Ls { source, limit } => {
-                match service.list_by_source(&source, limit) {
+                match ResourceUseCase::list_by_source(&service, &source, limit) {
                     Ok(items) => {
                         if cli.json {
                             println!("{}", serde_json::to_string(&items).unwrap());
@@ -390,7 +396,7 @@ fn main() {
                 }
             };
 
-            match service.read(&parsed_ref) {
+            match ResourceUseCase::read(&service, &parsed_ref) {
                 Ok(Some(res)) => {
                     if cli.json {
                         println!("{}", serde_json::to_string(&res).unwrap());
@@ -422,7 +428,7 @@ fn main() {
             };
 
             if rules {
-                match service.inspect_rules(&parsed_ref) {
+                match InspectUseCase::inspect_rules(&service, &parsed_ref) {
                     Ok(Some(inspect_res)) => {
                         if cli.json {
                             println!("{}", serde_json::to_string(&inspect_res).unwrap());
@@ -442,7 +448,7 @@ fn main() {
                     }
                 }
             } else {
-                match service.read(&parsed_ref) {
+                match ResourceUseCase::read(&service, &parsed_ref) {
                     Ok(Some(res)) => {
                         if cli.json {
                             println!("{}", serde_json::to_string(&res).unwrap());
@@ -462,7 +468,7 @@ fn main() {
             }
         }
 
-        Commands::Agenda => match service.agenda() {
+        Commands::Agenda => match TaskUseCase::agenda(&service) {
             Ok(agenda) => {
                 if cli.json {
                     println!("{}", serde_json::to_string(&agenda).unwrap());
@@ -490,7 +496,7 @@ fn main() {
                         }
                     };
 
-                    match service.transition_task(&parsed_ref, &to, &timestamp) {
+                    match TaskUseCase::transition_task(&mut service, &parsed_ref, &to, &timestamp) {
                         Ok(transition) => {
                             if cli.json {
                                 println!("{}", serde_json::to_string(&transition).unwrap());
@@ -515,7 +521,7 @@ fn main() {
                             exit(2);
                         }
                     };
-                    match service.read(&parsed_ref) {
+                    match ResourceUseCase::read(&service, &parsed_ref) {
                         Ok(Some(res)) => {
                             if cli.json {
                                 println!("{}", serde_json::to_string(&res).unwrap());
@@ -591,7 +597,7 @@ fn main() {
                         }
                     }
                 }
-                commands::TaskCommands::List => match service.agenda() {
+                commands::TaskCommands::List => match TaskUseCase::agenda(&service) {
                     Ok(agenda) => {
                         if cli.json {
                             println!("{}", serde_json::to_string(&agenda).unwrap());
@@ -623,7 +629,7 @@ fn main() {
                         exit(5);
                     }
                 },
-                commands::TaskCommands::Agenda => match service.agenda() {
+                commands::TaskCommands::Agenda => match TaskUseCase::agenda(&service) {
                     Ok(agenda) => {
                         if cli.json {
                             println!("{}", serde_json::to_string(&agenda).unwrap());
@@ -709,7 +715,7 @@ fn main() {
                         exit(5);
                     }
                 },
-                commands::TaskCommands::Para => match service.para_overview() {
+                commands::TaskCommands::Para => match TaskUseCase::para_overview(&service) {
                     Ok(para) => {
                         if cli.json {
                             println!("{}", serde_json::to_string(&para).unwrap());
@@ -739,7 +745,7 @@ fn main() {
                         exit(5);
                     }
                 },
-                commands::TaskCommands::Jobs => match service.list_jobs() {
+                commands::TaskCommands::Jobs => match InspectUseCase::list_jobs(&service) {
                     Ok(jobs) => {
                         if cli.json {
                             println!("{}", json!(jobs));
@@ -805,7 +811,7 @@ fn main() {
                 }
             },
 
-            commands::SourceCommands::Sync => match service.scan_federation(&r_config.space_root) {
+            commands::SourceCommands::Sync => match ScanUseCase::scan_federation(&mut service, &r_config.space_root) {
                 Ok(report) => {
                     if cli.json {
                         println!(
@@ -854,7 +860,7 @@ fn main() {
         },
         Commands::Attachment(commands::AttachmentSubcommand { command }) => match command {
             commands::AttachmentCommands::Add { path, mime } => {
-                match service.add_attachment(&r_config.space_root, &path, &mime) {
+                match AttachmentUseCase::add_attachment(&mut service, &r_config.space_root, &path, &mime) {
                     Ok(att_ref) => {
                         if cli.json {
                             println!("{}", json!({ "ref": att_ref.to_string() }));
@@ -878,7 +884,7 @@ fn main() {
                     }
                 };
 
-                match service.run_extraction(&r_config.space_root, &parsed_ref) {
+                match AttachmentUseCase::run_extraction(&mut service, &r_config.space_root, &parsed_ref) {
                     Ok(segments) => {
                         if cli.json {
                             println!(
@@ -908,7 +914,7 @@ fn main() {
                     }
                 };
 
-                match service.query_segments(&parsed_ref) {
+                match AttachmentUseCase::query_segments(&service, &parsed_ref) {
                     Ok(segments) => {
                         if cli.json {
                             println!("{}", serde_json::to_string(&segments).unwrap());
@@ -949,7 +955,7 @@ fn main() {
                     excluded_members: vec![],
                 };
 
-                match service.create_community(&r_config.space_root, comm) {
+                match CommunityUseCase::create_community(&service, &r_config.space_root, comm) {
                     Ok(_) => {
                         if cli.json {
                             println!("{}", json!({ "created": true }));
@@ -964,7 +970,7 @@ fn main() {
                 }
             }
 
-            commands::CommunityCommands::List => match service.list_communities(&r_config.space_root) {
+            commands::CommunityCommands::List => match CommunityUseCase::list_communities(&service, &r_config.space_root) {
                 Ok(communities) => {
                     if cli.json {
                         println!("{}", serde_json::to_string(&communities).unwrap());
@@ -982,7 +988,7 @@ fn main() {
         },
 
         Commands::Derive(commands::DeriveArgs { community, recipe }) => {
-            match service.derive_artifact(&r_config.space_root, &community, &recipe) {
+            match ArtifactUseCase::derive_artifact(&mut service, &r_config.space_root, &community, &recipe) {
                 Ok(derived) => {
                     if cli.json {
                         println!("{}", serde_json::to_string(&derived).unwrap());
@@ -1004,7 +1010,7 @@ fn main() {
                     description,
                     out,
                 },
-        }) => match service.export_skill(&r_config.space_root, &community, &description, &out) {
+        }) => match ArtifactUseCase::export_skill(&mut service, &r_config.space_root, &community, &description, &out) {
             Ok(pkg) => {
                 if cli.json {
                     println!("{}", serde_json::to_string(&pkg).unwrap());
@@ -1019,7 +1025,7 @@ fn main() {
         },
         Commands::Sync(commands::SyncSubcommand { command }) => match command {
             commands::SyncCommands::Push { actor, folder } => {
-                match service.sync_push(&actor, &r_config.space_root, &folder) {
+                match SyncUseCase::sync_push(&mut service, &actor, &r_config.space_root, &folder) {
                     Ok(report) => {
                         if cli.json {
                             println!(
@@ -1041,7 +1047,7 @@ fn main() {
             }
 
             commands::SyncCommands::Pull { actor, folder } => {
-                match service.sync_pull(&actor, &r_config.space_root, &folder) {
+                match SyncUseCase::sync_pull(&mut service, &actor, &r_config.space_root, &folder) {
                     Ok(report) => {
                         if cli.json {
                             println!(
@@ -1066,7 +1072,7 @@ fn main() {
                 }
             }
 
-            commands::SyncCommands::Conflicts => match service.list_conflicts() {
+            commands::SyncCommands::Conflicts => match SyncUseCase::list_conflicts(&service) {
                 Ok(conflicts) => {
                     if cli.json {
                         println!("{}", serde_json::to_string(&conflicts).unwrap());
@@ -1081,7 +1087,7 @@ fn main() {
                     exit(5);
                 }
             },
-            commands::SyncCommands::Relay { id } => match service.relay_sync(&id, &r_config.space_root) {
+            commands::SyncCommands::Relay { id } => match SyncUseCase::relay_sync(&service, &id, &r_config.space_root) {
                 Ok(report) => {
                     if cli.json {
                         println!(
@@ -1107,7 +1113,7 @@ fn main() {
 
         Commands::Artifact(commands::ArtifactSubcommand {
             command: commands::ArtifactCommands::Stale,
-        }) => match service.check_artifact_freshness(&r_config.space_root) {
+        }) => match InspectUseCase::check_artifact_freshness(&service, &r_config.space_root) {
             Ok(stale_report) => {
                 if cli.json {
                     println!("{}", serde_json::to_string(&stale_report).unwrap());
@@ -1167,7 +1173,7 @@ fn main() {
                 }
             },
 
-            SpaceCommands::Doctor => match service.space_doctor(&r_config.space_root) {
+            SpaceCommands::Doctor => match InspectUseCase::space_doctor(&service, &r_config.space_root) {
                 Ok(report) => {
                     if cli.json {
                         println!("{}", serde_json::to_string(&report).unwrap());
