@@ -145,7 +145,7 @@ impl<S: ProjectionStore> ApplicationFacade<S> {
     /// Persist a new or updated resource. The projection is updated
     /// atomically; the resource's source adapter (when present and writable)
     /// is invoked so the authoritative backing store stays in sync.
-    pub fn upsert_resource(
+    pub fn upsert_resource_impl(
         &mut self,
         resource: Resource,
     ) -> Result<(), ApplicationError> {
@@ -156,7 +156,7 @@ impl<S: ProjectionStore> ApplicationFacade<S> {
     }
 
     /// Delete a resource by `ResourceRef`. Idempotent at the projection layer.
-    pub fn delete_resource(
+    pub fn delete_resource_impl(
         &mut self,
         r_ref: &ResourceRef,
     ) -> Result<(), ApplicationError> {
@@ -167,7 +167,7 @@ impl<S: ProjectionStore> ApplicationFacade<S> {
     }
 
     /// Recent activity feed, ordered by `revision` descending.
-    pub fn list_recent(
+    pub fn list_recent_impl(
         &self,
         limit: usize,
     ) -> Result<Vec<Resource>, ApplicationError> {
@@ -184,7 +184,7 @@ impl<S: ProjectionStore> ApplicationFacade<S> {
     }
 
     /// List resources from a given source adapter.
-    pub fn list_by_source(
+    pub fn list_by_source_impl(
         &self,
         source_id: &str,
         limit: usize,
@@ -298,7 +298,7 @@ impl<S: ProjectionStore> ApplicationFacade<S> {
         }
 
         let mut resolved_count = 0;
-        let page = self.query(&crate::domain::Selector::new())?;
+        let page = self.query_impl(&crate::domain::Selector::new())?;
         for res in page.items {
             let rels = self.store.query_resolved_relations(&res.r#ref).unwrap_or_default();
             resolved_count += rels.len();
@@ -368,7 +368,7 @@ impl<S: ProjectionStore> ApplicationFacade<S> {
         resolve_and_store_links(&mut self.store, "native", link_occurrences)?;
 
         let mut resolved_count = 0;
-        let page = self.query(&crate::domain::Selector::new())?;
+        let page = self.query_impl(&crate::domain::Selector::new())?;
         for res in page.items {
             if res.source_id == "native" {
                 let rels = self
@@ -386,7 +386,7 @@ impl<S: ProjectionStore> ApplicationFacade<S> {
         })
     }
 
-    pub fn resolve(&self, query_str: &str) -> Result<ResolveResult, ApplicationError> {
+    pub fn resolve_impl(&self, query_str: &str) -> Result<ResolveResult, ApplicationError> {
         let trimmed = query_str.trim();
 
         if let Ok(r_ref) = ResourceRef::parse(trimmed)
@@ -423,7 +423,7 @@ impl<S: ProjectionStore> ApplicationFacade<S> {
             }
         }
 
-        let page_all = self.query(&Selector::new())?;
+        let page_all = self.query_impl(&Selector::new())?;
         let locator_matches: Vec<ResourceRef> = page_all
             .items
             .iter()
@@ -437,7 +437,7 @@ impl<S: ProjectionStore> ApplicationFacade<S> {
         }
 
         let title_selector = Selector::new().with_title_contains(trimmed);
-        let page_title = self.query(&title_selector)?;
+        let page_title = self.query_impl(&title_selector)?;
         let title_matches: Vec<ResourceRef> = page_title.items.iter().map(|r| r.r#ref).collect();
         if title_matches.len() == 1 {
             return Ok(ResolveResult::Found(title_matches[0]));
@@ -519,7 +519,7 @@ impl<S: ProjectionStore> ApplicationFacade<S> {
         // wrote diagnostics. Here we merely tally what is on disk so callers
         // get a stable view of unresolved/ambiguous/external counts.
         let _ = space_root;
-        let page = self.query(&Selector::new())?;
+        let page = self.query_impl(&Selector::new())?;
         let mut report = crate::application::link_resolution::LinkReindexReport::default();
         for res in &page.items {
             let diags = self
@@ -544,14 +544,14 @@ impl<S: ProjectionStore> ApplicationFacade<S> {
 
     /// Resolve a `ResourceAddress` (either a `Ref` or a `Locator`) and
     /// return a [`ResolveResult`].
-    pub fn resolve_address(
+    pub fn resolve_address_impl(
         &self,
         address: &crate::domain::ResourceAddress,
     ) -> Result<ResolveResult, ApplicationError> {
         use crate::domain::ResourceAddress;
         match address {
             ResourceAddress::Ref { r#ref } => {
-                if let Some(res) = self.read(r#ref)? {
+                if let Some(res) = self.read_impl(r#ref)? {
                     Ok(ResolveResult::Found(res.r#ref))
                 } else {
                     Ok(ResolveResult::NotFound)
@@ -588,19 +588,19 @@ impl<S: ProjectionStore> ApplicationFacade<S> {
         }
     }
 
-    pub fn query(&self, selector: &Selector) -> Result<QueryPage, ApplicationError> {
+    pub fn query_impl(&self, selector: &Selector) -> Result<QueryPage, ApplicationError> {
         self.store
             .query(selector)
             .map_err(|e| ApplicationError::Storage(e.to_string()))
     }
 
-    pub fn read(&self, r_ref: &ResourceRef) -> Result<Option<Resource>, ApplicationError> {
+    pub fn read_impl(&self, r_ref: &ResourceRef) -> Result<Option<Resource>, ApplicationError> {
         self.store
             .get(r_ref)
             .map_err(|e| ApplicationError::Storage(e.to_string()))
     }
     pub fn agenda(&self) -> Result<crate::application::task_para::AgendaView, ApplicationError> {
-        let page = self.query(&Selector::new())?;
+        let page = self.query_impl(&Selector::new())?;
         let mut items = Vec::new();
 
         for res in page.items {
@@ -632,7 +632,7 @@ impl<S: ProjectionStore> ApplicationFacade<S> {
         timestamp: &str,
     ) -> Result<crate::document::StateTransition, ApplicationError> {
         let mut res = self
-            .read(r_ref)?
+            .read_impl(r_ref)?
             .ok_or_else(|| ApplicationError::NotFound(r_ref.to_string()))?;
 
         let current_todo = res
@@ -676,7 +676,7 @@ impl<S: ProjectionStore> ApplicationFacade<S> {
     }
 
     pub fn para_overview(&self) -> Result<crate::application::task_para::ParaOverview, ApplicationError> {
-        let page = self.query(&Selector::new())?;
+        let page = self.query_impl(&Selector::new())?;
         let mut projects = Vec::new();
         let mut areas = Vec::new();
         let mut resources = Vec::new();
@@ -772,7 +772,7 @@ impl<S: ProjectionStore> ApplicationFacade<S> {
             properties,
         };
 
-        let page = self.query(&Selector::new())?;
+        let page = self.query_impl(&Selector::new())?;
         let mut native_resources: Vec<Resource> = page
             .items
             .into_iter()
@@ -795,7 +795,7 @@ impl<S: ProjectionStore> ApplicationFacade<S> {
         use crate::artifact::{Extractor, ImageMetadataExtractor, SegmentSlicer, TextExtractor};
 
         let res = self
-            .read(att_ref)?
+            .read_impl(att_ref)?
             .ok_or_else(|| ApplicationError::NotFound(att_ref.to_string()))?;
 
         let hash = res
@@ -875,7 +875,7 @@ impl<S: ProjectionStore> ApplicationFacade<S> {
             .find(|c| c.id == community_id)
             .ok_or_else(|| ApplicationError::NotFound(format!("community {community_id}")))?;
 
-        let page = self.query(&Selector::new())?;
+        let page = self.query_impl(&Selector::new())?;
         let members: Vec<Resource> = comm
             .filter_members(&page.items)
             .into_iter()
@@ -920,7 +920,7 @@ impl<S: ProjectionStore> ApplicationFacade<S> {
             .find(|c| c.id == community_id)
             .ok_or_else(|| ApplicationError::NotFound(format!("community {community_id}")))?;
 
-        let page = self.query(&Selector::new())?;
+        let page = self.query_impl(&Selector::new())?;
         let members: Vec<Resource> = comm
             .filter_members(&page.items)
             .into_iter()
@@ -1069,12 +1069,78 @@ impl<S: ProjectionStore> ApplicationFacade<S> {
         ))
     }
 
+    pub fn upsert_resource(&mut self, resource: Resource) -> Result<(), ApplicationError> {
+        <Self as crate::application::use_cases::ResourceUseCase>::upsert_resource(self, resource)
+    }
+    pub fn delete_resource(&mut self, r_ref: &ResourceRef) -> Result<(), ApplicationError> {
+        <Self as crate::application::use_cases::ResourceUseCase>::delete_resource(self, r_ref)
+    }
+    pub fn query(&self, selector: &Selector) -> Result<QueryPage, ApplicationError> {
+        <Self as crate::application::use_cases::ResourceUseCase>::query(self, selector)
+    }
+    pub fn read(&self, r_ref: &ResourceRef) -> Result<Option<Resource>, ApplicationError> {
+        <Self as crate::application::use_cases::ResourceUseCase>::read(self, r_ref)
+    }
+    pub fn list_recent(&self, limit: usize) -> Result<Vec<Resource>, ApplicationError> {
+        <Self as crate::application::use_cases::ResourceUseCase>::list_recent(self, limit)
+    }
+    pub fn list_by_source(&self, source_id: &str, limit: usize) -> Result<Vec<Resource>, ApplicationError> {
+        <Self as crate::application::use_cases::ResourceUseCase>::list_by_source(self, source_id, limit)
+    }
+    pub fn resolve(&self, query_str: &str) -> Result<ResolveResult, ApplicationError> {
+        <Self as crate::application::use_cases::ResourceUseCase>::resolve(self, query_str)
+    }
+    pub fn resolve_address(
+        &self,
+        address: &crate::domain::ResourceAddress,
+    ) -> Result<ResolveResult, ApplicationError> {
+        <Self as crate::application::use_cases::ResourceUseCase>::resolve_address(self, address)
+    }
+
     pub fn rebuild(&mut self, root: &Path) -> Result<ScanReport, ApplicationError> {
         self.store
             .clear()
             .map_err(|e| ApplicationError::Storage(e.to_string()))?;
         self.scan_native(root)
     }
+}
+
+
+impl<S: crate::domain::ProjectionStore> crate::application::use_cases::ResourceUseCase
+    for ApplicationFacade<S>
+{
+    fn upsert_resource(&mut self, resource: Resource) -> Result<(), ApplicationError> {
+        ApplicationFacade::upsert_resource_impl(self, resource)
+    }
+    fn delete_resource(&mut self, r_ref: &ResourceRef) -> Result<(), ApplicationError> {
+        ApplicationFacade::delete_resource_impl(self, r_ref)
+    }
+    fn query(&self, selector: &Selector) -> Result<QueryPage, ApplicationError> {
+        ApplicationFacade::query_impl(self, selector)
+    }
+    fn read(&self, r_ref: &ResourceRef) -> Result<Option<Resource>, ApplicationError> {
+        ApplicationFacade::read_impl(self, r_ref)
+    }
+    fn list_recent(&self, limit: usize) -> Result<Vec<Resource>, ApplicationError> {
+        ApplicationFacade::list_recent_impl(self, limit)
+    }
+    fn list_by_source(
+        &self,
+        source_id: &str,
+        limit: usize,
+    ) -> Result<Vec<Resource>, ApplicationError> {
+        ApplicationFacade::list_by_source_impl(self, source_id, limit)
+    }
+    fn resolve(&self, query_str: &str) -> Result<ResolveResult, ApplicationError> {
+        ApplicationFacade::resolve_impl(self, query_str)
+    }
+    fn resolve_address(
+        &self,
+        address: &crate::domain::ResourceAddress,
+    ) -> Result<ResolveResult, ApplicationError> {
+        ApplicationFacade::resolve_address_impl(self, address)
+}
+
 }
 
 impl<S: crate::domain::ProjectionStore> crate::application::use_cases::ScanUseCase for ApplicationFacade<S> {
