@@ -189,3 +189,14 @@ CLI main 与 MCP server 内部所有 `service.<fn>(...)` 调用全部改为
 - =cargo check --workspace --all-targets= 通过。
 - =cargo run -p cli -- --help= 正常输出。
 - 一份 git commit 描述本轮拆分。
+
+** 9. Verification
+
+- cargo test --workspace: 174 tests passed, 0 failed.
+- cargo check --workspace --all-targets: exit 0.
+- CLI scan/query/read smoke against /tmp/notez-usecase-smoke: all three commands returned expected output.
+- Audit grep: no =service.X= for use-case methods remains in cli/src/main.rs or cli/src/mcp/server.rs.
+
+Notes on the audit grep:
+- =grep -nE "service\.[a-z_]+\(" cli/src/main.rs cli/src/mcp/server.rs | grep -vE "service\.(new|with_space|space|store|store_mut|register_format_parser|register_capability|add_source|list_sources|writeback_resource|rebuild)"= yields two hits in =cli/src/mcp/server.rs= at lines 387 and 396:
+  both are =self.service.lock()= calls inside =NotezMcpServer::with_service= / =with_service_mut= helpers. They are field accesses on =self.service: Arc<Mutex<ApplicationService<SqliteProjection>>>= followed by =Mutex::lock=, not method calls on the application service itself. No use-case method dispatch remains.
