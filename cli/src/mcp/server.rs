@@ -7,7 +7,13 @@
 
 use std::sync::{Arc, Mutex};
 
-use notez_core::application::{ApplicationService, ResolveResult};
+use notez_core::application::{
+    use_cases::{
+        ArtifactUseCase, AttachmentUseCase, CommunityUseCase, InspectUseCase, LinkUseCase,
+        ResourceUseCase, ScanUseCase, SyncUseCase, TaskUseCase,
+    },
+    ApplicationService, ResolveResult,
+};
 use notez_core::domain::{ResourceKind, ResourceRef, Selector};
 use rmcp::{
     ErrorData as McpError, ServerHandler, ServiceExt,
@@ -402,7 +408,7 @@ impl NotezMcpServer {
         self.with_service(|svc| {
             let address_str: &str = &args.query;
             if let Ok(addr) = notez_core::domain::ResourceAddress::parse(address_str) {
-                match svc.resolve_address(&addr) {
+                match ResourceUseCase::resolve_address(svc, &addr) {
                     Ok(ResolveResult::Found(r_ref)) => {
                         text_ok(json!({ "ref": r_ref.to_string() }))
                     }
@@ -419,7 +425,7 @@ impl NotezMcpServer {
                     Err(e) => text_err(format!("Internal resolve error: {e}")),
                 }
             } else {
-                match svc.resolve(address_str) {
+                match ResourceUseCase::resolve(svc, address_str) {
                     Ok(ResolveResult::Found(r_ref)) => {
                         text_ok(json!({ "ref": r_ref.to_string() }))
                     }
@@ -457,7 +463,7 @@ impl NotezMcpServer {
             if let Some(title_sub) = args.title_contains.as_deref() {
                 selector.title_contains = Some(title_sub.to_owned());
             }
-            match svc.query(&selector) {
+            match ResourceUseCase::query(svc, &selector) {
                 Ok(page) => match serde_json::to_value(&page) {
                     Ok(v) => text_ok(v),
                     Err(e) => text_err(format!("Internal query serialization error: {e}")),
@@ -482,7 +488,7 @@ impl NotezMcpServer {
                     ));
                 }
             };
-            match svc.read(&r_ref) {
+            match ResourceUseCase::read(svc, &r_ref) {
                 Ok(Some(res)) => match serde_json::to_value(&res) {
                     Ok(v) => text_ok(v),
                     Err(e) => text_err(format!("Internal read serialization error: {e}")),
@@ -508,15 +514,15 @@ impl NotezMcpServer {
                     Ok(r) => r,
                     Err(e) => return text_err(format!("Invalid resource ref '{ref_str}': {e}")),
                 };
-                let occs = match svc.list_links(&parsed) {
+                let occs = match LinkUseCase::list_links(svc, &parsed) {
                     Ok(o) => o,
                     Err(e) => return text_err(format!("Internal inspect error: {e}")),
                 };
-                let resolved = match svc.resolve_links(&parsed) {
+                let resolved = match LinkUseCase::resolve_links(svc, &parsed) {
                     Ok(r) => r,
                     Err(e) => return text_err(format!("Internal inspect error: {e}")),
                 };
-                let diags = match svc.diagnose_link(&parsed) {
+                let diags = match LinkUseCase::diagnose_link(svc, &parsed) {
                     Ok(d) => d,
                     Err(e) => return text_err(format!("Internal inspect error: {e}")),
                 };
@@ -535,7 +541,7 @@ impl NotezMcpServer {
                 }))
             } else {
                 let selector: Selector = Selector::default();
-                match svc.query(&selector) {
+                match ResourceUseCase::query(svc, &selector) {
                     Ok(page) => text_ok(json!({
                         "status": "ok",
                         "total_items": page.items.len(),
@@ -561,7 +567,7 @@ impl NotezMcpServer {
                     ));
                 }
             };
-            match svc.inspect_rules(&r_ref) {
+            match InspectUseCase::inspect_rules(svc, &r_ref) {
                 Ok(Some(inspect_res)) => match serde_json::to_value(&inspect_res) {
                     Ok(v) => text_ok(v),
                     Err(e) => {
@@ -589,7 +595,7 @@ impl NotezMcpServer {
                     ));
                 }
             };
-            match svc.list_links(&r_ref) {
+            match LinkUseCase::list_links(svc, &r_ref) {
                 Ok(occs) => match serde_json::to_value(&occs) {
                     Ok(v) => text_ok(v),
                     Err(e) => text_err(format!("Internal link_list serialization error: {e}")),
@@ -614,7 +620,7 @@ impl NotezMcpServer {
                     ));
                 }
             };
-            match svc.resolve_links(&r_ref) {
+            match LinkUseCase::resolve_links(svc, &r_ref) {
                 Ok(rels) => match serde_json::to_value(&rels) {
                     Ok(v) => text_ok(v),
                     Err(e) => {
@@ -641,7 +647,7 @@ impl NotezMcpServer {
                     ));
                 }
             };
-            match svc.diagnose_link(&r_ref) {
+            match LinkUseCase::diagnose_link(svc, &r_ref) {
                 Ok(diags) => match serde_json::to_value(&diags) {
                     Ok(v) => text_ok(v),
                     Err(e) => {
@@ -660,7 +666,7 @@ impl NotezMcpServer {
     ) -> Result<CallToolResult, McpError> {
         self.with_service_mut(|svc| {
             let space = space_path(args.space.as_deref());
-            match svc.reindex_links(&space) {
+            match LinkUseCase::reindex_links(svc, &space) {
                 Ok(report) => match serde_json::to_value(&report) {
                     Ok(v) => text_ok(v),
                     Err(e) => {
@@ -674,7 +680,7 @@ impl NotezMcpServer {
 
     #[tool(description = "Show the agenda (tasks + scheduled + deadline windows)")]
     fn agenda(&self) -> Result<CallToolResult, McpError> {
-        self.with_service(|svc| match svc.agenda() {
+        self.with_service(|svc| match TaskUseCase::agenda(svc) {
             Ok(agenda) => match serde_json::to_value(&agenda) {
                 Ok(v) => text_ok(v),
                 Err(e) => text_err(format!("Internal agenda serialization error: {e}")),
@@ -698,7 +704,7 @@ impl NotezMcpServer {
             }
         };
         let timestamp = args.timestamp.as_deref().unwrap_or("2026-07-22 Wed 16:00");
-        self.with_service_mut(|svc| match svc.transition_task(&r_ref, &args.to, timestamp) {
+        self.with_service_mut(|svc| match TaskUseCase::transition_task(svc, &r_ref, &args.to, timestamp) {
             Ok(transition) => match serde_json::to_value(&transition) {
                 Ok(v) => text_ok(v),
                 Err(e) => text_err(format!("Internal transition serialization error: {e}")),
@@ -770,7 +776,7 @@ impl NotezMcpServer {
         let space = space_path(args.space.as_deref());
         let file_path = std::path::Path::new(&args.path);
         let default_mime = args.mime.as_deref().unwrap_or("application/octet-stream");
-        self.with_service_mut(|svc| match svc.add_attachment(&space, file_path, default_mime) {
+        self.with_service_mut(|svc| match AttachmentUseCase::add_attachment(svc, &space, file_path, default_mime) {
             Ok(att_ref) => text_ok(json!({ "ref": att_ref.to_string() })),
             Err(e) => text_err(format!("Internal attachment_add error: {e}")),
         })
@@ -791,7 +797,7 @@ impl NotezMcpServer {
                 ));
             }
         };
-        self.with_service_mut(|svc| match svc.run_extraction(&space, &r_ref) {
+        self.with_service_mut(|svc| match AttachmentUseCase::run_extraction(svc, &space, &r_ref) {
             Ok(segments) => text_ok(json!({
                 "attachment_ref": args.r#ref,
                 "segments_count": segments.len(),
@@ -815,7 +821,7 @@ impl NotezMcpServer {
                     ));
                 }
             };
-            match svc.query_segments(&r_ref) {
+            match AttachmentUseCase::query_segments(svc, &r_ref) {
                 Ok(segments) => match serde_json::to_value(&segments) {
                     Ok(v) => text_ok(v),
                     Err(e) => {
@@ -852,7 +858,7 @@ impl NotezMcpServer {
             excluded_members: vec![],
         };
         let space = space_path(args.space.as_deref());
-        self.with_service_mut(|svc| match svc.create_community(&space, comm) {
+        self.with_service_mut(|svc| match CommunityUseCase::create_community(svc, &space, comm) {
             Ok(_) => text_ok(json!({ "created": true })),
             Err(e) => text_err(format!("Internal community_create error: {e}")),
         })
@@ -866,7 +872,7 @@ impl NotezMcpServer {
         let space = space_path(args.space.as_deref());
         let recipe_name = args.recipe.clone();
         self.with_service_mut(|svc| {
-            match svc.derive_artifact(&space, &args.community, &recipe_name) {
+            match ArtifactUseCase::derive_artifact(svc, &space, &args.community, &recipe_name) {
                 Ok(derived) => text_ok(json!({
                     "recipe": recipe_name,
                     "content": derived.content,
@@ -885,7 +891,7 @@ impl NotezMcpServer {
         let description = args.description.as_deref().unwrap_or("Exported Agent Skill");
         let out_path = std::path::Path::new(&args.out);
         self.with_service_mut(|svc| {
-            match svc.export_skill(&space, &args.community, description, out_path) {
+            match ArtifactUseCase::export_skill(svc, &space, &args.community, description, out_path) {
                 Ok(package) => text_ok(json!({
                     "name": package.name,
                     "path": package.package_path.to_string_lossy(),
@@ -903,7 +909,7 @@ impl NotezMcpServer {
         let space = space_path(args.space.as_deref());
         let actor = args.actor.as_deref().unwrap_or("mcp_actor");
         let folder_path = std::path::Path::new(&args.folder);
-        self.with_service_mut(|svc| match svc.sync_push(actor, &space, folder_path) {
+        self.with_service_mut(|svc| match SyncUseCase::sync_push(svc, actor, &space, folder_path) {
             Ok(report) => text_ok(json!({
                 "pushed_files": report.pushed_files,
                 "pushed_objects": report.pushed_objects,
@@ -920,7 +926,7 @@ impl NotezMcpServer {
         let space = space_path(args.space.as_deref());
         let actor = args.actor.as_deref().unwrap_or("mcp_actor");
         let folder_path = std::path::Path::new(&args.folder);
-        self.with_service_mut(|svc| match svc.sync_pull(actor, &space, folder_path) {
+        self.with_service_mut(|svc| match SyncUseCase::sync_pull(svc, actor, &space, folder_path) {
             Ok(report) => text_ok(json!({
                 "pulled_files": report.pulled_files,
                 "merged_files": report.merged_files,
@@ -932,7 +938,7 @@ impl NotezMcpServer {
 
     #[tool(description = "List active sync conflicts in space")]
     fn sync_conflicts(&self) -> Result<CallToolResult, McpError> {
-        self.with_service(|svc| match svc.list_conflicts() {
+        self.with_service(|svc| match SyncUseCase::list_conflicts(svc) {
             Ok(conflicts) => match serde_json::to_value(&conflicts) {
                 Ok(v) => text_ok(v),
                 Err(e) => {
@@ -950,7 +956,7 @@ impl NotezMcpServer {
     ) -> Result<CallToolResult, McpError> {
         self.with_service(|svc| {
             let space = space_path(args.space.as_deref());
-            match svc.space_doctor(&space) {
+            match InspectUseCase::space_doctor(svc, &space) {
                 Ok(report) => match serde_json::to_value(&report) {
                     Ok(v) => text_ok(v),
                     Err(e) => {
@@ -964,7 +970,7 @@ impl NotezMcpServer {
 
     #[tool(description = "List background jobs and tasks")]
     fn job_list(&self) -> Result<CallToolResult, McpError> {
-        self.with_service(|svc| match svc.list_jobs() {
+        self.with_service(|svc| match InspectUseCase::list_jobs(svc) {
             Ok(jobs) => match serde_json::to_value(&jobs) {
                 Ok(v) => text_ok(v),
                 Err(e) => text_err(format!("Internal job_list serialization error: {e}")),
@@ -980,7 +986,7 @@ impl NotezMcpServer {
     ) -> Result<CallToolResult, McpError> {
         self.with_service(|svc| {
             let space = space_path(args.space.as_deref());
-            match svc.check_artifact_freshness(&space) {
+            match InspectUseCase::check_artifact_freshness(svc, &space) {
                 Ok(report) => match serde_json::to_value(&report) {
                     Ok(v) => text_ok(v),
                     Err(e) => {
