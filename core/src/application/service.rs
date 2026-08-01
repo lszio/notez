@@ -116,6 +116,13 @@ impl<S: ProjectionStore> ApplicationFacade<S> {
         &self,
         r_ref: &ResourceRef,
     ) -> Result<Option<crate::domain::InspectResult>, ApplicationError> {
+        <Self as crate::application::use_cases::InspectUseCase>::inspect_rules(self, r_ref)
+    }
+
+    pub fn inspect_rules_impl(
+        &self,
+        r_ref: &ResourceRef,
+    ) -> Result<Option<crate::domain::InspectResult>, ApplicationError> {
         let res = self
             .store
             .get(r_ref)
@@ -763,7 +770,7 @@ impl<S: ProjectionStore> ApplicationFacade<S> {
         }
 
         for res in page.items {
-            let inspect_res = self.inspect_rules(&res.r#ref)?;
+            let inspect_res = self.inspect_rules_impl(&res.r#ref)?;
             let para_val = inspect_res
                 .as_ref()
                 .and_then(|i| i.derived_properties.get("para").map(|s| s.to_string()))
@@ -1056,6 +1063,15 @@ impl<S: ProjectionStore> ApplicationFacade<S> {
         space_root: &Path,
         shared_folder: &Path,
     ) -> Result<crate::sync::PushReport, ApplicationError> {
+        <Self as crate::application::use_cases::SyncUseCase>::sync_push(self, actor_id, space_root, shared_folder)
+    }
+
+    pub fn sync_push_impl(
+        &mut self,
+        actor_id: &str,
+        space_root: &Path,
+        shared_folder: &Path,
+    ) -> Result<crate::sync::PushReport, ApplicationError> {
         let transport = crate::sync::FolderTransport::new(shared_folder);
         let engine = crate::sync::SyncEngine::new(actor_id, space_root, transport);
         let report = engine
@@ -1070,24 +1086,43 @@ impl<S: ProjectionStore> ApplicationFacade<S> {
         space_root: &Path,
         shared_folder: &Path,
     ) -> Result<crate::sync::PullReport, ApplicationError> {
+        <Self as crate::application::use_cases::SyncUseCase>::sync_pull(self, actor_id, space_root, shared_folder)
+    }
+
+    pub fn sync_pull_impl(
+        &mut self,
+        actor_id: &str,
+        space_root: &Path,
+        shared_folder: &Path,
+    ) -> Result<crate::sync::PullReport, ApplicationError> {
         let transport = crate::sync::FolderTransport::new(shared_folder);
         let engine = crate::sync::SyncEngine::new(actor_id, space_root, transport);
         let report = engine
             .pull()
             .map_err(|e| ApplicationError::Storage(e.to_string()))?;
 
-        self.scan_native(space_root)?;
+        self.scan_native_impl(space_root)?;
 
         Ok(report)
     }
 
     pub fn list_conflicts(&self) -> Result<Vec<crate::sync::ConflictRecord>, ApplicationError> {
+        <Self as crate::application::use_cases::SyncUseCase>::list_conflicts(self)
+    }
+
+    pub fn list_conflicts_impl(&self) -> Result<Vec<crate::sync::ConflictRecord>, ApplicationError> {
         Err(ApplicationError::Unsupported(
             "conflict list is not yet implemented; use `notez sync` commands",
         ))
     }
-
     pub fn space_doctor(
+        &self,
+        _space_root: &Path,
+    ) -> Result<crate::application::doctor::DoctorReport, ApplicationError> {
+        <Self as crate::application::use_cases::InspectUseCase>::space_doctor(self, _space_root)
+    }
+
+    pub fn space_doctor_impl(
         &self,
         _space_root: &Path,
     ) -> Result<crate::application::doctor::DoctorReport, ApplicationError> {
@@ -1097,6 +1132,10 @@ impl<S: ProjectionStore> ApplicationFacade<S> {
     }
 
     pub fn list_jobs(&self) -> Result<Vec<crate::application::job_manager::JobRecord>, ApplicationError> {
+        <Self as crate::application::use_cases::InspectUseCase>::list_jobs(self)
+    }
+
+    pub fn list_jobs_impl(&self) -> Result<Vec<crate::application::job_manager::JobRecord>, ApplicationError> {
         Err(ApplicationError::Unsupported(
             "job manager is not yet implemented; jobs are tracked via `notez task`",
         ))
@@ -1106,11 +1145,17 @@ impl<S: ProjectionStore> ApplicationFacade<S> {
         &self,
         _space_root: &Path,
     ) -> Result<crate::application::job_manager::ArtifactStaleReport, ApplicationError> {
+        <Self as crate::application::use_cases::InspectUseCase>::check_artifact_freshness(self, _space_root)
+    }
+
+    pub fn check_artifact_freshness_impl(
+        &self,
+        _space_root: &Path,
+    ) -> Result<crate::application::job_manager::ArtifactStaleReport, ApplicationError> {
         Err(ApplicationError::Unsupported(
             "artifact freshness check is not yet implemented",
         ))
     }
-
     pub fn writeback_resource(
         &self,
         source_id: &str,
@@ -1176,6 +1221,14 @@ impl<S: ProjectionStore> ApplicationFacade<S> {
     }
 
     pub fn relay_sync(
+        &self,
+        _source_id: &str,
+        _space_root: &Path,
+    ) -> Result<crate::application::writeback::RelaySyncReport, ApplicationError> {
+        <Self as crate::application::use_cases::SyncUseCase>::relay_sync(self, _source_id, _space_root)
+    }
+
+    pub fn relay_sync_impl(
         &self,
         _source_id: &str,
         _space_root: &Path,
@@ -1380,5 +1433,56 @@ impl<S: crate::domain::ProjectionStore> crate::application::use_cases::ArtifactU
         export_path: &std::path::Path,
     ) -> Result<crate::artifact::SkillPackage, ApplicationError> {
         ApplicationFacade::export_skill_impl(self, space_root, community_id, description, export_path)
+    }
+}
+impl<S: crate::domain::ProjectionStore> crate::application::use_cases::SyncUseCase for ApplicationFacade<S> {
+    fn sync_push(
+        &mut self,
+        actor_id: &str,
+        space_root: &std::path::Path,
+        shared_folder: &std::path::Path,
+    ) -> Result<crate::sync::PushReport, ApplicationError> {
+        ApplicationFacade::sync_push_impl(self, actor_id, space_root, shared_folder)
+    }
+    fn sync_pull(
+        &mut self,
+        actor_id: &str,
+        space_root: &std::path::Path,
+        shared_folder: &std::path::Path,
+    ) -> Result<crate::sync::PullReport, ApplicationError> {
+        ApplicationFacade::sync_pull_impl(self, actor_id, space_root, shared_folder)
+    }
+    fn relay_sync(
+        &self,
+        source_id: &str,
+        space_root: &std::path::Path,
+    ) -> Result<crate::application::writeback::RelaySyncReport, ApplicationError> {
+        ApplicationFacade::relay_sync_impl(self, source_id, space_root)
+    }
+    fn list_conflicts(&self) -> Result<Vec<crate::sync::ConflictRecord>, ApplicationError> {
+        ApplicationFacade::list_conflicts_impl(self)
+    }
+}
+impl<S: crate::domain::ProjectionStore> crate::application::use_cases::InspectUseCase for ApplicationFacade<S> {
+    fn inspect_rules(
+        &self,
+        r_ref: &ResourceRef,
+    ) -> Result<Option<crate::domain::InspectResult>, ApplicationError> {
+        ApplicationFacade::inspect_rules_impl(self, r_ref)
+    }
+    fn space_doctor(
+        &self,
+        space_root: &std::path::Path,
+    ) -> Result<crate::application::doctor::DoctorReport, ApplicationError> {
+        ApplicationFacade::space_doctor_impl(self, space_root)
+    }
+    fn list_jobs(&self) -> Result<Vec<crate::application::job_manager::JobRecord>, ApplicationError> {
+        ApplicationFacade::list_jobs_impl(self)
+    }
+    fn check_artifact_freshness(
+        &self,
+        space_root: &std::path::Path,
+    ) -> Result<crate::application::job_manager::ArtifactStaleReport, ApplicationError> {
+        ApplicationFacade::check_artifact_freshness_impl(self, space_root)
     }
 }
