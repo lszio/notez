@@ -796,6 +796,15 @@ impl<S: ProjectionStore> ApplicationFacade<S> {
         file_path: &Path,
         default_mime: &str,
     ) -> Result<ResourceRef, ApplicationError> {
+        <Self as crate::application::use_cases::AttachmentUseCase>::add_attachment(self, space_root, file_path, default_mime)
+    }
+
+    pub fn add_attachment_impl(
+        &mut self,
+        space_root: &Path,
+        file_path: &Path,
+        default_mime: &str,
+    ) -> Result<ResourceRef, ApplicationError> {
         let bytes = std::fs::read(file_path)?;
         let blob_store = crate::storage::BlobStore::new(space_root);
         let meta = blob_store
@@ -851,6 +860,14 @@ impl<S: ProjectionStore> ApplicationFacade<S> {
         space_root: &Path,
         att_ref: &ResourceRef,
     ) -> Result<Vec<crate::domain::SegmentRecord>, ApplicationError> {
+        <Self as crate::application::use_cases::AttachmentUseCase>::run_extraction(self, space_root, att_ref)
+    }
+
+    pub fn run_extraction_impl(
+        &mut self,
+        space_root: &Path,
+        att_ref: &ResourceRef,
+    ) -> Result<Vec<crate::domain::SegmentRecord>, ApplicationError> {
         use crate::artifact::{Extractor, ImageMetadataExtractor, SegmentSlicer, TextExtractor};
 
         let res = self
@@ -895,6 +912,13 @@ impl<S: ProjectionStore> ApplicationFacade<S> {
     }
 
     pub fn query_segments(
+        &self,
+        att_ref: &ResourceRef,
+    ) -> Result<Vec<crate::domain::SegmentRecord>, ApplicationError> {
+        <Self as crate::application::use_cases::AttachmentUseCase>::query_segments(self, att_ref)
+    }
+
+    pub fn query_segments_impl(
         &self,
         att_ref: &ResourceRef,
     ) -> Result<Vec<crate::domain::SegmentRecord>, ApplicationError> {
@@ -1266,5 +1290,28 @@ impl<S: crate::domain::ProjectionStore> crate::application::use_cases::TaskUseCa
         timestamp: &str,
     ) -> Result<crate::document::StateTransition, ApplicationError> {
         ApplicationFacade::transition_task_impl(self, r_ref, to_state, timestamp)
+    }
+}
+impl<S: crate::domain::ProjectionStore> crate::application::use_cases::AttachmentUseCase for ApplicationFacade<S> {
+    fn add_attachment(
+        &mut self,
+        space_root: &std::path::Path,
+        file_path: &std::path::Path,
+        default_mime: &str,
+    ) -> Result<ResourceRef, ApplicationError> {
+        ApplicationFacade::add_attachment_impl(self, space_root, file_path, default_mime)
+    }
+    fn run_extraction(
+        &mut self,
+        space_root: &std::path::Path,
+        att_ref: &ResourceRef,
+    ) -> Result<Vec<crate::domain::SegmentRecord>, ApplicationError> {
+        ApplicationFacade::run_extraction_impl(self, space_root, att_ref)
+    }
+    fn query_segments(
+        &self,
+        att_ref: &ResourceRef,
+    ) -> Result<Vec<crate::domain::SegmentRecord>, ApplicationError> {
+        ApplicationFacade::query_segments_impl(self, att_ref)
     }
 }
