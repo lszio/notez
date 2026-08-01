@@ -1,0 +1,9 @@
+[package]
+name = "markdown"
+version = "0.1.0"
+edition = "2024"
+description = "notez markdown parser adapter"
+
+[dependencies]
+core = { path = "../../core" }
+serde = { workspace = true }

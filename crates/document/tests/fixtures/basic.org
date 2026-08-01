@@ -1,9 +1,0 @@
-#+title: Notez Architecture
-#+ID: 01J00000000000000000000000
-
-* NEXT Design sync
-:PROPERTIES:
-:ID: 01J00000000000000000000001
-:TYPE: project
-:END:
-See [[id:01J00000000000000000000002][Merge rules]].

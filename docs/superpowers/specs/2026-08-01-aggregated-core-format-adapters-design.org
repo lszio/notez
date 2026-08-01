@@ -1,0 +1,283 @@
+#+title: 聚合 Core 与格式 Adapter 重构设计
+#+date: 2026-08-01
+
+* 1. 目标
+
+Notez 保留单一聚合业务 crate =core=，同时把 Org 与 Markdown 的具体格式解析实现移动到独立 adapter crate。所有 source 扫描统一经过同一协议链路；所有写操作显式检查 source 能力、只读状态与 revision，并禁止默认成功的空实现。
+
+本次设计解决三个问题：
+
+1. 当前 =scan_native=、=NativeSourceAdapter= 和其他 source adapter 存在重复扫描链路。
+2. =adapters/orgmode= 与 =adapters/markdown= 仅 re-export =core= 内实现，没有形成真实 adapter 边界。
+3. projection/source 写接口存在成功 no-op，部分单资源写入会错误地替换整个 source 投影。
+
+* 2. 决策
+
+** 2.1 包结构
+
+Cargo package 与 Rust crate 均继续命名为 =core=。这是明确选择；因此由过程宏生成的标准 =::core::*= 路径可能被本地 crate 遮蔽。Clap、schemars 及未来宏的兼容处理属于必须验证的构建约束，不通过重命名规避。
+
+目标 workspace：
+
+#+begin_src text
+core/
+  domain/          稳定模型与协议 DTO
+  document/        格式无关扫描结果、workflow、安全规则
+  source/          transport、source registry、组合适配器
+  application/     用例 facade 与事务编排
+  storage/         SQLite projection 与 blob store
+  config/          全局、空间及运行配置
+  sync/            manifest、transport、merge
+  artifact/        extraction、recipe、skill export
+  preview/         纯 preview model 与 renderer catalog
+
+adapters/
+  orgmode/         OrgParser 及具体 Org 语法解析
+  markdown/        MarkdownParser 及具体 Markdown 语法解析
+
+cli/               CLI、MCP 与生产 composition root
+app/               web/desktop/mobile composition root
+#+end_src
+
+=core= 不依赖任何格式 adapter。=orgmode= 与 =markdown= 依赖 =core= 的协议和领域类型。=cli= 与 =app= 依赖 =core= 和具体 adapter，并负责注册。
+
+** 2.2 稳定协议
+
+=core= 定义格式无关协议：
+
+#+begin_src rust
+pub struct RawEntity {
+    pub locator: String,
+    pub mime_type: String,
+    pub payload: Vec<u8>,
+}
+
+pub struct ParsedEntity {
+    pub resources: Vec<Resource>,
+    pub relations: Vec<ResourceRelation>,
+    pub link_occurrences: Vec<LinkOccurrence>,
+}
+
+pub trait FormatParser: Send + Sync {
+    fn supports(&self, mime_type: &str) -> bool;
+
+    fn parse(
+        &self,
+        entity: &RawEntity,
+        source_id: &str,
+    ) -> Result<ParsedEntity, ParserError>;
+}
+#+end_src
+
+Org/Markdown parser 必须解析 =RawEntity.payload=。禁止根据 =locator= 再次读取文件；transport 是物理 I/O 的唯一所有者，parser 只解释输入字节。
+
+source transport 继续聚合在 =core::source=。Native、Git、Obsidian、Anytype 等实现 =SourceTransport=，产生带 MIME 的 =RawEntity=。=SourceRegistry= 组合 transport 与 parser，并按 MIME 选择唯一 parser。
+
+** 2.3 Composition root
+
+具体 parser 只在 =cli= 与 =app= 注册：
+
+#+begin_src rust
+let parsers: Vec<Box<dyn FormatParser>> = vec![
+    Box::new(orgmode::OrgParser::new()),
+    Box::new(markdown::MarkdownParser::new()),
+];
+
+let sources = SourceRegistry::new(parsers);
+let service = ApplicationService::new(store, space, sources);
+#+end_src
+
+生产代码不得在 =ApplicationService= 内通过 =match SourceKind= 构造具体 parser。source transport 的构造可以由 registry/factory 负责，但 factory 由 composition root 配置。
+
+* 3. 统一运行链路
+
+** 3.1 扫描
+
+唯一扫描流程：
+
+#+begin_src text
+ApplicationService
+  -> SourceRegistry
+  -> SourceTransport::fetch_raw
+  -> FormatParser::parse
+  -> ScannedSource
+  -> ProjectionStore::replace_source
+  -> link resolution
+  -> ScanReport
+#+end_src
+
+删除 =ApplicationService::scan_native= 内部的 =WalkDir + OrgScanner/MarkdownScanner= 实现。命令层仍可提供“扫描 native source”用例，但该用例必须选择 registry 中的 native source，不能维护第二条扫描算法。
+
+未知 MIME 或没有 parser 时返回 =ParserNotFound=，并包含 source、locator 与 MIME 诊断。parser 错误不能通过 =eprintln!= 后跳过；扫描报告必须明确失败或包含可查询诊断。本轮采用失败整个 source scan，避免静默产生不完整投影。
+
+** 3.2 空间绑定
+
+=ApplicationService= 显式持有：
+
+#+begin_src rust
+pub struct SpaceContext {
+    pub root: PathBuf,
+    pub id: String,
+    pub config: RuntimeConfig,
+}
+#+end_src
+
+禁止在 application 内使用 =Path::new(".")= 推断空间。
+
+MCP server 固定绑定启动时选择的单一 =SpaceContext= 与对应 projection。MCP tool DTO 不允许单次请求切换到另一空间；多空间常驻服务不在本次范围内。
+
+** 3.3 写入
+
+写入顺序固定为：
+
+1. 将输入解析为唯一 =ResourceRef=；歧义或缺失立即失败。
+2. 找到 source adapter；不存在返回 =SourceNotFound=。
+3. 检查 =read_only= 与公开 capabilities。
+4. 校验 =expected_revision=；不一致返回 =RevisionConflict=。
+5. 对事实来源执行 prepare/commit。
+6. 事实来源成功后，使用单资源 projection API 更新或删除。
+7. 如格式写回会改变结构，重扫受影响 raw entity；禁止无条件重扫整个 source。
+
+禁止以下行为：
+
+- =ProjectionStore= 写方法默认返回 =Ok(())=；
+- =SourceAdapter= 的 prepare/commit 默认返回成功；
+- source 未注册时返回 =committed: true=；
+- 用 =replace_source(source_id, vec![single_resource], ...)= 表示单资源更新；
+- 在事实来源写失败后更新 projection。
+
+=replace_source= 只用于一次完整、成功的 source scan 原子替换。
+
+* 4. Application 边界
+
+=ApplicationService= 继续作为唯一公开 facade，避免本轮改动 CLI/MCP 的全部概念模型，但实现按职责拆分：
+
+#+begin_src text
+core/src/application/
+  mod.rs          facade 与公开 re-export
+  service.rs      ApplicationService/AppContext 定义
+  scan.rs         source scan 与 projection replacement
+  resources.rs    resolve/query/read/upsert/delete
+  links.rs        link resolve/diagnose/reindex
+  tasks.rs        agenda、transition、PARA
+  attachments.rs  blob 与 extraction orchestration
+  communities.rs  community 用例
+  artifacts.rs    derive/export/freshness
+  sync.rs         push/pull/conflict 用例
+  inspect.rs      doctor、rules、diagnostics
+#+end_src
+
+拆文件不增加新的公共 service 类型。每个模块只实现对应 =impl ApplicationService= 方法。
+
+source adapter registry 替代 =service.rs= 中手写的多路 =match SourceKind=。应用层依赖注册表协议，不依赖 Org/Markdown 具体实现。
+
+* 5. Preview 边界
+
+=PreviewContext= 不得持有 =ApplicationService<SqliteProjection>=。application 在调用 renderer 前准备资源、segments、siblings 与嵌入目标；preview 只把完整输入转成 =PreviewModel=。
+
+本次迁移若 app 仍是 stub，只完成 core 侧解耦及单元验证，不扩展 UI 功能。
+
+* 6. 错误模型
+
+应用错误至少明确区分：
+
+| 错误 | 含义 |
+|---|---|
+| =SourceNotFound= | 资源对应 source 未注册 |
+| =ParserNotFound= | 没有 parser 支持 raw entity MIME |
+| =UnsupportedCapability= | source/store 不提供请求能力 |
+| =ReadOnlySource= | source 明确只读 |
+| =RevisionConflict= | expected revision 与当前事实不一致 |
+| =Storage= | projection 或 blob 失败 |
+| =Parse= | adapter 无法解释 raw entity |
+| =Io= | transport 或配置文件 I/O 失败 |
+
+CLI 将错误映射为非零退出码和明确 stderr。MCP 返回结构化 tool error。任何上述错误都不能映射为空列表、固定 =fresh=、固定 =committed=true= 或其他成功结果。
+
+未实现的 job、relay、Apple source 等能力在实现完成前不得伪装成功：要么不注册公开 capability，要么返回 =UnsupportedCapability=。
+
+* 7. 配置与事实来源
+
+=SpaceContext.config= 是 source/community 配置的运行时事实。application 不再从 =.notez/sources.json= 或 =.notez/communities.json= 建立第二套正常写路径。
+
+旧 JSON 仅作为显式 migration 输入；迁移后的正常写入目标是 =notez.toml=。=.notez/= 继续只保存 projection、blob、sync metadata 与可重建运行状态。
+
+* 8. 测试与验证
+
+采用测试先行，每个行为必须先观察正确失败，再写实现。
+
+** 8.1 Adapter contract
+
+- OrgParser 从 =RawEntity.payload= 生成 document、heading、link occurrence。
+- MarkdownParser 从 =RawEntity.payload= 生成相同统一模型。
+- locator 指向不存在文件时仍能解析，证明 parser 没有二次 I/O。
+- 不支持的 MIME 不调用 parser。
+
+** 8.2 Source composition
+
+- 同一 transport 可以产生 Org 与 Markdown entity，由不同 parser 处理。
+- 未注册 MIME 返回 =ParserNotFound=，不产生部分成功投影。
+- parser 失败不会调用 =replace_source=。
+- source scan 成功后只调用一次完整 =replace_source=。
+
+** 8.3 Mutation safety
+
+- 更新一条资源后，同 source 其他资源仍存在。
+- source missing、read-only、unsupported capability、revision conflict 时事实来源与 projection 均不变。
+- source commit 失败时 projection 不变。
+- 成功写回后 projection revision 与事实来源结果一致。
+
+** 8.4 Space isolation
+
+- service 不依赖当前工作目录。
+- MCP 请求不能把文件操作切换到与启动 projection 不同的空间。
+
+** 8.5 构建与 smoke
+
+必须通过：
+
+#+begin_src sh
+cargo check --workspace --all-targets
+cargo test --workspace
+#+end_src
+
+并实际运行 CLI 的 scan/query/write smoke 场景及 MCP stdio 的至少一个读取和一个受保护写入场景。
+
+因为本地 crate 名为 =core=，构建验证必须覆盖 Clap Parser derive 与 schemars/RMCP schema。任何新的 =::core::*= 遮蔽错误都视为结构回归。
+
+* 9. 迁移切片
+
+** 切片一：格式 adapter 与统一扫描
+
+1. 让 Org/Markdown adapter 拥有真实 parser 实现。
+2. parser 改为只读取 =RawEntity.payload=。
+3. 增加 =SourceRegistry= 和 parser dispatch。
+4. CLI/MCP composition root 注册 parser。
+5. 删除 core 内具体 parser/scanner 及 =scan_native= 重复链路。
+
+完成条件：native source 中 Org/Markdown 能通过同一 registry 扫描并重建 projection。
+
+** 切片二：写入安全与 SpaceContext
+
+1. 引入 =SpaceContext=。
+2. 移除 application 中的当前目录推断。
+3. 移除 store/source 成功 no-op。
+4. 引入 capability/read-only/revision 错误。
+5. mutation 使用单资源 projection API。
+6. MCP 固定绑定启动空间。
+
+完成条件：所有失败路径都不修改 projection；成功路径不删除同 source 的其他资源。
+
+** 切片三：职责拆分与清理
+
+1. 将 1008 行 service 实现按用例拆文件。
+2. preview 移除具体 service/store 依赖。
+3. 未实现 capability 返回显式错误或从入口移除。
+4. 清理失效 =web=/=mcp= feature、旧路径注释与 adapter re-export 描述。
+5. 更新架构文档，使 Cargo crate 与内部 module 的术语一致。
+
+完成条件：workspace、测试与 smoke 场景通过；文档描述与实际依赖方向一致。
+
+* 10. 非目标
+
+本轮不实现多空间常驻 MCP、不新增 UI、不完成 Apple Notes/Calendar 后端、不引入动态插件加载、不把每个 core 模块重新拆成 Cargo crate，也不新增与上述边界无关的抽象。

@@ -1,6 +1,12 @@
 [workspace]
 resolver = "3"
-members = ["crates/*"]
+members = [
+    "core",
+    "cli",
+    "adapters/orgmode",
+    "adapters/markdown",
+    "app",
+]
 
 [workspace.dependencies]
 serde = { version = "1", features = ["derive"] }
