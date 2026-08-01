@@ -38,20 +38,27 @@ pub struct ScanReport {
     pub scanned_relations: usize,
 }
 
-pub struct ApplicationService<S: ProjectionStore> {
+pub struct ApplicationFacade<S: ProjectionStore> {
     store: S,
     rule_engine: crate::domain::RuleEngine,
     format_parsers: Vec<Box<dyn crate::source::FormatParser>>,
     space: Option<SpaceContext>,
+    capability_log: Vec<crate::capability::CapabilityDescriptor>,
 }
 
-impl<S: ProjectionStore> ApplicationService<S> {
+/// Backwards-compatible alias for [`ApplicationFacade`]. New code should
+/// refer to `ApplicationFacade` directly; the alias is preserved so
+/// downstream consumers can keep their imports stable across the rename.
+pub type ApplicationService<S = crate::storage::SqliteProjection> = ApplicationFacade<S>;
+
+impl<S: ProjectionStore> ApplicationFacade<S> {
     pub fn new(store: S) -> Self {
         Self {
             store,
             rule_engine: crate::domain::RuleEngine::default_rules(),
             format_parsers: Vec::new(),
             space: None,
+            capability_log: Vec::new(),
         }
     }
 
@@ -66,9 +73,9 @@ impl<S: ProjectionStore> ApplicationService<S> {
             rule_engine: crate::domain::RuleEngine::default_rules(),
             format_parsers: Vec::new(),
             space: Some(space),
+            capability_log: Vec::new(),
         }
     }
-
     /// Return the active space context, if one was provided at
     /// construction. Callers that need filesystem paths should use this
     /// getter rather than the process working directory.
@@ -94,11 +101,10 @@ impl<S: ProjectionStore> ApplicationService<S> {
     /// See `core::capability::CapabilityDescriptor`.
     pub fn register_capability(
         &mut self,
-        _descriptor: &crate::capability::CapabilityDescriptor,
+        descriptor: &crate::capability::CapabilityDescriptor,
     ) {
-        // Intentionally a no-op. See the doc-comment above.
+        self.capability_log.push(descriptor.clone());
     }
-
     pub fn store(&self) -> &S {
         &self.store
     }

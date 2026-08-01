@@ -20,4 +20,4 @@ pub mod task_para;
 pub use task_para::{AgendaItem, AgendaView, ParaOverview};
 pub use link_resolution::{LinkReindexReport, LinkResolver};
 pub use context::SpaceContext;
-pub use service::{ApplicationError, ApplicationService, ResolveResult, ScanReport};
+pub use service::{ApplicationError, ApplicationFacade, ApplicationService, ResolveResult, ScanReport};
