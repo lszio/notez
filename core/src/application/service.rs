@@ -88,6 +88,17 @@ impl<S: ProjectionStore> ApplicationService<S> {
         self.format_parsers.push(parser);
     }
 
+    /// Register a public capability descriptor. This is a no-op in the
+    /// current revision; it exists so that the future P1 capability
+    /// directory can collect descriptors without a breaking change.
+    /// See `core::capability::CapabilityDescriptor`.
+    pub fn register_capability(
+        &mut self,
+        _descriptor: &crate::capability::CapabilityDescriptor,
+    ) {
+        // Intentionally a no-op. See the doc-comment above.
+    }
+
     pub fn store(&self) -> &S {
         &self.store
     }

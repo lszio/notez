@@ -19,6 +19,7 @@
 //! `orgmode` / `markdown` cargo features.
 // `core` is intentionally a thin name over the standard `core` crate.
 
+pub mod capability;
 pub mod domain;
 pub mod storage;
 pub mod document;
