@@ -211,6 +211,14 @@ impl<S: ProjectionStore> ApplicationFacade<S> {
 
 
     pub fn scan_federation(&mut self, space_root: &Path) -> Result<ScanReport, ApplicationError> {
+        <Self as crate::application::use_cases::ScanUseCase>::scan_federation(self, space_root)
+    }
+
+    pub fn scan_native(&mut self, root: &Path) -> Result<ScanReport, ApplicationError> {
+        <Self as crate::application::use_cases::ScanUseCase>::scan_native(self, root)
+    }
+
+    pub fn scan_federation_impl(&mut self, space_root: &Path) -> Result<ScanReport, ApplicationError> {
         use crate::source::SourceAdapter;
 
         let mut total_resources = 0;
@@ -303,7 +311,7 @@ impl<S: ProjectionStore> ApplicationFacade<S> {
         })
     }
 
-    pub fn scan_native(&mut self, root: &Path) -> Result<ScanReport, ApplicationError> {
+    pub fn scan_native_impl(&mut self, root: &Path) -> Result<ScanReport, ApplicationError> {
         use crate::source::native::NativeSourceAdapter;
         use crate::source::SourceAdapter;
         use crate::application::link_resolution::resolve_and_store_links;
@@ -1066,5 +1074,18 @@ impl<S: ProjectionStore> ApplicationFacade<S> {
             .clear()
             .map_err(|e| ApplicationError::Storage(e.to_string()))?;
         self.scan_native(root)
+    }
+}
+
+impl<S: crate::domain::ProjectionStore> crate::application::use_cases::ScanUseCase for ApplicationFacade<S> {
+    fn scan_native(&mut self, root: &std::path::Path) -> Result<ScanReport, ApplicationError> {
+        ApplicationFacade::scan_native_impl(self, root)
+    }
+
+    fn scan_federation(
+        &mut self,
+        space_root: &std::path::Path,
+    ) -> Result<ScanReport, ApplicationError> {
+        ApplicationFacade::scan_federation_impl(self, space_root)
     }
 }
