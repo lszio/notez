@@ -642,6 +642,10 @@ impl<S: ProjectionStore> ApplicationFacade<S> {
             .map_err(|e| ApplicationError::Storage(e.to_string()))
     }
     pub fn agenda(&self) -> Result<crate::application::task_para::AgendaView, ApplicationError> {
+        <Self as crate::application::use_cases::TaskUseCase>::agenda(self)
+    }
+
+    pub fn agenda_impl(&self) -> Result<crate::application::task_para::AgendaView, ApplicationError> {
         let page = self.query_impl(&Selector::new())?;
         let mut items = Vec::new();
 
@@ -673,6 +677,15 @@ impl<S: ProjectionStore> ApplicationFacade<S> {
         to_state: &str,
         timestamp: &str,
     ) -> Result<crate::document::StateTransition, ApplicationError> {
+        <Self as crate::application::use_cases::TaskUseCase>::transition_task(self, r_ref, to_state, timestamp)
+    }
+
+    pub fn transition_task_impl(
+        &mut self,
+        r_ref: &ResourceRef,
+        to_state: &str,
+        timestamp: &str,
+    ) -> Result<crate::document::StateTransition, ApplicationError> {
         let mut res = self
             .read_impl(r_ref)?
             .ok_or_else(|| ApplicationError::NotFound(r_ref.to_string()))?;
@@ -698,7 +711,7 @@ impl<S: ProjectionStore> ApplicationFacade<S> {
         }
 
         let source_id = res.source_id.clone();
-        
+
         // First write back to the authoritative source
         // We serialize the state change into a JSON payload for the adapter's mutate interface
         let payload = serde_json::json!({
@@ -706,7 +719,7 @@ impl<S: ProjectionStore> ApplicationFacade<S> {
             "to_state": transition.to_state,
             "closed_timestamp": transition.closed_timestamp
         }).to_string();
-        
+
         self.writeback_resource(&source_id, &res.locator, &payload)?;
 
         // Then update the local projection
@@ -718,6 +731,10 @@ impl<S: ProjectionStore> ApplicationFacade<S> {
     }
 
     pub fn para_overview(&self) -> Result<crate::application::task_para::ParaOverview, ApplicationError> {
+        <Self as crate::application::use_cases::TaskUseCase>::para_overview(self)
+    }
+
+    pub fn para_overview_impl(&self) -> Result<crate::application::task_para::ParaOverview, ApplicationError> {
         let page = self.query_impl(&Selector::new())?;
         let mut projects = Vec::new();
         let mut areas = Vec::new();
@@ -1233,5 +1250,21 @@ impl<S: crate::domain::ProjectionStore> crate::application::use_cases::LinkUseCa
         space_root: &std::path::Path,
     ) -> Result<crate::application::link_resolution::LinkReindexReport, ApplicationError> {
         ApplicationFacade::reindex_links_impl(self, space_root)
+    }
+}
+impl<S: crate::domain::ProjectionStore> crate::application::use_cases::TaskUseCase for ApplicationFacade<S> {
+    fn agenda(&self) -> Result<crate::application::task_para::AgendaView, ApplicationError> {
+        ApplicationFacade::agenda_impl(self)
+    }
+    fn para_overview(&self) -> Result<crate::application::task_para::ParaOverview, ApplicationError> {
+        ApplicationFacade::para_overview_impl(self)
+    }
+    fn transition_task(
+        &mut self,
+        r_ref: &ResourceRef,
+        to_state: &str,
+        timestamp: &str,
+    ) -> Result<crate::document::StateTransition, ApplicationError> {
+        ApplicationFacade::transition_task_impl(self, r_ref, to_state, timestamp)
     }
 }

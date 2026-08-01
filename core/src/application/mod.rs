@@ -22,4 +22,4 @@ pub use task_para::{AgendaItem, AgendaView, ParaOverview};
 pub use link_resolution::{LinkReindexReport, LinkResolver};
 pub use context::SpaceContext;
 pub use service::{ApplicationError, ApplicationFacade, ApplicationService, ResolveResult, ScanReport};
-pub use use_cases::{LinkUseCase, ResourceUseCase, ScanUseCase};
+pub use use_cases::{LinkUseCase, ResourceUseCase, ScanUseCase, TaskUseCase};
