@@ -8,13 +8,8 @@
 //! custom `SourceKind::Other(String)` without modifying `core`.
 
 use std::collections::HashMap;
-use std::path::PathBuf;
 
-use crate::source::adapter::{
-    ComposedSourceAdapter, ScannedSource, SourceAdapter, SourceCapabilities, SourceConfig,
-    SourceError, SourceKind,
-};
-use crate::source::protocol::{FormatParser, RawEntity, SourceTransport, TransportError};
+use crate::source::adapter::{SourceAdapter, SourceConfig, SourceError, SourceKind};
 
 /// Builds a [`SourceAdapter`] for a single `SourceKind`.
 pub trait SourceAdapterFactory: Send + Sync {
@@ -88,6 +83,10 @@ impl SourceRegistry {
 }
 
 // ---- Built-in factories ----
+//
+// Each factory delegates to the historical concrete `*SourceAdapter`
+// type, which is the canonical implementation that already wires the
+// appropriate transport and parser set.
 
 pub struct NativeFactory;
 impl SourceAdapterFactory for NativeFactory {
@@ -95,17 +94,7 @@ impl SourceAdapterFactory for NativeFactory {
         SourceKind::Native
     }
     fn build(&self, config: SourceConfig) -> Result<Box<dyn SourceAdapter>, SourceError> {
-        let transport: Box<dyn SourceTransport> = Box::new(NativeDirTransport::new(
-            config.path.clone(),
-            config.include_paths.clone(),
-            config.exclude_paths.clone(),
-        ));
-        // Built-in parsers for Org and Markdown are not re-registered
-        // here; composition roots add them via the registry. Native
-        // transport returns the raw bytes; the parser registry lives at
-        // the ApplicationFacade level.
-        let parsers: Vec<Box<dyn FormatParser>> = vec![Box::new(EmptyParser), Box::new(EmptyParser)];
-        Ok(Box::new(ComposedSourceAdapter::new(config, transport, parsers)))
+        Ok(Box::new(crate::source::NativeSourceAdapter::new(config)))
     }
 }
 
@@ -115,15 +104,7 @@ impl SourceAdapterFactory for GitFactory {
         SourceKind::Git
     }
     fn build(&self, config: SourceConfig) -> Result<Box<dyn SourceAdapter>, SourceError> {
-        // Git adapter historically shares the native transport in the
-        // aggregated crate; for now reuse the native transport. A
-        // dedicated git transport is out of scope for this task.
-        let transport: Box<dyn SourceTransport> = Box::new(NativeDirTransport::new(
-            config.path.clone(),
-            config.include_paths.clone(),
-            config.exclude_paths.clone(),
-        ));
-        Ok(Box::new(ComposedSourceAdapter::new(config, transport, vec![])))
+        Ok(Box::new(crate::source::GitSourceAdapter::new(config)))
     }
 }
 
@@ -133,12 +114,7 @@ impl SourceAdapterFactory for ObsidianFactory {
         SourceKind::Obsidian
     }
     fn build(&self, config: SourceConfig) -> Result<Box<dyn SourceAdapter>, SourceError> {
-        let transport: Box<dyn SourceTransport> = Box::new(NativeDirTransport::new(
-            config.path.clone(),
-            config.include_paths.clone(),
-            config.exclude_paths.clone(),
-        ));
-        Ok(Box::new(ComposedSourceAdapter::new(config, transport, vec![])))
+        Ok(Box::new(crate::source::ObsidianSourceAdapter::new(config)))
     }
 }
 
@@ -148,13 +124,7 @@ impl SourceAdapterFactory for AnytypeFactory {
         SourceKind::Anytype
     }
     fn build(&self, config: SourceConfig) -> Result<Box<dyn SourceAdapter>, SourceError> {
-        // Anytype source has no real transport in the aggregated crate;
-        // the historical adapter delegates to a stub. We use a
-        // zero-yield transport here; the existing tests assert that
-        // writeback for an unknown source fails (UnsupportedCapability
-        // path) and that scan still completes.
-        let transport: Box<dyn SourceTransport> = Box::new(EmptyTransport);
-        Ok(Box::new(ComposedSourceAdapter::new(config, transport, vec![])))
+        Ok(Box::new(crate::source::AnytypeSourceAdapter::new(config)))
     }
 }
 
@@ -164,8 +134,7 @@ impl SourceAdapterFactory for AppleNotesFactory {
         SourceKind::AppleNotes
     }
     fn build(&self, config: SourceConfig) -> Result<Box<dyn SourceAdapter>, SourceError> {
-        let transport: Box<dyn SourceTransport> = Box::new(EmptyTransport);
-        Ok(Box::new(ComposedSourceAdapter::new(config, transport, vec![])))
+        Ok(Box::new(crate::source::AppleNotesSourceAdapter::new(config)))
     }
 }
 
@@ -175,86 +144,6 @@ impl SourceAdapterFactory for AppleCalendarFactory {
         SourceKind::AppleCalendar
     }
     fn build(&self, config: SourceConfig) -> Result<Box<dyn SourceAdapter>, SourceError> {
-        let transport: Box<dyn SourceTransport> = Box::new(EmptyTransport);
-        Ok(Box::new(ComposedSourceAdapter::new(config, transport, vec![])))
-    }
-}
-
-// ---- Transports and parsers used by the factories above ----
-
-struct NativeDirTransport {
-    root: PathBuf,
-    include_paths: Vec<PathBuf>,
-    exclude_paths: Vec<PathBuf>,
-}
-
-impl NativeDirTransport {
-    fn new(root: PathBuf, include_paths: Vec<PathBuf>, exclude_paths: Vec<PathBuf>) -> Self {
-        Self {
-            root,
-            include_paths,
-            exclude_paths,
-        }
-    }
-}
-
-impl SourceTransport for NativeDirTransport {
-    fn fetch_raw(&self) -> Result<Vec<RawEntity>, TransportError> {
-        use walkdir::WalkDir;
-        let mut out = Vec::new();
-        let roots = if self.include_paths.is_empty() {
-            vec![self.root.clone()]
-        } else {
-            self.include_paths.clone()
-        };
-        for root in &roots {
-            for entry in WalkDir::new(root).into_iter().filter_map(Result::ok) {
-                let path = entry.path();
-                if self.exclude_paths.iter().any(|ex| path.starts_with(ex)) {
-                    continue;
-                }
-                if !path.is_file() {
-                    continue;
-                }
-                let ext = path.extension().and_then(|e| e.to_str()).unwrap_or_default();
-                let mime = match ext {
-                    "org" => "text/org",
-                    "md" => "text/markdown",
-                    _ => continue,
-                };
-                let payload = std::fs::read(path).map_err(TransportError::Io)?;
-                out.push(RawEntity {
-                    locator: path.to_string_lossy().to_string(),
-                    mime_type: mime.to_string(),
-                    payload,
-                });
-            }
-        }
-        Ok(out)
-    }
-}
-
-struct EmptyTransport;
-impl SourceTransport for EmptyTransport {
-    fn fetch_raw(&self) -> Result<Vec<RawEntity>, TransportError> {
-        Ok(vec![])
-    }
-}
-
-struct EmptyParser;
-impl FormatParser for EmptyParser {
-    fn supports(&self, _mime: &str) -> bool {
-        false
-    }
-    fn parse(
-        &self,
-        _entity: &RawEntity,
-        _source_id: &str,
-    ) -> Result<crate::source::protocol::ParsedEntity, crate::source::protocol::ParserError> {
-        Ok(crate::source::protocol::ParsedEntity {
-            resources: vec![],
-            relations: vec![],
-            link_occurrences: vec![],
-        })
+        Ok(Box::new(crate::source::AppleCalendarSourceAdapter::new(config)))
     }
 }

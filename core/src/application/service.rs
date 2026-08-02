@@ -44,6 +44,7 @@ pub struct ApplicationFacade<S: ProjectionStore> {
     format_parsers: Vec<Box<dyn crate::source::FormatParser>>,
     space: Option<SpaceContext>,
     capability_log: Vec<crate::capability::CapabilityDescriptor>,
+    source_registry: crate::source::SourceRegistry,
 }
 
 /// Backwards-compatible alias for [`ApplicationFacade`]. New code should
@@ -59,10 +60,11 @@ impl<S: ProjectionStore> ApplicationFacade<S> {
             format_parsers: Vec::new(),
             space: None,
             capability_log: Vec::new(),
+            source_registry: crate::source::SourceRegistry::with_builtins(),
         }
     }
 
-    /// Construct an `ApplicationService` bound to an explicit
+    /// Construct an `ApplicationFacade` bound to an explicit
     /// [`SpaceContext`]. The space is the single source of truth for the
     /// service's filesystem root and resolved configuration; the service
     /// will refuse mutation paths that depend on the process working
@@ -74,8 +76,39 @@ impl<S: ProjectionStore> ApplicationFacade<S> {
             format_parsers: Vec::new(),
             space: Some(space),
             capability_log: Vec::new(),
+            source_registry: crate::source::SourceRegistry::with_builtins(),
         }
     }
+
+    /// Construct an `ApplicationFacade` with a caller-supplied source
+    /// factory registry. The default constructors register the six
+    /// built-in factories; this constructor is for tests and for
+    /// third-party compositions that want to start from an empty
+    /// registry or one with custom factories pre-registered.
+    pub fn with_registry(
+        store: S,
+        registry: crate::source::SourceRegistry,
+    ) -> Self {
+        Self {
+            store,
+            rule_engine: crate::domain::RuleEngine::default_rules(),
+            format_parsers: Vec::new(),
+            space: None,
+            capability_log: Vec::new(),
+            source_registry: registry,
+        }
+    }
+
+    /// Register an additional `SourceAdapterFactory`. Used by tests
+    /// and by third-party composition roots that need to handle
+    /// `SourceKind::Other(...)` variants.
+    pub fn register_source_factory(
+        &mut self,
+        factory: Box<dyn crate::source::SourceAdapterFactory>,
+    ) {
+        self.source_registry.register(factory);
+    }
+
     /// Return the active space context, if one was provided at
     /// construction. Callers that need filesystem paths should use this
     /// getter rather than the process working directory.
@@ -262,40 +295,13 @@ impl<S: ProjectionStore> ApplicationFacade<S> {
 
         let sources_cfg = crate::application::federation::SpaceSourcesConfig::load(space_root)?;
         for src_cfg in sources_cfg.sources {
-            let scanned = match src_cfg.kind {
-                crate::source::SourceKind::Native => {
-                    let adapter = crate::source::NativeSourceAdapter::new(src_cfg.clone());
-                    adapter.scan()
-                }
-                crate::source::SourceKind::Git => {
-                    let adapter = crate::source::GitSourceAdapter::new(src_cfg.clone());
-                    adapter.scan()
-                }
-                crate::source::SourceKind::Obsidian => {
-                    let adapter = crate::source::ObsidianSourceAdapter::new(src_cfg.clone());
-                    adapter.scan()
-                }
-                crate::source::SourceKind::Anytype => {
-                    let adapter = crate::source::AnytypeSourceAdapter::new(src_cfg.clone());
-                    adapter.scan()
-                }
-                crate::source::SourceKind::AppleNotes => {
-                    let adapter = crate::source::AppleNotesSourceAdapter::new(src_cfg.clone());
-                    adapter.scan()
-                }
-                crate::source::SourceKind::AppleCalendar => {
-                    let adapter = crate::source::AppleCalendarSourceAdapter::new(src_cfg.clone());
-                    adapter.scan()
-                }
-                crate::source::SourceKind::Other(_) => {
-                    return Err(ApplicationError::Storage(format!(
-                        "source kind `{}` has no built-in adapter; \
-                         register a SourceAdapterFactory via ApplicationFacade::register_source_factory",
-                        src_cfg.kind
-                    )));
-                }
-            }
-            .map_err(|e| ApplicationError::Storage(e.to_string()))?;
+            let adapter = self
+                .source_registry
+                .build(src_cfg.clone())
+                .map_err(|e| ApplicationError::Storage(e.to_string()))?;
+            let scanned = adapter
+                .scan()
+                .map_err(|e| ApplicationError::Storage(e.to_string()))?;
 
             total_resources += scanned.resources.len();
 
@@ -1200,19 +1206,10 @@ impl<S: ProjectionStore> ApplicationFacade<S> {
                 "source `{source_id}` is read-only"
             )));
         }
-
-        let adapter: Box<dyn SourceAdapter> = match src_cfg.kind {
-            SourceKind::Anytype => Box::new(AnytypeSourceAdapter::new(src_cfg.clone())),
-            SourceKind::AppleNotes => Box::new(AppleNotesSourceAdapter::new(src_cfg.clone())),
-            SourceKind::AppleCalendar => Box::new(AppleCalendarSourceAdapter::new(src_cfg.clone())),
-            SourceKind::Native => Box::new(NativeSourceAdapter::new(src_cfg.clone())),
-            other => {
-                return Err(ApplicationError::Storage(format!(
-                    "source kind {:?} does not support writeback",
-                    other
-                )))
-            }
-        };
+        let adapter: Box<dyn SourceAdapter> = self
+            .source_registry
+            .build(src_cfg.clone())
+            .map_err(|e| ApplicationError::Storage(e.to_string()))?;
 
         let prep = adapter
             .prepare_write(target_ref, payload)
