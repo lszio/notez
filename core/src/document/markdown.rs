@@ -26,7 +26,7 @@ pub enum DocumentError {
         column: usize,
         message: String,
     },
-    #[error("document error: {0}")]
+    #[error("{0}")]
     Other(String),
 }
 

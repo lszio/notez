@@ -424,7 +424,10 @@ impl<S: ProjectionStore> ApplicationFacade<S> {
         let res = self
             .store
             .get(r_ref)
-            .map_err(|e| ApplicationError::Storage(e.to_string()))?;
+            .map_err(|e| ApplicationError::Storage {
+                    kind: StorageErrorKind::Sqlite,
+                    message: e.to_string(),
+                })?;
         Ok(res.map(|r| self.rule_engine.evaluate(&r)))
     }
 
@@ -433,10 +436,18 @@ impl<S: ProjectionStore> ApplicationFacade<S> {
         space_root: &Path,
         config: crate::source::SourceConfig,
     ) -> Result<(), ApplicationError> {
-        let mut cfg = crate::application::federation::SpaceSourcesConfig::load(space_root)?;
+        let mut cfg = crate::application::federation::SpaceSourcesConfig::load(space_root)
+            .map_err(|e| ApplicationError::Storage {
+                kind: StorageErrorKind::InvalidState,
+                message: e.to_string(),
+            })?;
         cfg.sources.retain(|s| s.id != config.id);
         cfg.sources.push(config.clone());
-        cfg.save(space_root)?;
+        cfg.save(space_root)
+            .map_err(|e| ApplicationError::Storage {
+                kind: StorageErrorKind::InvalidState,
+                message: e.to_string(),
+            })?;
         // Mirror the change into the in-memory SpaceContext so subsequent
         // operations (e.g. `writeback_resource`, `transition_task`) see
         // the new source without needing to reload the space.
@@ -456,7 +467,10 @@ impl<S: ProjectionStore> ApplicationFacade<S> {
     ) -> Result<(), ApplicationError> {
         self.store
             .upsert_resource(&resource)
-            .map_err(|e| ApplicationError::Storage(e.to_string()))?;
+            .map_err(|e| ApplicationError::Storage {
+                    kind: StorageErrorKind::Sqlite,
+                    message: e.to_string(),
+                })?;
         Ok(())
     }
 
@@ -467,7 +481,10 @@ impl<S: ProjectionStore> ApplicationFacade<S> {
     ) -> Result<(), ApplicationError> {
         self.store
             .delete_resource(r_ref)
-            .map_err(|e| ApplicationError::Storage(e.to_string()))?;
+            .map_err(|e| ApplicationError::Storage {
+                    kind: StorageErrorKind::Sqlite,
+                    message: e.to_string(),
+                })?;
         Ok(())
     }
 
@@ -479,7 +496,10 @@ impl<S: ProjectionStore> ApplicationFacade<S> {
         let page = self
             .store
             .query(&Selector::new())
-            .map_err(|e| ApplicationError::Storage(e.to_string()))?;
+            .map_err(|e| ApplicationError::Storage {
+                    kind: StorageErrorKind::Sqlite,
+                    message: e.to_string(),
+                })?;
         let mut items = page.items;
         // Revision is monotonic by convention; lexicographic desc gives a
         // stable "most-recently-touched first" order.
@@ -497,7 +517,10 @@ impl<S: ProjectionStore> ApplicationFacade<S> {
         let page = self
             .store
             .query(&Selector::new().with_source(source_id))
-            .map_err(|e| ApplicationError::Storage(e.to_string()))?;
+            .map_err(|e| ApplicationError::Storage {
+                    kind: StorageErrorKind::Sqlite,
+                    message: e.to_string(),
+                })?;
         let mut items = page.items;
         if items.len() > limit {
             items.truncate(limit);
@@ -509,7 +532,11 @@ impl<S: ProjectionStore> ApplicationFacade<S> {
         &self,
         space_root: &Path,
     ) -> Result<Vec<crate::source::SourceConfig>, ApplicationError> {
-        let cfg = crate::application::federation::SpaceSourcesConfig::load(space_root)?;
+        let cfg = crate::application::federation::SpaceSourcesConfig::load(space_root)
+            .map_err(|e| ApplicationError::Storage {
+                kind: StorageErrorKind::InvalidState,
+                message: e.to_string(),
+            })?;
         Ok(cfg.sources)
     }
 
@@ -528,7 +555,11 @@ impl<S: ProjectionStore> ApplicationFacade<S> {
 
         let mut total_resources = 0;
 
-        let sources_cfg = crate::application::federation::SpaceSourcesConfig::load(space_root)?;
+        let sources_cfg = crate::application::federation::SpaceSourcesConfig::load(space_root)
+            .map_err(|e| ApplicationError::Storage {
+                kind: StorageErrorKind::InvalidState,
+                message: e.to_string(),
+            })?;
         let exclude_paths: Vec<std::path::PathBuf> =
             sources_cfg.sources.iter().map(|s| s.path.clone()).collect();
 
@@ -543,7 +574,12 @@ impl<S: ProjectionStore> ApplicationFacade<S> {
         let native_adapter = crate::source::NativeSourceAdapter::new(native_config);
         let native_scanned = native_adapter
             .scan()
-            .map_err(|e| ApplicationError::Storage(e.to_string()))?;
+            .map_err(|e| {
+                ApplicationError::Storage {
+                    kind: StorageErrorKind::InvalidState,
+                    message: e.to_string(),
+                }
+            })?;
 
         total_resources += native_scanned.resources.len();
 
@@ -554,19 +590,36 @@ impl<S: ProjectionStore> ApplicationFacade<S> {
                 native_scanned.relations,
                 native_scanned.link_occurrences.clone(),
             )
-            .map_err(|e| ApplicationError::Storage(e.to_string()))?;
+            .map_err(|e| ApplicationError::Storage {
+                    kind: StorageErrorKind::Sqlite,
+                    message: e.to_string(),
+                })?;
 
         crate::application::link_resolution::resolve_and_store_links(&mut self.store, "native", native_scanned.link_occurrences)?;
 
-        let sources_cfg = crate::application::federation::SpaceSourcesConfig::load(space_root)?;
+        let sources_cfg = crate::application::federation::SpaceSourcesConfig::load(space_root)
+            .map_err(|e| ApplicationError::Storage {
+                kind: StorageErrorKind::InvalidState,
+                message: e.to_string(),
+            })?;
         for src_cfg in sources_cfg.sources {
             let adapter = self
                 .source_registry
                 .build(src_cfg.clone())
-                .map_err(|e| ApplicationError::Storage(e.to_string()))?;
+                .map_err(|e| {
+                    ApplicationError::Storage {
+                        kind: StorageErrorKind::InvalidState,
+                        message: e.to_string(),
+                    }
+                })?;
             let scanned = adapter
                 .scan()
-                .map_err(|e| ApplicationError::Storage(e.to_string()))?;
+                .map_err(|e| {
+                    ApplicationError::Storage {
+                        kind: StorageErrorKind::InvalidState,
+                        message: e.to_string(),
+                    }
+                })?;
 
             total_resources += scanned.resources.len();
 
@@ -577,7 +630,10 @@ impl<S: ProjectionStore> ApplicationFacade<S> {
                     scanned.relations,
                     scanned.link_occurrences.clone(),
                 )
-                .map_err(|e| ApplicationError::Storage(e.to_string()))?;
+                .map_err(|e| ApplicationError::Storage {
+                    kind: StorageErrorKind::Sqlite,
+                    message: e.to_string(),
+                })?;
 
             crate::application::link_resolution::resolve_and_store_links(&mut self.store, &src_cfg.id, scanned.link_occurrences)?;
         }
@@ -602,9 +658,10 @@ impl<S: ProjectionStore> ApplicationFacade<S> {
         use crate::application::link_resolution::resolve_and_store_links;
 
         if self.format_parsers.is_empty() {
-            return Err(ApplicationError::Storage(
-                "no format parsers registered; call ApplicationService::register_format_parser at composition root before scanning".into(),
-            ));
+            return Err(ApplicationError::Storage {
+                kind: StorageErrorKind::InvalidState,
+                message: "no format parsers registered; call ApplicationService::register_format_parser at composition root before scanning".to_string(),
+            });
         }
 
         let config = crate::source::SourceConfig {
@@ -623,7 +680,12 @@ impl<S: ProjectionStore> ApplicationFacade<S> {
         // keeps the seam open).
         let mut scanned = adapter
             .scan()
-            .map_err(|e| ApplicationError::Storage(e.to_string()))?;
+            .map_err(|e| {
+                ApplicationError::Storage {
+                    kind: StorageErrorKind::InvalidState,
+                    message: e.to_string(),
+                }
+            })?;
         for parser in &self.format_parsers {
             if parser.supports("text/org") || parser.supports("text/markdown") {
                 continue;
@@ -648,7 +710,10 @@ impl<S: ProjectionStore> ApplicationFacade<S> {
                 std::mem::take(&mut scanned.relations),
                 link_occurrences.clone(),
             )
-            .map_err(|e| ApplicationError::Storage(e.to_string()))?;
+            .map_err(|e| ApplicationError::Storage {
+                    kind: StorageErrorKind::Sqlite,
+                    message: e.to_string(),
+                })?;
 
         resolve_and_store_links(&mut self.store, "native", link_occurrences)?;
 
@@ -678,7 +743,10 @@ impl<S: ProjectionStore> ApplicationFacade<S> {
             && let Some(res) = self
                 .store
                 .get(&r_ref)
-                .map_err(|e| ApplicationError::Storage(e.to_string()))?
+                .map_err(|e| ApplicationError::Storage {
+                    kind: StorageErrorKind::Sqlite,
+                    message: e.to_string(),
+                })?
         {
             return Ok(ResolveResult::Found(res.r#ref));
         }
@@ -689,7 +757,10 @@ impl<S: ProjectionStore> ApplicationFacade<S> {
                 && let Some(res) = self
                     .store
                     .get(&heading_ref)
-                    .map_err(|e| ApplicationError::Storage(e.to_string()))?
+                    .map_err(|e| ApplicationError::Storage {
+                    kind: StorageErrorKind::Sqlite,
+                    message: e.to_string(),
+                })?
             {
                 matched.push(res.r#ref);
             }
@@ -697,7 +768,10 @@ impl<S: ProjectionStore> ApplicationFacade<S> {
                 && let Some(res) = self
                     .store
                     .get(&doc_ref)
-                    .map_err(|e| ApplicationError::Storage(e.to_string()))?
+                    .map_err(|e| ApplicationError::Storage {
+                    kind: StorageErrorKind::Sqlite,
+                    message: e.to_string(),
+                })?
             {
                 matched.push(res.r#ref);
             }
@@ -745,7 +819,10 @@ impl<S: ProjectionStore> ApplicationFacade<S> {
     ) -> Result<Vec<crate::domain::LinkOccurrence>, ApplicationError> {
         self.store
             .query_link_occurrences(source_ref)
-            .map_err(|e| ApplicationError::Storage(e.to_string()))
+            .map_err(|e| ApplicationError::Storage {
+                    kind: StorageErrorKind::Sqlite,
+                    message: e.to_string(),
+                })
     }
 
     pub fn query_resolved_relations(
@@ -761,7 +838,10 @@ impl<S: ProjectionStore> ApplicationFacade<S> {
     ) -> Result<Vec<crate::domain::ResolvedRelation>, ApplicationError> {
         self.store
             .query_resolved_relations(source_ref)
-            .map_err(|e| ApplicationError::Storage(e.to_string()))
+            .map_err(|e| ApplicationError::Storage {
+                    kind: StorageErrorKind::Sqlite,
+                    message: e.to_string(),
+                })
     }
 
     /// List every link occurrence originating from `source_ref` (raw form).
@@ -805,7 +885,10 @@ impl<S: ProjectionStore> ApplicationFacade<S> {
         )?;
         self.store
             .query_resolved_relations(source_ref)
-            .map_err(|e| ApplicationError::Storage(e.to_string()))
+            .map_err(|e| ApplicationError::Storage {
+                    kind: StorageErrorKind::Sqlite,
+                    message: e.to_string(),
+                })
     }
 
     /// Return per-occurrence diagnostics (status + candidates) for `source_ref`.
@@ -823,7 +906,10 @@ impl<S: ProjectionStore> ApplicationFacade<S> {
         let rows = self
             .store
             .list_link_diagnostics(source_ref)
-            .map_err(|e| ApplicationError::Storage(e.to_string()))?;
+            .map_err(|e| ApplicationError::Storage {
+                    kind: StorageErrorKind::Sqlite,
+                    message: e.to_string(),
+                })?;
         Ok(rows.unwrap_or_default())
     }
 
@@ -852,7 +938,10 @@ impl<S: ProjectionStore> ApplicationFacade<S> {
             let diags = self
                 .store
                 .list_link_diagnostics(&res.r#ref)
-                .map_err(|e| ApplicationError::Storage(e.to_string()))?;
+                .map_err(|e| ApplicationError::Storage {
+                    kind: StorageErrorKind::Sqlite,
+                    message: e.to_string(),
+                })?;
             if let Some(rows) = diags {
                 for d in rows {
                     report.scanned += 1;
@@ -918,13 +1007,19 @@ impl<S: ProjectionStore> ApplicationFacade<S> {
     pub fn query_impl(&self, selector: &Selector) -> Result<QueryPage, ApplicationError> {
         self.store
             .query(selector)
-            .map_err(|e| ApplicationError::Storage(e.to_string()))
+            .map_err(|e| ApplicationError::Storage {
+                    kind: StorageErrorKind::Sqlite,
+                    message: e.to_string(),
+                })
     }
 
     pub fn read_impl(&self, r_ref: &ResourceRef) -> Result<Option<Resource>, ApplicationError> {
         self.store
             .get(r_ref)
-            .map_err(|e| ApplicationError::Storage(e.to_string()))
+            .map_err(|e| ApplicationError::Storage {
+                    kind: StorageErrorKind::Sqlite,
+                    message: e.to_string(),
+                })
     }
     pub fn agenda(&self) -> Result<crate::application::task_para::AgendaView, ApplicationError> {
         <Self as crate::application::use_cases::TaskUseCase>::agenda(self)
@@ -973,7 +1068,10 @@ impl<S: ProjectionStore> ApplicationFacade<S> {
     ) -> Result<crate::document::StateTransition, ApplicationError> {
         let mut res = self
             .read_impl(r_ref)?
-            .ok_or_else(|| ApplicationError::NotFound(r_ref.to_string()))?;
+            .ok_or_else(|| ApplicationError::NotFound {
+                kind: r_ref.kind(),
+                r_ref: r_ref.clone(),
+            })?;
 
         let current_todo = res
             .properties
@@ -985,7 +1083,11 @@ impl<S: ProjectionStore> ApplicationFacade<S> {
         let transition = profile
             .transition(&current_todo, to_state, timestamp)
             .map_err(|e| {
-                ApplicationError::Document(crate::document::OrgDocumentError::Other(e.to_string()))
+                ApplicationError::Document {
+                    source: DocumentErrorKind::Org(
+                        crate::document::OrgDocumentError::Other(e.to_string()),
+                    ),
+                }
             })?;
 
         res.properties
@@ -1010,7 +1112,10 @@ impl<S: ProjectionStore> ApplicationFacade<S> {
         // Then update the local projection
         self.store
             .replace_source(&source_id, vec![res], vec![], vec![])
-            .map_err(|e| ApplicationError::Storage(e.to_string()))?;
+            .map_err(|e| ApplicationError::Storage {
+                    kind: StorageErrorKind::Sqlite,
+                    message: e.to_string(),
+                })?;
 
         Ok(transition)
     }
@@ -1090,11 +1195,17 @@ impl<S: ProjectionStore> ApplicationFacade<S> {
         file_path: &Path,
         default_mime: &str,
     ) -> Result<ResourceRef, ApplicationError> {
-        let bytes = std::fs::read(file_path)?;
+        let bytes = std::fs::read(file_path).map_err(|e| ApplicationError::Io {
+            path: Some(file_path.to_path_buf()),
+            source: e.kind(),
+        })?;
         let blob_store = crate::storage::BlobStore::new(space_root);
         let meta = blob_store
             .store_bytes(&bytes, default_mime)
-            .map_err(ApplicationError::Io)?;
+            .map_err(|e| ApplicationError::Io {
+                path: Some(file_path.to_path_buf()),
+                source: e.kind(),
+            })?;
 
         let att_ulid = if meta.hash.len() >= 32 {
             u128::from_str_radix(&meta.hash[..32], 16)
@@ -1135,7 +1246,10 @@ impl<S: ProjectionStore> ApplicationFacade<S> {
 
         self.store
             .replace_source("native", native_resources, vec![], vec![])
-            .map_err(|e| ApplicationError::Storage(e.to_string()))?;
+            .map_err(|e| ApplicationError::Storage {
+                    kind: StorageErrorKind::Sqlite,
+                    message: e.to_string(),
+                })?;
 
         Ok(att_ref)
     }
@@ -1157,12 +1271,18 @@ impl<S: ProjectionStore> ApplicationFacade<S> {
 
         let res = self
             .read_impl(att_ref)?
-            .ok_or_else(|| ApplicationError::NotFound(att_ref.to_string()))?;
+            .ok_or_else(|| ApplicationError::NotFound {
+                kind: att_ref.kind(),
+                r_ref: att_ref.clone(),
+            })?;
 
         let hash = res
             .properties
             .get("hash")
-            .ok_or_else(|| ApplicationError::Storage("missing hash property".to_string()))?;
+            .ok_or_else(|| ApplicationError::Storage {
+                kind: StorageErrorKind::BlobMissing,
+                message: "missing hash property".to_string(),
+            })?;
         let mime = res
             .properties
             .get("mime")
@@ -1171,18 +1291,33 @@ impl<S: ProjectionStore> ApplicationFacade<S> {
 
         let blob_store = crate::storage::BlobStore::new(space_root);
         let bytes = blob_store
-            .get(hash)?
-            .ok_or_else(|| ApplicationError::NotFound(format!("blob hash {hash}")))?;
+            .get(hash)
+            .map_err(|e| ApplicationError::Io {
+                path: None,
+                source: e.kind(),
+            })?
+            .ok_or_else(|| ApplicationError::Storage {
+                kind: StorageErrorKind::BlobMissing,
+                message: format!("blob hash {hash}"),
+            })?;
 
         let extracted_content = if mime.starts_with("image/") {
             let ext = ImageMetadataExtractor;
             ext.extract(&bytes, &mime).map_err(|e| {
-                ApplicationError::Document(crate::document::OrgDocumentError::Other(e.to_string()))
+                ApplicationError::Document {
+                    source: DocumentErrorKind::Org(
+                        crate::document::OrgDocumentError::Other(e.to_string()),
+                    ),
+                }
             })?
         } else {
             let ext = TextExtractor;
             ext.extract(&bytes, &mime).map_err(|e| {
-                ApplicationError::Document(crate::document::OrgDocumentError::Other(e.to_string()))
+                ApplicationError::Document {
+                    source: DocumentErrorKind::Org(
+                        crate::document::OrgDocumentError::Other(e.to_string()),
+                    ),
+                }
             })?
         };
 
@@ -1191,7 +1326,10 @@ impl<S: ProjectionStore> ApplicationFacade<S> {
 
         self.store
             .insert_segments(&records)
-            .map_err(|e| ApplicationError::Storage(e.to_string()))?;
+            .map_err(|e| ApplicationError::Storage {
+                    kind: StorageErrorKind::Sqlite,
+                    message: e.to_string(),
+                })?;
 
         Ok(records)
     }
@@ -1209,7 +1347,10 @@ impl<S: ProjectionStore> ApplicationFacade<S> {
     ) -> Result<Vec<crate::domain::SegmentRecord>, ApplicationError> {
         self.store
             .query_segments(&att_ref.to_string())
-            .map_err(|e| ApplicationError::Storage(e.to_string()))
+            .map_err(|e| ApplicationError::Storage {
+                    kind: StorageErrorKind::Sqlite,
+                    message: e.to_string(),
+                })
     }
     pub fn create_community(
         &self,
@@ -1224,10 +1365,18 @@ impl<S: ProjectionStore> ApplicationFacade<S> {
         space_root: &Path,
         community: crate::domain::community::Community,
     ) -> Result<(), ApplicationError> {
-        let mut cfg = crate::application::community_app::SpaceCommunitiesConfig::load(space_root)?;
+        let mut cfg = crate::application::community_app::SpaceCommunitiesConfig::load(space_root)
+            .map_err(|e| ApplicationError::Storage {
+                kind: StorageErrorKind::InvalidState,
+                message: e.to_string(),
+            })?;
         cfg.communities.retain(|c| c.id != community.id);
         cfg.communities.push(community);
-        cfg.save(space_root)?;
+        cfg.save(space_root)
+            .map_err(|e| ApplicationError::Storage {
+                kind: StorageErrorKind::InvalidState,
+                message: e.to_string(),
+            })?;
         Ok(())
     }
 
@@ -1242,7 +1391,11 @@ impl<S: ProjectionStore> ApplicationFacade<S> {
         &self,
         space_root: &Path,
     ) -> Result<Vec<crate::domain::community::Community>, ApplicationError> {
-        let cfg = crate::application::community_app::SpaceCommunitiesConfig::load(space_root)?;
+        let cfg = crate::application::community_app::SpaceCommunitiesConfig::load(space_root)
+            .map_err(|e| ApplicationError::Storage {
+                kind: StorageErrorKind::InvalidState,
+                message: e.to_string(),
+            })?;
         Ok(cfg.communities)
     }
     pub fn derive_artifact(
@@ -1264,7 +1417,10 @@ impl<S: ProjectionStore> ApplicationFacade<S> {
         let comm = communities
             .iter()
             .find(|c| c.id == community_id)
-            .ok_or_else(|| ApplicationError::NotFound(format!("community {community_id}")))?;
+            .ok_or_else(|| ApplicationError::Storage {
+                kind: StorageErrorKind::InvalidState,
+                message: format!("community {community_id} not found"),
+            })?;
 
         let page = self.query_impl(&Selector::new())?;
         let members: Vec<Resource> = comm
@@ -1279,9 +1435,11 @@ impl<S: ProjectionStore> ApplicationFacade<S> {
             "context-pack" => crate::artifact::RecipeKind::ContextPack,
             "skill-ir" => crate::artifact::RecipeKind::SkillIr,
             _ => {
-                return Err(ApplicationError::Document(crate::document::OrgDocumentError::Other(
-                    format!("unknown recipe: {recipe_name}"),
-                )));
+                return Err(ApplicationError::Document {
+                    source: DocumentErrorKind::Org(crate::document::OrgDocumentError::Other(
+                        format!("unknown recipe: {recipe_name}"),
+                    )),
+                });
             }
         };
 
@@ -1292,7 +1450,11 @@ impl<S: ProjectionStore> ApplicationFacade<S> {
         };
 
         let derived = crate::artifact::RecipeEvaluator::evaluate(&recipe, &members).map_err(|e| {
-            ApplicationError::Document(crate::document::OrgDocumentError::Other(e.to_string()))
+            ApplicationError::Document {
+                source: DocumentErrorKind::Org(
+                    crate::document::OrgDocumentError::Other(e.to_string()),
+                ),
+            }
         })?;
 
         Ok(derived)
@@ -1319,7 +1481,10 @@ impl<S: ProjectionStore> ApplicationFacade<S> {
         let comm = communities
             .iter()
             .find(|c| c.id == community_id)
-            .ok_or_else(|| ApplicationError::NotFound(format!("community {community_id}")))?;
+            .ok_or_else(|| ApplicationError::Storage {
+                kind: StorageErrorKind::InvalidState,
+                message: format!("community {community_id} not found"),
+            })?;
 
         let page = self.query_impl(&Selector::new())?;
         let members: Vec<Resource> = comm
@@ -1331,7 +1496,10 @@ impl<S: ProjectionStore> ApplicationFacade<S> {
         let skill_ir = crate::artifact::SkillIr::compile(&comm.name, description, &members);
 
         let package = crate::artifact::SkillExporter::export(&skill_ir, export_path)
-            .map_err(ApplicationError::Io)?;
+            .map_err(|e| ApplicationError::Io {
+                path: Some(export_path.to_path_buf()),
+                source: e.kind(),
+            })?;
 
         Ok(package)
     }
@@ -1354,7 +1522,12 @@ impl<S: ProjectionStore> ApplicationFacade<S> {
         let engine = crate::sync::SyncEngine::new(actor_id, space_root, transport);
         let report = engine
             .push()
-            .map_err(|e| ApplicationError::Storage(e.to_string()))?;
+            .map_err(|e| {
+                ApplicationError::Storage {
+                    kind: StorageErrorKind::InvalidState,
+                    message: e.to_string(),
+                }
+            })?;
         Ok(report)
     }
 
@@ -1377,7 +1550,12 @@ impl<S: ProjectionStore> ApplicationFacade<S> {
         let engine = crate::sync::SyncEngine::new(actor_id, space_root, transport);
         let report = engine
             .pull()
-            .map_err(|e| ApplicationError::Storage(e.to_string()))?;
+            .map_err(|e| {
+                ApplicationError::Storage {
+                    kind: StorageErrorKind::InvalidState,
+                    message: e.to_string(),
+                }
+            })?;
 
         self.scan_native_impl(space_root)?;
 
@@ -1389,9 +1567,9 @@ impl<S: ProjectionStore> ApplicationFacade<S> {
     }
 
     pub fn list_conflicts_impl(&self) -> Result<Vec<crate::sync::ConflictRecord>, ApplicationError> {
-        Err(ApplicationError::Unsupported(
-            "conflict list is not yet implemented; use `notez sync` commands",
-        ))
+        Err(ApplicationError::UnsupportedCapability {
+            capability: "conflict list is not yet implemented; use `notez sync` commands",
+        })
     }
     pub fn space_doctor(
         &self,
@@ -1404,9 +1582,9 @@ impl<S: ProjectionStore> ApplicationFacade<S> {
         &self,
         _space_root: &Path,
     ) -> Result<crate::application::doctor::DoctorReport, ApplicationError> {
-        Err(ApplicationError::Unsupported(
-            "space doctor is not yet implemented",
-        ))
+        Err(ApplicationError::UnsupportedCapability {
+            capability: "space doctor is not yet implemented",
+        })
     }
 
     pub fn list_jobs(&self) -> Result<Vec<crate::application::job_manager::JobRecord>, ApplicationError> {
@@ -1414,9 +1592,9 @@ impl<S: ProjectionStore> ApplicationFacade<S> {
     }
 
     pub fn list_jobs_impl(&self) -> Result<Vec<crate::application::job_manager::JobRecord>, ApplicationError> {
-        Err(ApplicationError::Unsupported(
-            "job manager is not yet implemented; jobs are tracked via `notez task`",
-        ))
+        Err(ApplicationError::UnsupportedCapability {
+            capability: "job manager is not yet implemented; jobs are tracked via `notez task`",
+        })
     }
 
     pub fn check_artifact_freshness(
@@ -1430,9 +1608,9 @@ impl<S: ProjectionStore> ApplicationFacade<S> {
         &self,
         _space_root: &Path,
     ) -> Result<crate::application::job_manager::ArtifactStaleReport, ApplicationError> {
-        Err(ApplicationError::Unsupported(
-            "artifact freshness check is not yet implemented",
-        ))
+        Err(ApplicationError::UnsupportedCapability {
+            capability: "artifact freshness check is not yet implemented",
+        })
     }
     pub fn writeback_resource(
         &self,
@@ -1443,15 +1621,19 @@ impl<S: ProjectionStore> ApplicationFacade<S> {
         use crate::source::{SourceAdapter, SourceKind, AnytypeSourceAdapter, AppleNotesSourceAdapter, AppleCalendarSourceAdapter, NativeSourceAdapter};
 
         let space = self.space.as_ref().ok_or_else(|| {
-            ApplicationError::Storage(
-                "writeback_resource requires an explicit SpaceContext; current working directory must not be used".into(),
-            )
+            ApplicationError::Storage {
+                kind: StorageErrorKind::InvalidState,
+                message: "writeback_resource requires an explicit SpaceContext; current working directory must not be used".to_string(),
+            }
         })?;
         if space.runtime.sources.is_empty() {
-            return Err(ApplicationError::Storage(format!(
-                "no sources registered in space `{}`",
-                space.space_id
-            )));
+            return Err(ApplicationError::Storage {
+                kind: StorageErrorKind::NoSourceRegistered,
+                message: format!(
+                    "no sources registered in space `{}`",
+                    space.space_id
+                ),
+            });
         }
         let src_cfg = space
             .runtime
@@ -1459,29 +1641,41 @@ impl<S: ProjectionStore> ApplicationFacade<S> {
             .iter()
             .find(|s| s.id == source_id)
             .cloned()
-            .ok_or_else(|| {
-                ApplicationError::Storage(format!(
-                    "source `{source_id}` is not registered in space `{}`",
-                    space.space_id
-                ))
+            .ok_or_else(|| ApplicationError::SourceNotFound {
+                source_id: source_id.to_string(),
             })?;
 
         if src_cfg.read_only {
-            return Err(ApplicationError::Storage(format!(
-                "source `{source_id}` is read-only"
-            )));
+            return Err(ApplicationError::ReadOnlySource {
+                source_id: source_id.to_string(),
+            });
         }
         let adapter: Box<dyn SourceAdapter> = self
             .source_registry
             .build(src_cfg.clone())
-            .map_err(|e| ApplicationError::Storage(e.to_string()))?;
+            .map_err(|e| {
+                ApplicationError::Storage {
+                    kind: StorageErrorKind::InvalidState,
+                    message: e.to_string(),
+                }
+            })?;
 
         let prep = adapter
             .prepare_write(target_ref, payload)
-            .map_err(|e| ApplicationError::Storage(e.to_string()))?;
+            .map_err(|e| {
+                ApplicationError::Storage {
+                    kind: StorageErrorKind::InvalidState,
+                    message: e.to_string(),
+                }
+            })?;
         let commit_res = adapter
             .commit_write(&prep)
-            .map_err(|e| ApplicationError::Storage(e.to_string()))?;
+            .map_err(|e| {
+                ApplicationError::Storage {
+                    kind: StorageErrorKind::InvalidState,
+                    message: e.to_string(),
+                }
+            })?;
 
         Ok(crate::application::writeback::WritebackReport {
             target_ref: commit_res.target_ref,
@@ -1502,9 +1696,9 @@ impl<S: ProjectionStore> ApplicationFacade<S> {
         _source_id: &str,
         _space_root: &Path,
     ) -> Result<crate::application::writeback::RelaySyncReport, ApplicationError> {
-        Err(ApplicationError::Unsupported(
-            "relay sync is not yet implemented; sync via folder transport",
-        ))
+        Err(ApplicationError::UnsupportedCapability {
+            capability: "relay sync is not yet implemented; sync via folder transport",
+        })
     }
 
     pub fn upsert_resource(&mut self, resource: Resource) -> Result<(), ApplicationError> {
@@ -1538,7 +1732,10 @@ impl<S: ProjectionStore> ApplicationFacade<S> {
     pub fn rebuild(&mut self, root: &Path) -> Result<ScanReport, ApplicationError> {
         self.store
             .clear()
-            .map_err(|e| ApplicationError::Storage(e.to_string()))?;
+            .map_err(|e| ApplicationError::Storage {
+                    kind: StorageErrorKind::Sqlite,
+                    message: e.to_string(),
+                })?;
         self.scan_native(root)
     }
 }

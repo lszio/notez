@@ -152,10 +152,16 @@ impl LinkResolver {
 
         store
             .replace_resolved_relations(source_id, resolved_relations)
-            .map_err(|e| ApplicationError::Storage(e.to_string()))?;
+            .map_err(|e| ApplicationError::Storage {
+                kind: crate::application::StorageErrorKind::Sqlite,
+                message: e.to_string(),
+            })?;
         store
             .write_link_diagnostics(source_id, &diagnostics)
-            .map_err(|e| ApplicationError::Storage(e.to_string()))?;
+            .map_err(|e| ApplicationError::Storage {
+                kind: crate::application::StorageErrorKind::Sqlite,
+                message: e.to_string(),
+            })?;
         Ok(diagnostics)
     }
 }
@@ -200,5 +206,8 @@ pub fn diagnostics_for<S: ProjectionStore>(
 ) -> Result<Option<Vec<LinkDiagnostic>>, ApplicationError> {
     store
         .list_link_diagnostics(source_ref)
-        .map_err(|e| ApplicationError::Storage(e.to_string()))
+        .map_err(|e| ApplicationError::Storage {
+                kind: crate::application::StorageErrorKind::Sqlite,
+                message: e.to_string(),
+            })
 }

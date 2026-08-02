@@ -361,7 +361,7 @@ fn application_scan_rejects_missing_registry_and_storage_errors_are_preserved() 
     let dir = tempfile::tempdir().unwrap();
     let mut unregistered = ApplicationService::new(SqliteProjection::in_memory().unwrap());
     let err = unregistered.scan_native(dir.path()).unwrap_err();
-    assert!(matches!(err, ApplicationError::Storage(ref msg) if msg.contains("no format parsers")));
+    assert!(matches!(err, ApplicationError::Storage { kind: _, ref message } if message.contains("no format parsers")));
 
     let service = ApplicationService::new(FailingStore);
     for err in [
@@ -372,8 +372,8 @@ fn application_scan_rejects_missing_registry_and_storage_errors_are_preserved() 
             .resolve_address(&ResourceAddress::from_ref(rref(ResourceKind::Document, DOC_ID)))
             .unwrap_err(),
     ] {
-        assert!(matches!(err, ApplicationError::Storage(ref msg) if msg == "contract failure"));
-        assert_eq!(err.to_string(), "Storage error: contract failure");
+        assert!(matches!(err, ApplicationError::Storage { kind: _, ref message } if message == "contract failure"));
+        assert_eq!(err.to_string(), "storage error (sqlite): contract failure");
     }
 }
 
@@ -423,7 +423,7 @@ fn application_main_paths_surface_storage_errors() {
         service.upsert_resource(doc.clone()).unwrap_err(),
         service.delete_resource(&doc.r#ref).unwrap_err(),
     ] {
-        assert!(matches!(err, ApplicationError::Storage(ref msg) if msg == "contract failure"));
+        assert!(matches!(err, ApplicationError::Storage { kind: _, ref message } if message == "contract failure"));
     }
 
     let service = ApplicationService::new(FailingStore);
@@ -434,7 +434,7 @@ fn application_main_paths_surface_storage_errors() {
         service.agenda().unwrap_err(),
         service.para_overview().unwrap_err(),
     ] {
-        assert!(matches!(err, ApplicationError::Storage(ref msg) if msg == "contract failure"));
+        assert!(matches!(err, ApplicationError::Storage { kind: _, ref message } if message == "contract failure"));
     }
 }
 
@@ -445,10 +445,13 @@ fn application_error_variants_expose_not_found_and_unsupported_content() {
     let err = service
         .run_extraction(PathBuf::from("/tmp/space").as_path(), &missing)
         .unwrap_err();
-    assert!(matches!(err, ApplicationError::NotFound(ref value) if value == &missing.to_string()));
-    assert_eq!(err.to_string(), format!("Resource not found: {missing}"));
+    assert!(matches!(err, ApplicationError::NotFound { r_ref, .. } if r_ref == missing));
+    assert_eq!(
+        err.to_string(),
+        format!("resource not found: {missing} (kind=attachment)")
+    );
 
     let err = service.list_conflicts().unwrap_err();
-    assert!(matches!(err, ApplicationError::Unsupported(msg) if msg.contains("conflict list")));
+    assert!(matches!(err, ApplicationError::UnsupportedCapability { capability } if capability.contains("conflict list")));
     assert!(err.to_string().contains("unsupported capability"));
 }
