@@ -20,6 +20,9 @@ pub struct Cli {
 
 #[derive(Subcommand, Debug)]
 pub enum Commands {
+    /// List the capabilities the current build exposes and exit.
+    ListCapabilities,
+
     Scan,
 
     /// Resolve a query string (ID, ref, locator, title)
@@ -27,7 +30,6 @@ pub enum Commands {
 
     /// Query resources from the space
     Query(QueryArgs),
-
     /// Read details of a specific resource ref
     Read { r_ref: String },
 

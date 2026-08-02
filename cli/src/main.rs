@@ -18,7 +18,45 @@ use std::process::exit;
 fn main() {
     let cli = Cli::parse();
 
-    // 1. Discover paths
+    // Match on the subcommand first. The `ListCapabilities` variant
+    // short-circuits before any space or store wiring; it just prints
+    // the catalog as JSON and exits 0. All other variants fall through
+    // to the existing space-selection flow.
+    if let Commands::ListCapabilities = cli.command {
+        let stub_db = std::path::Path::new("/tmp/notez-capabilities-stub.sqlite");
+        let store = match SqliteProjection::open(stub_db) {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("Failed to open stub database: {e}");
+                std::process::exit(5);
+            }
+        };
+        let facade = notez_core::application::ApplicationFacade::new(store);
+        let entries: Vec<serde_json::Value> = facade
+            .capability_catalog()
+            .list()
+            .iter()
+            .map(|d| {
+                serde_json::json!({
+                    "id": d.id,
+                    "description": d.description,
+                    "mutability": match d.mutability {
+                        notez_core::capability::Mutability::Read => "read",
+                        notez_core::capability::Mutability::Write => "write",
+                    },
+                })
+            })
+            .collect();
+        match serde_json::to_string_pretty(&entries) {
+            Ok(s) => println!("{s}"),
+            Err(e) => {
+                eprintln!("Failed to serialise capabilities: {e}");
+                std::process::exit(5);
+            }
+        }
+        std::process::exit(0);
+    }
+
     let env_vars: std::collections::BTreeMap<String, std::ffi::OsString> =
         std::env::vars_os().map(|(k, v)| (k.to_string_lossy().to_string(), v)).collect();
     let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
@@ -1334,6 +1372,13 @@ fn main() {
                 eprintln!("Web server error: {e}");
                 exit(5);
             }
+        }
+        Commands::ListCapabilities => {
+            // Handled by the early-return block above; reaching here is
+            // unreachable unless the flag was somehow lost. Defensive
+            // exit with a clear message.
+            eprintln!("list-capabilities was consumed before this point");
+            std::process::exit(1);
         }
     }
 }
