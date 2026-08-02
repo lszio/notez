@@ -189,3 +189,15 @@ pub enum DocumentErrorKind {
 - 189 测试（重写后） + 新增 error contract 测试 ≥8 个全部通过。
 - =cargo check --workspace --all-targets= 通过。
 - 一次 git commit 描述本轮改动。
+
+* 8. Verification
+
+- cargo test --workspace: 202 tests passed, 0 failed.
+- cargo test -p cli --test api_error_exit: 5 passed, 0 failed.
+- cargo check --workspace --all-targets: exit 0.
+- CLI exit codes: resolve-miss → 3, space doctor → 6, sync relay → 6, source writeback missing → 5, task transition missing → 3.
+- 偏差记录：plan 预期 `source writeback --id missing_src` → 8 (SourceNotFound)，但实际返回 5
+  (Storage/NoSourceRegistered)。原因：=writeback_resource= 在解析 source id 之前先检查
+  `space.runtime.sources.is_empty()`；fresh 空间 scan 只填充 projection，不注册 runtime
+  source。测试断言按真实行为定为 5；SourceNotFound (8) 仅在存在已注册 source 时才可触达。
+- MCP error responses are structured JSON ({ "kind": "...", "message": "..." }).
