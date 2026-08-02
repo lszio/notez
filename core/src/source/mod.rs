@@ -1,5 +1,6 @@
 pub mod adapter;
 pub mod protocol;
+pub mod registry;
 pub use protocol::{FormatParser, ParsedEntity, RawEntity, SourceTransport, TransportError, ParserError};
 pub mod apple_notes;
 pub mod apple_calendar;
@@ -11,8 +12,8 @@ pub use anytype::AnytypeSourceAdapter;
 pub mod git;
 pub mod native;
 pub mod obsidian;
-
 pub use adapter::{ScannedSource, SourceAdapter, SourceConfig, SourceError, SourceKind};
+pub use registry::{SourceAdapterFactory, SourceRegistry};
 pub use git::GitSourceAdapter;
 pub use native::NativeSourceAdapter;
 pub use obsidian::ObsidianSourceAdapter;
