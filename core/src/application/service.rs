@@ -43,7 +43,7 @@ pub struct ApplicationFacade<S: ProjectionStore> {
     rule_engine: crate::domain::RuleEngine,
     format_parsers: Vec<Box<dyn crate::source::FormatParser>>,
     space: Option<SpaceContext>,
-    capability_log: Vec<crate::capability::CapabilityDescriptor>,
+    capability_catalog: crate::capability::CapabilityCatalog,
     source_registry: crate::source::SourceRegistry,
 }
 
@@ -59,7 +59,7 @@ impl<S: ProjectionStore> ApplicationFacade<S> {
             rule_engine: crate::domain::RuleEngine::default_rules(),
             format_parsers: Vec::new(),
             space: None,
-            capability_log: Vec::new(),
+            capability_catalog: crate::capability::CapabilityCatalog::with_builtins(),
             source_registry: crate::source::SourceRegistry::with_builtins(),
         }
     }
@@ -75,7 +75,7 @@ impl<S: ProjectionStore> ApplicationFacade<S> {
             rule_engine: crate::domain::RuleEngine::default_rules(),
             format_parsers: Vec::new(),
             space: Some(space),
-            capability_log: Vec::new(),
+            capability_catalog: crate::capability::CapabilityCatalog::with_builtins(),
             source_registry: crate::source::SourceRegistry::with_builtins(),
         }
     }
@@ -94,7 +94,7 @@ impl<S: ProjectionStore> ApplicationFacade<S> {
             rule_engine: crate::domain::RuleEngine::default_rules(),
             format_parsers: Vec::new(),
             space: None,
-            capability_log: Vec::new(),
+            capability_catalog: crate::capability::CapabilityCatalog::with_builtins(),
             source_registry: registry,
         }
     }
@@ -136,7 +136,14 @@ impl<S: ProjectionStore> ApplicationFacade<S> {
         &mut self,
         descriptor: &crate::capability::CapabilityDescriptor,
     ) {
-        self.capability_log.push(descriptor.clone());
+        self.capability_catalog.register(descriptor.clone());
+    }
+
+    /// Borrow the active capability catalog. Used by CLI help text,
+    /// MCP tool listings, and documentation generators to surface a
+    /// single source of truth for what the facade can do.
+    pub fn capability_catalog(&self) -> &crate::capability::CapabilityCatalog {
+        &self.capability_catalog
     }
     pub fn store(&self) -> &S {
         &self.store

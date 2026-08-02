@@ -66,3 +66,28 @@ fn iter_yields_each_registered_pair_once() {
     }
     assert_eq!(seen.len(), 9);
 }
+
+#[test]
+fn application_facade_default_catalog_covers_use_case_traits() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("idx.sqlite");
+    let store = notez_core::storage::SqliteProjection::open(&db).unwrap();
+    let facade = notez_core::application::ApplicationFacade::new(store);
+    let cat = facade.capability_catalog();
+    let ids: std::collections::HashSet<&'static str> =
+        cat.list().iter().map(|d| d.id).collect();
+    for id in [
+        "scan",
+        "resource",
+        "link",
+        "task",
+        "attachment",
+        "community",
+        "artifact",
+        "sync",
+        "inspect",
+    ] {
+        assert!(ids.contains(id), "facade missing `{id}`");
+    }
+    assert_eq!(cat.list().len(), 9);
+}
