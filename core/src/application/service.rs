@@ -1,27 +1,285 @@
 use crate::application::context::SpaceContext;
-use crate::document::{OrgDocumentError as DocumentError, OrgScanner};
 use crate::domain::{
     LinkDiagnostic, LinkOccurrence, ProjectionStore, QueryPage, ResolvedRelation,
     ResolutionStatus, Resource, ResourceKind, ResourceRef, Selector,
 };
+use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
-use thiserror::Error;
 use walkdir::WalkDir;
 
-#[derive(Error, Debug)]
+/// The stable error taxonomy for the application layer. Every variant
+/// carries typed fields; the `Display` output and the `serde` shape are
+/// public contracts (see docs/superpowers/specs/2026-08-02-application-error-design.org).
+///
+/// Wire format: internally tagged JSON, `{"kind": "<snake_case variant>", ...}`.
+/// The impls are hand-written because `UnsupportedCapability` carries a
+/// `&'static str` (no `Deserialize` impl) and `Io` carries
+/// `std::io::ErrorKind` (no serde impls at all); see `crate::error_serde`.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ApplicationError {
-    #[error("Storage error: {0}")]
-    Storage(String),
-    #[error("Document error: {0}")]
-    Document(#[from] DocumentError),
-    #[error("markdown document error: {0}")]
-    MarkdownDocument(#[from] crate::document::MarkdownDocumentError),
-    #[error("I/O error: {0}")]
-    Io(#[from] std::io::Error),
-    #[error("Resource not found: {0}")]
-    NotFound(String),
-    #[error("unsupported capability: {0}")]
-    Unsupported(&'static str),
+    /// A single resource reference could not be resolved to a row.
+    NotFound {
+        kind: ResourceKind,
+        r_ref: ResourceRef,
+    },
+    /// A projection/storage operation failed.
+    Storage {
+        kind: StorageErrorKind,
+        message: String,
+    },
+    /// A document parser failed.
+    Document { source: DocumentErrorKind },
+    /// A filesystem operation failed.
+    Io {
+        path: Option<PathBuf>,
+        source: std::io::ErrorKind,
+    },
+    /// A requested capability is not implemented by this build.
+    UnsupportedCapability { capability: &'static str },
+    /// An expected revision did not match the persisted value.
+    RevisionConflict { expected: String, actual: String },
+    /// A write was attempted against a read-only source.
+    ReadOnlySource { source_id: String },
+    /// A source with the given id is not registered in the space.
+    SourceNotFound { source_id: String },
+}
+
+/// Classification of storage-layer failures.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StorageErrorKind {
+    /// Failure from the SQLite projection.
+    Sqlite,
+    /// A required blob is missing.
+    BlobMissing,
+    /// No source is registered in the space.
+    NoSourceRegistered,
+    /// Any other invalid-state condition.
+    InvalidState,
+}
+
+/// Which document parser produced the error.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "format", rename_all = "snake_case")]
+pub enum DocumentErrorKind {
+    Org(crate::document::OrgDocumentError),
+    Markdown(crate::document::MarkdownDocumentError),
+}
+
+impl std::fmt::Display for ApplicationError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ApplicationError::NotFound { kind, r_ref } => {
+                write!(f, "resource not found: {r_ref} (kind={})", kind.as_str())
+            }
+            ApplicationError::Storage { kind, message } => {
+                write!(f, "storage error ({kind}): {message}")
+            }
+            ApplicationError::Document { source } => match source {
+                DocumentErrorKind::Org(e) => write!(f, "document error (org): {e}"),
+                DocumentErrorKind::Markdown(e) => write!(f, "document error (markdown): {e}"),
+            },
+            ApplicationError::Io { path, source } => match path {
+                Some(p) => write!(f, "io error: {source} at {}", p.display()),
+                None => write!(f, "io error: {source}"),
+            },
+            ApplicationError::UnsupportedCapability { capability } => {
+                write!(f, "unsupported capability: {capability}")
+            }
+            ApplicationError::RevisionConflict { expected, actual } => {
+                write!(f, "revision conflict: expected {expected}, actual {actual}")
+            }
+            ApplicationError::ReadOnlySource { source_id } => {
+                write!(f, "read-only source: {source_id}")
+            }
+            ApplicationError::SourceNotFound { source_id } => {
+                write!(f, "source not found: {source_id}")
+            }
+        }
+    }
+}
+
+impl std::error::Error for ApplicationError {}
+
+impl serde::Serialize for ApplicationError {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeMap;
+        let mut map = serializer.serialize_map(None)?;
+        match self {
+            ApplicationError::NotFound { kind, r_ref } => {
+                map.serialize_entry("kind", "not_found")?;
+                map.serialize_entry("resource_kind", kind)?;
+                map.serialize_entry("r_ref", r_ref)?;
+            }
+            ApplicationError::Storage { kind, message } => {
+                map.serialize_entry("kind", "storage")?;
+                map.serialize_entry("storage_kind", kind)?;
+                map.serialize_entry("message", message)?;
+            }
+            ApplicationError::Document { source } => {
+                map.serialize_entry("kind", "document")?;
+                map.serialize_entry("source", source)?;
+            }
+            ApplicationError::Io { path, source } => {
+                map.serialize_entry("kind", "io")?;
+                map.serialize_entry("path", path)?;
+                map.serialize_entry("source", crate::error_serde::name(source))?;
+            }
+            ApplicationError::UnsupportedCapability { capability } => {
+                map.serialize_entry("kind", "unsupported_capability")?;
+                map.serialize_entry("capability", capability)?;
+            }
+            ApplicationError::RevisionConflict { expected, actual } => {
+                map.serialize_entry("kind", "revision_conflict")?;
+                map.serialize_entry("expected", expected)?;
+                map.serialize_entry("actual", actual)?;
+            }
+            ApplicationError::ReadOnlySource { source_id } => {
+                map.serialize_entry("kind", "read_only_source")?;
+                map.serialize_entry("source_id", source_id)?;
+            }
+            ApplicationError::SourceNotFound { source_id } => {
+                map.serialize_entry("kind", "source_not_found")?;
+                map.serialize_entry("source_id", source_id)?;
+            }
+        }
+        map.end()
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for ApplicationError {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        use serde::de::Error as _;
+        let value = serde_json::Value::deserialize(deserializer)?;
+        let kind = value
+            .get("kind")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| D::Error::custom("ApplicationError: missing `kind` tag"))?;
+        match kind {
+            "not_found" => {
+                let kind = value
+                    .get("resource_kind")
+                    .ok_or_else(|| D::Error::custom("ApplicationError: missing `resource_kind`"))?;
+                let r_ref = value
+                    .get("r_ref")
+                    .ok_or_else(|| D::Error::custom("ApplicationError: missing `r_ref`"))?;
+                Ok(ApplicationError::NotFound {
+                    kind: serde_json::from_value(kind.clone()).map_err(D::Error::custom)?,
+                    r_ref: serde_json::from_value(r_ref.clone()).map_err(D::Error::custom)?,
+                })
+            }
+            "storage" => {
+                let kind = value
+                    .get("storage_kind")
+                    .ok_or_else(|| D::Error::custom("ApplicationError: missing `storage_kind`"))?;
+                let message = value
+                    .get("message")
+                    .ok_or_else(|| D::Error::custom("ApplicationError: missing `message`"))?;
+                Ok(ApplicationError::Storage {
+                    kind: serde_json::from_value(kind.clone()).map_err(D::Error::custom)?,
+                    message: serde_json::from_value(message.clone()).map_err(D::Error::custom)?,
+                })
+            }
+            "document" => {
+                let source = value
+                    .get("source")
+                    .cloned()
+                    .ok_or_else(|| D::Error::custom("ApplicationError: missing `source`"))?;
+                Ok(ApplicationError::Document {
+                    source: serde_json::from_value(source).map_err(D::Error::custom)?,
+                })
+            }
+            "io" => {
+                let path = serde_json::from_value(
+                    value
+                        .get("path")
+                        .cloned()
+                        .unwrap_or(serde_json::Value::Null),
+                )
+                .map_err(D::Error::custom)?;
+                let source = value
+                    .get("source")
+                    .and_then(|v| v.as_str())
+                    .ok_or_else(|| D::Error::custom("ApplicationError: missing `source`"))?;
+                Ok(ApplicationError::Io {
+                    path,
+                    source: crate::error_serde::from_name(source),
+                })
+            }
+            "unsupported_capability" => {
+                let capability = value
+                    .get("capability")
+                    .and_then(|v| v.as_str())
+                    .ok_or_else(|| D::Error::custom("ApplicationError: missing `capability`"))?;
+                // `capability` is `&'static str`; only the strings this
+                // build actually produces can be round-tripped. Unknown
+                // strings are rejected rather than leaked.
+                const KNOWN: &[&str] = &[
+                    "conflict list is not yet implemented; use `notez sync` commands",
+                    "space doctor is not yet implemented",
+                    "job manager is not yet implemented; jobs are tracked via `notez task`",
+                    "artifact freshness check is not yet implemented",
+                    "relay sync is not yet implemented; sync via folder transport",
+                ];
+                let capability = KNOWN
+                    .iter()
+                    .find(|k| **k == capability)
+                    .copied()
+                    .ok_or_else(|| {
+                        D::Error::custom("ApplicationError: unknown unsupported capability string")
+                    })?;
+                Ok(ApplicationError::UnsupportedCapability { capability })
+            }
+            "revision_conflict" => {
+                let expected = value
+                    .get("expected")
+                    .ok_or_else(|| D::Error::custom("ApplicationError: missing `expected`"))?;
+                let actual = value
+                    .get("actual")
+                    .ok_or_else(|| D::Error::custom("ApplicationError: missing `actual`"))?;
+                Ok(ApplicationError::RevisionConflict {
+                    expected: serde_json::from_value(expected.clone()).map_err(D::Error::custom)?,
+                    actual: serde_json::from_value(actual.clone()).map_err(D::Error::custom)?,
+                })
+            }
+            "read_only_source" => {
+                let source_id = value
+                    .get("source_id")
+                    .ok_or_else(|| D::Error::custom("ApplicationError: missing `source_id`"))?;
+                Ok(ApplicationError::ReadOnlySource {
+                    source_id: serde_json::from_value(source_id.clone()).map_err(D::Error::custom)?,
+                })
+            }
+            "source_not_found" => {
+                let source_id = value
+                    .get("source_id")
+                    .ok_or_else(|| D::Error::custom("ApplicationError: missing `source_id`"))?;
+                Ok(ApplicationError::SourceNotFound {
+                    source_id: serde_json::from_value(source_id.clone()).map_err(D::Error::custom)?,
+                })
+            }
+            other => Err(D::Error::custom(format!(
+                "ApplicationError: unknown kind tag `{other}`"
+            ))),
+        }
+    }
+}
+
+impl std::fmt::Display for StorageErrorKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            StorageErrorKind::Sqlite => f.write_str("sqlite"),
+            StorageErrorKind::BlobMissing => f.write_str("blob_missing"),
+            StorageErrorKind::NoSourceRegistered => f.write_str("no_source_registered"),
+            StorageErrorKind::InvalidState => f.write_str("invalid_state"),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

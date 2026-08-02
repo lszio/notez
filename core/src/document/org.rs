@@ -3,6 +3,7 @@ use crate::domain::{
     LinkOccurrence, LinkTarget, Resource, ResourceKind, ResourceRef, ResourceRelation, TextSpan,
     derived_id,
 };
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::fs;
@@ -10,13 +11,13 @@ use std::path::Path;
 use std::sync::Arc;
 use thiserror::Error;
 use ulid::Ulid;
-#[derive(Error, Debug)]
+#[derive(Error, Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum DocumentError {
-    #[error("I/O error reading {path}: {source}")]
+    #[error("I/O error reading {path}: {kind}")]
     Io {
         path: String,
-        #[source]
-        source: std::io::Error,
+        #[serde(with = "crate::error_serde::io_kind")]
+        kind: std::io::ErrorKind,
     },
     #[error("malformed ID at {path}:{line}:{column}: {message}")]
     MalformedId {
@@ -38,7 +39,7 @@ impl OrgScanner {
         let path_str = path.to_string_lossy().to_string();
         let bytes = std::fs::read(path).map_err(|e| DocumentError::Io {
             path: path_str.clone(),
-            source: e,
+            kind: e.kind(),
         })?;
         Self::parse_bytes(&bytes, source_id, &path_str)
     }

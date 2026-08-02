@@ -21,7 +21,10 @@ pub mod task_para;
 pub use task_para::{AgendaItem, AgendaView, ParaOverview};
 pub use link_resolution::{LinkReindexReport, LinkResolver};
 pub use context::SpaceContext;
-pub use service::{ApplicationError, ApplicationFacade, ApplicationService, ResolveResult, ScanReport};
+pub use service::{
+    ApplicationError, ApplicationFacade, ApplicationService, DocumentErrorKind, ResolveResult,
+    ScanReport, StorageErrorKind,
+};
 pub use use_cases::{
     ArtifactUseCase, AttachmentUseCase, CommunityUseCase, InspectUseCase, LinkUseCase,
     ResourceUseCase, ScanUseCase, SyncUseCase, TaskUseCase,

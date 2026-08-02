@@ -29,6 +29,7 @@ pub mod application;
 pub mod sync;
 pub mod artifact;
 pub mod preview;
+mod error_serde;
 
 // Re-export the most common surface so application crates can write
 // `use core::{Resource, ResourceRef, ApplicationService, ...}`.
