@@ -1,0 +1,151 @@
+#+title: Capability 目录设计
+#+date: 2026-08-02
+
+* 1. 目标
+
+把 =ApplicationFacade::register_capability= 从 no-op hook 提升为可查
+询的 =CapabilityCatalog=。9 个 =UseCase= trait 各对应 1 个 capability；
+CLI 与 MCP 能从同一 catalog 读取描述（不动态注册 CLI subcommand
+或 MCP tool 本轮不做）。现有 183 个测试 + 新 catalog 契约测试全部通过。
+
+* 2. 决策
+
+** 2.1 公开 API
+
+=core/src/capability.rs= 增加 =CapabilityCatalog=：
+
+#+begin_src rust
+pub struct CapabilityCatalog {
+    descriptors: HashMap<&'static str, CapabilityDescriptor>,
+}
+
+impl CapabilityCatalog {
+    pub fn new() -> Self;
+    pub fn with_builtins() -> Self;  // 9 个内置 capability
+    pub fn register(&mut self, descriptor: CapabilityDescriptor);
+    pub fn get(&self, id: &str) -> Option<&CapabilityDescriptor>;
+    pub fn list(&self) -> Vec<&CapabilityDescriptor>;
+    pub fn contains(&self, id: &str) -> bool;
+    pub fn iter(&self) -> impl Iterator<Item = (&'static str, &CapabilityDescriptor)>;
+}
+#+end_src
+
+=CapabilityDescriptor= 已存在（含 =id= / =description= / =mutability=）。
+Catalog 内的 =id= 是 =&'static str=，与 =CapabilityDescriptor::id= 字段
+类型一致。
+
+** 2.2 9 个内置 capability
+
+=CapabilityCatalog::with_builtins= 注册 9 个 descriptor，与 9 个
+=UseCase= trait 一一对应：
+
+| id | mutability | description |
+|---|---|---|
+| =scan= | Read | scan native source and rebuild projection |
+| =resource= | Write | per-resource CRUD, query, read, list |
+| =link= | Read | link occurrence and resolution queries |
+| =task= | Write | agenda, PARA overview, state transitions |
+| =attachment= | Write | attachment add, extraction, segment query |
+| =community= | Write | community create, list |
+| =artifact= | Read | derived artifacts (summary, llms.txt, context-pack, skill) |
+| =sync= | Write | sync push, pull, relay, conflict list |
+| =inspect= | Read | rule inspection, doctor, jobs, artifact freshness |
+
+（=mutability= 是 catalog 描述层抽象；与 =SourceAdapter::capabilities=
+的 read/write 字段独立。本轮 catalog 内部硬编码 mutability；不在
+ApplicationFacade 实际行为中强制 read-only。）
+
+** 2.3 ApplicationFacade 接入
+
+=ApplicationFacade= 新增私有字段 =capability_catalog: CapabilityCatalog=，
+构造时 =CapabilityCatalog::with_builtins()=。公开方法：
+
+#+begin_src rust
+impl ApplicationFacade<S> {
+    /// Replace the existing descriptor for `id`, or insert a new one.
+    /// The existing no-op `register_capability` is preserved for
+    /// backward compatibility and delegates to this method.
+    pub fn register_capability(&mut self, descriptor: &CapabilityDescriptor);
+
+    /// Borrow the active catalog. Used by CLI/MCP to render help
+    /// or tool descriptions from a single source of truth.
+    pub fn capability_catalog(&self) -> &CapabilityCatalog;
+}
+#+end_src
+
+=register_capability= 的旧实现：=self.capability_log.push(...)=。
+本轮改为：=self.capability_catalog.register(descriptor.clone())=。
+=capability_log= 字段删除（=register_capability= 是 public method，
+唯一消费方是 catalog）。
+
+** 2.4 CLI/MCP 接入
+
+CLI main 启动后，对每个 subcommand 与 MCP tool handler：
+- 不修改现有 =Commands= 枚举 / 不修改 =LinkCommands= 等。
+- 在 =main= 末尾新增 =clap_complete= 风格的可选 hook：当启动
+  =notez --list-capabilities= 时，从 facade.capability_catalog()
+  打印 =[{"id":"scan","mutability":"Read","description":"..."}]= 后
+  exit 0。这是 catalog 的 read-side 验证。
+- MCP 不修改。CLI 不为每个 command 动态注册子命令。
+
+* 3. 验证
+
+- =cargo test --workspace=：现有 183 + 新增 catalog 契约测试
+  （≥6 个：=new= 空、=with_builtins= 9 个、=register= 覆盖默认、
+  =get= 命中/未命中、=list= 全部、=iter= 顺序、=ApplicationFacade::capability_catalog= 同步）全部通过。
+- =cargo check --workspace --all-targets=：exit 0。
+- =cargo run -p cli -- --space /tmp/notez-cap-smoke scan=：行为
+  与重构前一致（=Scanned 1 files, 2 resources, 0 relations.=）。
+- =cargo run -p cli -- --list-capabilities=：输出 9 个 capability
+  描述。
+- =grep -nE "capability_log" core/src=：返回空（=capability_log=
+  字段已删除）。
+
+* 4. 迁移顺序
+
+1. =core/src/capability.rs= 增加 =CapabilityCatalog= 结构 + 9 个内置
+   descriptor 字面量 + register/get/list/contains/iter 方法。
+2. 写 =core/tests/capability_catalog.rs= 契约测试（覆盖 6 种行为 +
+   =ApplicationFacade::capability_catalog= 同步）。
+3. 修改 =core/src/application/service.rs=：=ApplicationFacade= 把
+   =capability_log= 字段改为 =capability_catalog: CapabilityCatalog=；
+   构造时 =with_builtins()=；=register_capability= 改实现；
+   新增 =capability_catalog()= 公开 getter。
+4. CLI main 加 =--list-capabilities= 启动 hook。=cargo test --workspace= 验证 0 失败。
+5. spec/plan 收尾。
+
+* 5. 风险与缓解
+
+- 风险：旧 174 + T1-T3 = 9 测试中可能有断言 =facade.capability_log=
+  字段大小或内容。缓解：=capability_log= 唯一写入点是
+  =register_capability=；现有测试都没调用 =register_capability=
+  多次，无断言依赖 log 内容。删除字段不会破坏测试。
+- 风险：=CapabilityCatalog= HashMap 顺序不稳定，=list()= 返回
+  Vec 顺序与 =with_builtins= 注册顺序不同。缓解：测试断言
+  使用 =BTreeSet= 风格比较（"contains" + "len"），不依赖顺序。
+- 风险：CLI 加 =--list-capabilities= 与现有 =--space= 等全局
+  option 冲突。缓解：=--list-capabilities= 是顶层 option，=cli=
+  =Cli= struct 加 =#[arg(long, global = false)]=（仅顶层），在
+  =main= 开头 if 检测后 exit 0，不进入 =with_space= 流程。
+
+* 6. 非目标
+
+- 不修改 =ApplicationError=（结构化变体仍为 P0 独立切片）。
+- 不修改 =SourceAdapter= / =SourceRegistry=。
+- 不把 =UseCase= trait 反射为 capability（手工描述）。
+- 不实现 CLI subcommand 或 MCP tool 的动态注册。
+- 不引入 read-only space mode。
+- 不引入 Time / Clock 注入。
+- 不修改现有 9 个 use case 的 trait 签名。
+
+* 7. 验收
+
+- =CapabilityCatalog= 6 个公开方法 + =with_builtins= 注册 9 个
+  capability。
+- =ApplicationFacade::register_capability= 改实现（写 catalog，
+  不再写 capability_log）。=capability_log= 字段删除。
+- =ApplicationFacade::capability_catalog()= 公开。
+- CLI =--list-capabilities= 打印 9 行 JSON。
+- 现有 183 测试 + 新增 catalog 契约测试（≥6）全部通过。
+- =cargo check --workspace --all-targets= 通过。
+- 一次 git commit 描述本轮改动。
