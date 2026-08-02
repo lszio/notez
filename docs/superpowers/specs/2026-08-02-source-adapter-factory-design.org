@@ -1,0 +1,219 @@
+#+title: SourceAdapterFactory 与 SourceRegistry 设计
+#+date: 2026-08-02
+
+* 1. 目标
+
+把当前 `core::application::service.rs` 中两处手写 =match SourceKind=
+路由（`scan_federation` 与 `writeback_resource`）替换为通过 =SourceRegistry=
+查询 =SourceAdapterFactory= 的注册表模式。新增 =SourceKind::Other(String)=
+变体让第三方 crate 可以在不修改 =core= 的情况下注册新 source kind。
+本轮不修改 CLI / MCP 的对外行为；行为契约不变；现有 174 测试 + 新
+factory / registry 契约测试全部通过。
+
+* 2. 决策
+
+** 2.1 公开 API
+
+=core/src/source/registry.rs= 新增：
+
+#+begin_src rust
+pub trait SourceAdapterFactory: Send + Sync {
+    fn kind(&self) -> SourceKind;
+    fn build(&self, config: SourceConfig) -> Result<Box<dyn SourceAdapter>, SourceError>;
+}
+
+pub struct SourceRegistry {
+    factories: HashMap<SourceKind, Box<dyn SourceAdapterFactory>>,
+}
+
+impl SourceRegistry {
+    pub fn new() -> Self;
+    pub fn with_builtins() -> Self;  // 6 个内置 factory
+    pub fn register(&mut self, factory: Box<dyn SourceAdapterFactory>);
+    pub fn get(&self, kind: &SourceKind) -> Option<&dyn SourceAdapterFactory>;
+    pub fn build(
+        &self,
+        config: SourceConfig,
+    ) -> Result<Box<dyn SourceAdapter>, SourceError>;
+    pub fn kinds(&self) -> Vec<SourceKind>;
+}
+#+end_src
+
+=SourceRegistry::build= 在 kind 不存在时返回 =SourceError::Other("no
+factory registered for source kind ...")= ；在 factory.build 自身返
+错时透传。
+
+=core/src/source/adapter.rs= 修改 =SourceKind=：
+
+#+begin_src rust
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", untagged)]
+pub enum SourceKind {
+    Native,
+    Git,
+    Obsidian,
+    Anytype,
+    AppleNotes,
+    AppleCalendar,
+    Other(String),
+}
+#+end_src
+
+=#[serde(untagged)]= 使序列化 =Other("notion")= 写作 "notion"（裸字符串），
+而原有 6 个变体反序列化为对应 enum 变体。对于非已知字符串，会回退到
+=Other(String)=。serde 测试与现有配置 schema 必须保持兼容。
+
+** 2.2 内置 factory 迁移
+
+现有 =core/src/source/{native,git,obsidian,anytype,apple_notes,apple_calendar}.rs=
+中各 adapter 类型都已经是 =Send + Sync=（concrete struct）。新增
+=native_factory.rs=, =git_factory.rs=, ... =apple_calendar_factory.rs=
+文件，每个包含一个 =pub struct XFactory= 实现 =SourceAdapterFactory=。
+=SourceRegistry::with_builtins= 注册 6 个 factory（+1 个 dummy
+factory 验证第三方注册路径，见 §2.3）。
+
+** 2.3 第三方注册验证点
+
+=core/tests/source_registry_test.rs=（或 =core/tests/source_registry.rs=）
+中提供 =DummyTestFactory=：
+
+#+begin_src rust
+struct DummyTestFactory;
+impl SourceAdapterFactory for DummyTestFactory {
+    fn kind(&self) -> SourceKind { SourceKind::Other("dummy".into()) }
+    fn build(&self, _config: SourceConfig) -> Result<Box<dyn SourceAdapter>, SourceError> {
+        // 实际构造测试用 ComposedSourceAdapter
+        Ok(Box::new(ComposedSourceAdapter::new(_config, /* test transport */, vec![])))
+    }
+}
+#+end_src
+
+测试 =register()= 后 =build(SourceKind::Other("dummy"))= 走自定义
+factory；不注册时 =build= 返回 =SourceError::Other= 错误。
+
+** 2.4 ApplicationFacade 接入
+
+=ApplicationFacade= 新增私有字段 =source_registry: SourceRegistry=，
+构造时 =with_builtins()=。新增公开方法：
+
+#+begin_src rust
+impl ApplicationFacade<S> {
+    pub fn with_registry(store: S, registry: SourceRegistry) -> Self;
+    pub fn register_source_factory(&mut self, factory: Box<dyn SourceAdapterFactory>);
+}
+#+end_src
+
+=writeback_resource= 与 =scan_federation= 内部 =match SourceKind= 改为：
+
+#+begin_src rust
+let adapter = self.source_registry
+    .build(src_cfg.clone())
+    .map_err(|e| ApplicationError::Storage(e.to_string()))?;
+#+end_src
+
+=SourceKind::Other(String)= 在 =writeback_resource= 与
+=scan_federation= 同样走 registry.build；这让第三方 source kind
+不需要再修改 =core= 就能被处理。
+
+** 2.5 错误与不回滚
+
+- =SourceRegistry::build= 错误：返回 =SourceError::Other(String)=。
+- =writeback_resource= 当前会通过 =ApplicationError::Storage= 包装，
+  错误消息以 "Source error: " 开头。CLI/MCP 测试断言以该子串
+  匹配；新消息也应保持 "Source error: " 前缀。
+- =SourceKind::Other(String)= 在 serde 反序列化时接受任意 string；
+  现有序列化测试（=api_source.rs= 中 SourceKind Display 验证）
+  仍通过，因为新变体仍 =#[derive(PartialEq, Eq, Hash)]=。
+- =SourceKind::Other(String)= 的 Display 形式为字符串本身；这与
+  现有 6 个变体的 Display 实现不冲突（native/git/... 是裸名）。
+
+** 2.6 CLI / MCP 不变
+
+=cli/src/main.rs= 与 =cli/src/mcp/server.rs= 不需要修改。factory
+注册发生在 =ApplicationFacade= 构造时（=with_builtins=），与
+composition root 解耦。第三方如需添加 factory，在调用
+=ApplicationFacade::with_registry= 时传入。
+
+* 3. 验证
+
+- =cargo test --workspace=：现有 174 测试 + 新增 SourceRegistry 契
+  约测试（≥6 个）全部通过。
+- =cargo check --workspace --all-targets=：exit 0。
+- =cargo run -p cli -- --space /tmp/notez-usecase-smoke scan=：行为
+  与重构前一致（=Scanned 1 files, 2 resources, 0 relations.=）。
+- =grep -nE "match SourceKind" core/src/application/service.rs=：
+  仅剩 =SourceConfig= 构造中的 =kind: SourceKind::Native= 单点（位
+  于构造运行时默认 source），不再有 6 路 =SourceKind::X =>= 分支。
+  实际：构造中已存在的 =SourceKind::Native= 是 =SourceConfig= 字
+  段赋值，与 adapter 构造无关；它仍存在是必要的。
+- =grep -nE "match SourceKind" core/src/source/=：
+  6 个 factory 各自不 =match SourceKind=；=SourceRegistry= 内部使用
+  =HashMap::get= 而非 =match=。
+
+* 4. 迁移顺序
+
+1. =SourceKind= 新增 =Other(String)= + =#[serde(untagged)]= 调整
+   （不破坏现有序列化，因为 =untagged= 让原生字符串与 enum 变体都
+   接受）。
+2. 新建 =core/src/source/registry.rs= 包含 =SourceAdapterFactory=
+   trait + =SourceRegistry= 结构 + =with_builtins= 注册 6 个内置
+   factory；6 个 factory 各自的 =*Factory= struct 也在 registry.rs
+   同文件实现（避免拆 7 个小文件）。
+3. 写 =core/tests/source_registry.rs= 契约测试（registry 注册
+   /build/get/kinds/with_builtins 全 6 种语义；dummy factory 验证
+   第三方注册）。
+4. 修改 =core/src/application/service.rs=：=ApplicationFacade= 加
+   字段、构造时 =with_builtins=、两处 =match SourceKind= 替换为
+   =self.source_registry.build(...)=；新增 =with_registry= 与
+   =register_source_factory= 公开方法。
+5. CLI/MCP 不动。跑 =cargo test --workspace= 验证 174 + 6 通过。
+6. spec/plan 收尾。
+
+* 5. 风险与缓解
+
+- 风险：=#[serde(untagged)]= 可能让现有配置中形如 =kind = "obsidian"=
+  的反序列化行为变化。缓解：=untagged= 让原生变体与 string 都接
+  受；当 JSON 中 =kind= 字段是 =Native|obsidian|...= 的字符串时，
+  serde 会优先尝试枚举变体，再回退到 =Other(String)=。需要在
+  =api_source.rs= 加 =test_source_kind_round_trip_via_serde= 测
+  试覆盖 6 个内置变体 + 1 个 =Other("notion")=。
+- 风险：=writeback_resource= 内部 =match= 删除后，第三方 source
+  kind 必须经 =SourceRegistry::build= 才能被处理；如果
+  ApplicationFacade 构造时未 =with_registry=，则所有 =Other=
+  都失败。缓解：默认 =with_builtins= 总是注册 6 个内置；测试
+  覆盖默认 =build(SourceKind::Native)= 仍然成功。
+- 风险：MCP 现有测试可能依赖 =ApplicationError::Storage= 消息
+  的具体格式。缓解：=writeback_resource= 仍包装为
+  =ApplicationError::Storage=，消息前部以 "Source error: " 开
+  始，断言以子串匹配（如 "not registered"、"unsupported
+  capability"）不会受本次改动影响。
+- 风险：=SourceRegistry= 在 =ApplicationFacade= 内引入新字段，
+  现有构造 =ApplicationFacade::new(store)= 路径需要默认
+  =with_builtins()= 行为，否则 =writeback_resource= 会因为没有
+  factory 而失败。缓解：构造函数 =new= 与 =with_space= 都隐式
+  初始化 =source_registry: SourceRegistry::with_builtins()=。
+
+* 6. 非目标
+
+- 不引入 Capability 目录实体（仍为 no-op hook）。
+- 不重构 ComposedSourceAdapter 的"第一个匹配 parser"逻辑。
+- 不为 =FormatParser= 添加 plugin registry。
+- 不为 =Previewer= 添加新 hook。
+- 不重构 =ApplicationError=。
+- 不修改 CLI / MCP 调用方。
+- 不修改 =docs/architecture.org=（如需更新，单独切片）。
+
+* 7. 验收
+
+- =SourceKind= 7 个变体（6 内置 + Other）。
+- =SourceAdapterFactory= trait + 6 个内置实现 + 1 个测试用
+  dummy factory。
+- =SourceRegistry= 提供 =register= / =get= / =build= / =kinds= /
+  =with_builtins= 方法。
+- =ApplicationFacade= 内部 =writeback_resource= 与
+  =scan_federation= 不再有 6 路 =match= 分支。
+- =ApplicationFacade::with_registry= 与
+  =register_source_factory= 公开方法存在。
+- =cargo test --workspace= 通过；≥180 测试。
+- =cargo check --workspace --all-targets= 通过。
+- 一次 git commit 描述本轮改动。
