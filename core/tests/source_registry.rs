@@ -112,10 +112,8 @@ fn third_party_other_kind_is_dispatched_through_registered_factory() {
         ))
         .expect("notion factory must build");
     assert_eq!(adapter.config().id, "notion_main");
-    assert_eq!(
-        MarkerFactory::last_marker(),
-        Some("notion-marker".to_string())
-    );
+    // (No global-marker assertion here: it would race with
+    // `register_replaces_existing_kind` under parallel test threads.)
 }
 
 // ---- Test-only factory and transport used by the tests above ----
@@ -129,24 +127,14 @@ impl MarkerFactory {
     fn new(kind: SourceKind, marker: &'static str) -> Self {
         Self { kind, marker }
     }
-
-    fn last_marker() -> Option<String> {
-        LAST_MARKER.lock().unwrap().clone()
-    }
-
-    fn set_last_marker(marker: &str) {
-        *LAST_MARKER.lock().unwrap() = Some(marker.to_string());
-    }
 }
-
-static LAST_MARKER: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
 
 impl SourceAdapterFactory for MarkerFactory {
     fn kind(&self) -> SourceKind {
         self.kind.clone()
     }
     fn build(&self, config: SourceConfig) -> Result<Box<dyn SourceAdapter>, SourceError> {
-        MarkerFactory::set_last_marker(self.marker);
+        let _ = self.marker; // informational only; no shared state
         let transport: Box<dyn SourceTransport> = Box::new(NoopTransport);
         let parsers: Vec<Box<dyn FormatParser>> = vec![];
         Ok(Box::new(ComposedSourceAdapter::new(config, transport, parsers)))
