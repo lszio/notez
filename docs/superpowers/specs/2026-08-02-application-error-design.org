@@ -1,0 +1,191 @@
+#+title: ApplicationError 结构化变体设计
+#+date: 2026-08-02
+
+* 1. 目标
+
+把 `core::application::ApplicationError` 从字符串为主的扁平错误
+（`Storage(String)` / `NotFound(String)` / `Unsupported(&'static str)`
+等）升级为 8 个结构化变体，携带类型化字段（`ResourceRef`、`StorageErrorKind`、
+`source_id`、`expected/actual` 等），并提供 `serde` 序列化、稳定
+Display 格式、CLI exit code 映射与 MCP 结构化 error code。现有 189
+测试中所有依赖 Display 字符串的断言按新格式重写；行为契约（哪些操作
+失败、失败后 projection 不变等）不变。
+
+* 2. 决策
+
+** 2.1 变体集（8 个）
+
+#+begin_src rust
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ApplicationError {
+    NotFound { kind: ResourceKind, r_ref: ResourceRef },
+    Storage { kind: StorageErrorKind, message: String },
+    Document { source: DocumentErrorKind },
+    Io { path: Option<PathBuf>, source: std::io::ErrorKind },
+    UnsupportedCapability { capability: &'static str },
+    RevisionConflict { expected: String, actual: String },
+    ReadOnlySource { source_id: String },
+    SourceNotFound { source_id: String },
+}
+#+end_src
+
+新增辅助类型：
+
+#+begin_src rust
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum StorageErrorKind {
+    Sqlite,       // rusqlite 层
+    BlobMissing,  // 缺 blob hash
+    NoSourceRegistered,
+    InvalidState, // 其他
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum DocumentErrorKind {
+    Org(notez_core::document::OrgDocumentError),
+    Markdown(notez_core::document::MarkdownDocumentError),
+}
+#+end_src
+
+** 2.2 稳定 Display 格式（全新）
+
+每个变体 Display 格式固定（供 CLI stderr 与 MCP text error 使用）：
+
+| 变体 | Display |
+|---|---|
+| =NotFound= | `resource not found: <r_ref> (kind=<kind>)` |
+| =Storage= | `storage error (<kind>): <message>` |
+| =Document= | `document error (org): <source>` 或 `document error (markdown): <source>` |
+| =Io= | `io error: <source>` |
+| =UnsupportedCapability= | `unsupported capability: <capability>` |
+| =RevisionConflict= | `revision conflict: expected <expected>, actual <actual>` |
+| =ReadOnlySource= | `read-only source: <source_id>` |
+| =SourceNotFound= | `source not found: <source_id>` |
+
+这些格式是稳定的公开契约。所有 189 测试中依赖旧 Display
+（如 `"unsupported capability: space doctor is not yet implemented"`、
+`"Resource not found: ..."`、`"no sources registered in space ..."`）
+的断言按新格式重写。
+
+** 2.3 serde 序列化
+
+=ApplicationError= 派生 =Serialize/Deserialize=。MCP handler 对错误
+输出 JSON：
+
+#+begin_src json
+{ "error": { "kind": "NotFound", "r_ref": "heading:...", "message": "resource not found: ..." } }
+#+end_src
+
+=serde= tag 形式为 `#[serde(tag = "kind", rename_all = "snake_case")]`。
+
+** 2.4 CLI exit code 映射
+
+=cli/src/main.rs= 新增 =fn exit_code_for(err: &ApplicationError) -> i32=：
+
+| 变体 | exit |
+|---|---|
+| =NotFound= | 3 |
+| =Storage= | 5 |
+| =Document= | 5 |
+| =Io= | 5 |
+| =UnsupportedCapability= | 6 |
+| =ReadOnlySource= | 7 |
+| =SourceNotFound= | 8 |
+| =RevisionConflict= | 9 |
+
+当前 main 中散落的 `exit(5)` / `exit(3)` 改为调用该函数。不引入
+错误到退出码的整体重排（仅新增映射）。
+
+** 2.5 MCP 结构化 error
+
+=cli/src/mcp/server.rs= 的 =text_err= 改为 =struct_err=：对每个
+`Err(e)` 分支输出 `{ "kind": "<snake_case>", "message": <Display> }`。
+现有 MCP 测试（`cli/tests/mcp/*.rs`）中依赖 text error 子串的断言
+按新格式重写。
+
+** 2.6 迁移
+
+=core/src/application/service.rs= 中 45 处
+=ApplicationError::Storage(e.to_string())= 逐处映射到对应变体：
+
+- 来自 `store` trait 返回的 `S::Error` → =Storage { kind: Sqlite, message }=
+- 来自 `replace_source`/`upsert_resource`/`delete_resource` 等 →
+  =Storage { kind: Sqlite, message }=
+- 来自 `self.store.query(...)` 失败 → =Storage { kind: Sqlite, message }=
+- 来自 =SpaceSourcesConfig::load= → =Storage { kind: InvalidState, message }=
+- 来自缺 blob hash → =Storage { kind: BlobMissing, message }=
+- 来自未知 source kind 的 `build` 失败 → =SourceNotFound { source_id }=
+  或 =Storage { kind: NoSourceRegistered, message }=（按语义选择：
+  `writeback_resource` 找不到 source 用 =SourceNotFound=；无 factory 用
+  =Storage NoSourceRegistered=）
+- 来自 =NotFound= 的 `read`/`resolve` 无命中 → =NotFound { kind, r_ref }=
+- 来自 =transition_task= 的 workflow 错误 → =Document { source: Org(...) }=
+- 来自 =relay_sync=/=list_conflicts=/=space_doctor=/=list_jobs=/
+  =check_artifact_freshness= 的 =Unsupported= → =UnsupportedCapability { capability }=
+- 来自 `std::io` 的 =Io= 保留 =Io { path: Option, source: ErrorKind }=
+
+** 2.7 兼容
+
+- =ApplicationError= 的 `#[derive(Debug, PartialEq, Eq)]` 保留。
+- 现有 `#[from] DocumentError` / `#[from] MarkdownDocumentError` 移除，
+  改为 =DocumentErrorKind= 内嵌（因为 `#[from]` 只支持单变体）。
+- =ResolveResult=、=ScanReport= 不变。
+
+* 3. 验证
+
+- =cargo test --workspace=：现有 189 测试（Display 断言重写后）+ 新
+  error contract 测试（≥8 个：每个变体构造 + Display 输出 + serde
+  round-trip）全部通过。
+- =cargo check --workspace --all-targets=：exit 0。
+- CLI 各 error 路径 exit code：=notez space doctor= → 6；=notez resolve nonexistent= → 3；=notez task transition= missing → 3；=notez sync relay= → 6。
+- MCP 对错误返回结构化 JSON（kind + message）。
+- =cargo run -p cli -- --space /tmp/notez-smoke scan=：成功路径不变。
+
+* 4. 迁移顺序
+
+1. 定义 =ApplicationError= 8 变体 + =StorageErrorKind= + =DocumentErrorKind=
+   在 service.rs；保留 44 fn 方法签名不变。
+2. 写 =core/tests/application_error.rs= 契约测试（构造 + Display +
+   serde round-trip + 变体匹配）。
+3. 迁移 service.rs 45 处 =ApplicationError::Storage/NotFound/Unsupported=
+   到新变体。
+4. CLI main 加 =exit_code_for=；替换散落 =exit(5)/exit(3)=。
+5. MCP server =text_err= 改 =struct_err=（JSON kind + message）。
+6. 重写受影响的 189 测试断言（新 Display 格式）。
+7. spec/plan 收尾。
+
+* 5. 风险与缓解
+
+- 风险：45 处迁移量大，容易遗漏或改错语义。缓解：每处迁移对应一个
+  测试断言；先改 service.rs 使编译通过，再重写受影响的 Display 断言。
+- 风险：现有测试对错误文本依赖强（如 `"unsupported capability: space
+  doctor is not yet implemented"`）。缓解：保持 capability 字符串值不变
+  （=space doctor= 等），仅改前缀为 `unsupported capability: `；
+  逐个重写断言。
+- 风险：`#[from]` 移除后 `?` 运算符不再自动转换 DocumentError。缓解：
+  显式 `.map_err(...)` 包装。
+- 风险：MCP 测试依赖 text error 子串。缓解：新 =struct_err= 的 message
+  字段仍包含原 Display 文本，测试可改为断言 JSON 的 message 字段子串。
+
+* 6. 非目标
+
+- 不修改 =SourceError= / =SourceRegistry= / =CapabilityCatalog=。
+- 不引入 =anyhow= / =thiserror= 之外的错误库。
+- 不把 =ApplicationError= 作为 =source= 链（不嵌入 =std::io::Error=
+  全文，只存 =ErrorKind=）。
+- 不为 8 变体之外的错误建模（新增变体未来再做）。
+- 不改 =ResolveResult= / =ScanReport= / 9 个 UseCase trait 签名。
+- 不重构 CLI main 的 1300+ 行结构（只改错误处理点）。
+
+* 7. 验收
+
+- =ApplicationError= 8 个结构化变体 + =StorageErrorKind= 4 个 +
+  =DocumentErrorKind= 2 个。
+- 45 处旧 =Storage(String)= / =NotFound(String)= / =Unsupported(&str)=
+  全部迁移到新变体。
+- =Display= 8 个稳定格式 + =serde= round-trip。
+- CLI =exit_code_for= 8 个映射；=space doctor= → 6、=resolve missing= → 3。
+- MCP =struct_err= JSON（kind + message）。
+- 189 测试（重写后） + 新增 error contract 测试 ≥8 个全部通过。
+- =cargo check --workspace --all-targets= 通过。
+- 一次 git commit 描述本轮改动。
