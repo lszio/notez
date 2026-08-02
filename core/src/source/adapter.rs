@@ -22,9 +22,7 @@ pub enum SourceError {
     #[error("Source error: {0}")]
     Other(String),
 }
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum SourceKind {
     Native,
     Git,
@@ -32,6 +30,61 @@ pub enum SourceKind {
     Anytype,
     AppleNotes,
     AppleCalendar,
+    Other(String),
+}
+
+impl SourceKind {
+    pub fn as_str(&self) -> &str {
+        match self {
+            SourceKind::Native => "native",
+            SourceKind::Git => "git",
+            SourceKind::Obsidian => "obsidian",
+            SourceKind::Anytype => "anytype",
+            SourceKind::AppleNotes => "apple_notes",
+            SourceKind::AppleCalendar => "apple_calendar",
+            SourceKind::Other(name) => name.as_str(),
+        }
+    }
+}
+
+impl serde::Serialize for SourceKind {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serializer.serialize_str(self.as_str())
+    }
+}
+
+ impl<'de> serde::Deserialize<'de> for SourceKind {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let s = String::deserialize(deserializer)?;
+        Ok(match s.as_str() {
+            "native" => SourceKind::Native,
+            "git" => SourceKind::Git,
+            "obsidian" => SourceKind::Obsidian,
+            "anytype" => SourceKind::Anytype,
+            "apple_notes" => SourceKind::AppleNotes,
+            "apple_calendar" => SourceKind::AppleCalendar,
+            other => {
+                if other.is_empty() {
+                    return Err(serde::de::Error::custom(
+                        "SourceKind string must be non-empty",
+                    ));
+                }
+                SourceKind::Other(s)
+            }
+        })
+    }
+}
+
+impl std::fmt::Display for SourceKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -215,5 +268,38 @@ impl SourceAdapter for ComposedSourceAdapter {
             target_ref: prep.target_ref.clone(),
             committed: true,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn source_kind_other_round_trips_via_serde() {
+        // Other variant: serialise as the bare string.
+        let k = SourceKind::Other("notion".to_string());
+        let s = serde_json::to_string(&k).unwrap();
+        assert_eq!(s, "\"notion\"");
+
+        // Untagged deserialisation: a bare string becomes Other.
+        let parsed: SourceKind = serde_json::from_str("\"notion\"").unwrap();
+        assert_eq!(parsed, k);
+    }
+
+    #[test]
+    fn source_kind_built_in_variants_round_trip_via_serde() {
+        for k in [
+            SourceKind::Native,
+            SourceKind::Git,
+            SourceKind::Obsidian,
+            SourceKind::Anytype,
+            SourceKind::AppleNotes,
+            SourceKind::AppleCalendar,
+        ] {
+            let s = serde_json::to_string(&k).unwrap();
+            let parsed: SourceKind = serde_json::from_str(&s).unwrap();
+            assert_eq!(parsed, k, "round-trip failed for {k:?}");
+        }
     }
 }

@@ -287,6 +287,13 @@ impl<S: ProjectionStore> ApplicationFacade<S> {
                     let adapter = crate::source::AppleCalendarSourceAdapter::new(src_cfg.clone());
                     adapter.scan()
                 }
+                crate::source::SourceKind::Other(_) => {
+                    return Err(ApplicationError::Storage(format!(
+                        "source kind `{}` has no built-in adapter; \
+                         register a SourceAdapterFactory via ApplicationFacade::register_source_factory",
+                        src_cfg.kind
+                    )));
+                }
             }
             .map_err(|e| ApplicationError::Storage(e.to_string()))?;
 
