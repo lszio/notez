@@ -149,3 +149,10 @@ CLI main 启动后，对每个 subcommand 与 MCP tool handler：
 - 现有 183 测试 + 新增 catalog 契约测试（≥6）全部通过。
 - =cargo check --workspace --all-targets= 通过。
 - 一次 git commit 描述本轮改动。
+
+** 8. Verification
+
+- cargo test --workspace: 189 tests passed, 0 failed.
+- cargo check --workspace --all-targets: exit 0.
+- notez list-capabilities: outputs 9-entry JSON array; ids are scan/resource/link/task/attachment/community/artifact/sync/inspect.
+- Audit grep: no `capability_log` references in core/src, cli/src, or cli/tests.
