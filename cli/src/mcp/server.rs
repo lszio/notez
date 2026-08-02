@@ -349,6 +349,25 @@ fn text_err(message: impl Into<String>) -> Result<CallToolResult, McpError> {
     Ok(CallToolResult::error(vec![Content::text(message.into())]))
 }
 
+/// Build an MCP tool error whose payload is a structured JSON object with
+/// `kind` (snake_case) and `message` (the Display text). This is the
+/// stable MCP error contract; see the error design spec.
+fn struct_err(err: &notez_core::application::ApplicationError) -> Result<CallToolResult, McpError> {
+    let kind = match err {
+        notez_core::application::ApplicationError::NotFound { .. } => "not_found",
+        notez_core::application::ApplicationError::Storage { .. } => "storage",
+        notez_core::application::ApplicationError::Document { .. } => "document",
+        notez_core::application::ApplicationError::Io { .. } => "io",
+        notez_core::application::ApplicationError::UnsupportedCapability { .. } => {
+            "unsupported_capability"
+        }
+        notez_core::application::ApplicationError::ReadOnlySource { .. } => "read_only_source",
+        notez_core::application::ApplicationError::SourceNotFound { .. } => "source_not_found",
+        notez_core::application::ApplicationError::RevisionConflict { .. } => "revision_conflict",
+    };
+    text_err(serde_json::json!({ "kind": kind, "message": err.to_string() }).to_string())
+}
+
 fn space_path(arg: Option<&str>) -> std::path::PathBuf {
     std::path::PathBuf::from(arg.unwrap_or("."))
 }
@@ -422,7 +441,7 @@ impl NotezMcpServer {
                             "Ambiguous resolve '{address_str}': matches {str_refs:?}"
                         ))
                     }
-                    Err(e) => text_err(format!("Internal resolve error: {e}")),
+                    Err(e) => struct_err(&e),
                 }
             } else {
                 match ResourceUseCase::resolve(svc, address_str) {
@@ -439,7 +458,7 @@ impl NotezMcpServer {
                             "Ambiguous resolve '{address_str}': matches {str_refs:?}"
                         ))
                     }
-                    Err(e) => text_err(format!("Internal resolve error: {e}")),
+                    Err(e) => struct_err(&e),
                 }
             }
         })
@@ -468,7 +487,7 @@ impl NotezMcpServer {
                     Ok(v) => text_ok(v),
                     Err(e) => text_err(format!("Internal query serialization error: {e}")),
                 },
-                Err(e) => text_err(format!("Internal query error: {e}")),
+                Err(e) => struct_err(&e),
             }
         })
     }
@@ -494,7 +513,7 @@ impl NotezMcpServer {
                     Err(e) => text_err(format!("Internal read serialization error: {e}")),
                 },
                 Ok(None) => text_err(format!("Resource not found: {}", args.r#ref)),
-                Err(e) => text_err(format!("Internal read error: {e}")),
+                Err(e) => struct_err(&e),
             }
         })
     }
@@ -516,15 +535,15 @@ impl NotezMcpServer {
                 };
                 let occs = match LinkUseCase::list_links(svc, &parsed) {
                     Ok(o) => o,
-                    Err(e) => return text_err(format!("Internal inspect error: {e}")),
+                    Err(e) => return struct_err(&e),
                 };
                 let resolved = match LinkUseCase::resolve_links(svc, &parsed) {
                     Ok(r) => r,
-                    Err(e) => return text_err(format!("Internal inspect error: {e}")),
+                    Err(e) => return struct_err(&e),
                 };
                 let diags = match LinkUseCase::diagnose_link(svc, &parsed) {
                     Ok(d) => d,
-                    Err(e) => return text_err(format!("Internal inspect error: {e}")),
+                    Err(e) => return struct_err(&e),
                 };
                 let mut by_status = serde_json::Map::new();
                 for d in &diags {
@@ -546,7 +565,7 @@ impl NotezMcpServer {
                         "status": "ok",
                         "total_items": page.items.len(),
                     })),
-                    Err(e) => text_err(format!("Internal inspect error: {e}")),
+                    Err(e) => struct_err(&e),
                 }
             }
         })
@@ -575,7 +594,7 @@ impl NotezMcpServer {
                     }
                 },
                 Ok(None) => text_err(format!("Resource not found: {}", args.r#ref)),
-                Err(e) => text_err(format!("Internal inspect_rules error: {e}")),
+                Err(e) => struct_err(&e),
             }
         })
     }
@@ -600,7 +619,7 @@ impl NotezMcpServer {
                     Ok(v) => text_ok(v),
                     Err(e) => text_err(format!("Internal link_list serialization error: {e}")),
                 },
-                Err(e) => text_err(format!("Internal link_list error: {e}")),
+                Err(e) => struct_err(&e),
             }
         })
     }
@@ -627,7 +646,7 @@ impl NotezMcpServer {
                         text_err(format!("Internal link_resolve serialization error: {e}"))
                     }
                 },
-                Err(e) => text_err(format!("Internal link_resolve error: {e}")),
+                Err(e) => struct_err(&e),
             }
         })
     }
@@ -654,7 +673,7 @@ impl NotezMcpServer {
                         text_err(format!("Internal link_diagnose serialization error: {e}"))
                     }
                 },
-                Err(e) => text_err(format!("Internal link_diagnose error: {e}")),
+                Err(e) => struct_err(&e),
             }
         })
     }
@@ -673,7 +692,7 @@ impl NotezMcpServer {
                         text_err(format!("Internal link_reindex serialization error: {e}"))
                     }
                 },
-                Err(e) => text_err(format!("Internal link_reindex error: {e}")),
+                Err(e) => struct_err(&e),
             }
         })
     }
@@ -685,7 +704,7 @@ impl NotezMcpServer {
                 Ok(v) => text_ok(v),
                 Err(e) => text_err(format!("Internal agenda serialization error: {e}")),
             },
-            Err(e) => text_err(format!("Internal agenda error: {e}")),
+            Err(e) => struct_err(&e),
         })
     }
 
@@ -709,7 +728,7 @@ impl NotezMcpServer {
                 Ok(v) => text_ok(v),
                 Err(e) => text_err(format!("Internal transition serialization error: {e}")),
             },
-            Err(e) => text_err(format!("Internal transition error: {e}")),
+            Err(e) => struct_err(&e),
         })
     }
 
@@ -725,7 +744,7 @@ impl NotezMcpServer {
                     Ok(v) => text_ok(v),
                     Err(e) => text_err(format!("Internal source_list serialization error: {e}")),
                 },
-                Err(e) => text_err(format!("Internal source_list error: {e}")),
+                Err(e) => struct_err(&e),
             }
         })
     }
@@ -764,7 +783,7 @@ impl NotezMcpServer {
         let space = space_path(args.space.as_deref());
         self.with_service_mut(|svc| match svc.add_source(&space, config) {
             Ok(_) => text_ok(json!({ "added": true })),
-            Err(e) => text_err(format!("Internal source_add error: {e}")),
+            Err(e) => struct_err(&e),
         })
     }
 
@@ -778,7 +797,7 @@ impl NotezMcpServer {
         let default_mime = args.mime.as_deref().unwrap_or("application/octet-stream");
         self.with_service_mut(|svc| match AttachmentUseCase::add_attachment(svc, &space, file_path, default_mime) {
             Ok(att_ref) => text_ok(json!({ "ref": att_ref.to_string() })),
-            Err(e) => text_err(format!("Internal attachment_add error: {e}")),
+            Err(e) => struct_err(&e),
         })
     }
 
@@ -802,7 +821,7 @@ impl NotezMcpServer {
                 "attachment_ref": args.r#ref,
                 "segments_count": segments.len(),
             })),
-            Err(e) => text_err(format!("Internal attachment_extract error: {e}")),
+            Err(e) => struct_err(&e),
         })
     }
 
@@ -828,7 +847,7 @@ impl NotezMcpServer {
                         text_err(format!("Internal query_segments serialization error: {e}"))
                     }
                 },
-                Err(e) => text_err(format!("Internal query_segments error: {e}")),
+                Err(e) => struct_err(&e),
             }
         })
     }
@@ -860,7 +879,7 @@ impl NotezMcpServer {
         let space = space_path(args.space.as_deref());
         self.with_service_mut(|svc| match CommunityUseCase::create_community(svc, &space, comm) {
             Ok(_) => text_ok(json!({ "created": true })),
-            Err(e) => text_err(format!("Internal community_create error: {e}")),
+            Err(e) => struct_err(&e),
         })
     }
 
@@ -877,7 +896,7 @@ impl NotezMcpServer {
                     "recipe": recipe_name,
                     "content": derived.content,
                 })),
-                Err(e) => text_err(format!("Internal derive_artifact error: {e}")),
+                Err(e) => struct_err(&e),
             }
         })
     }
@@ -896,7 +915,7 @@ impl NotezMcpServer {
                     "name": package.name,
                     "path": package.package_path.to_string_lossy(),
                 })),
-                Err(e) => text_err(format!("Internal export_skill error: {e}")),
+                Err(e) => struct_err(&e),
             }
         })
     }
@@ -914,7 +933,7 @@ impl NotezMcpServer {
                 "pushed_files": report.pushed_files,
                 "pushed_objects": report.pushed_objects,
             })),
-            Err(e) => text_err(format!("Internal sync_push error: {e}")),
+            Err(e) => struct_err(&e),
         })
     }
 
@@ -932,7 +951,7 @@ impl NotezMcpServer {
                 "merged_files": report.merged_files,
                 "conflicts_count": report.conflicts.len(),
             })),
-            Err(e) => text_err(format!("Internal sync_pull error: {e}")),
+            Err(e) => struct_err(&e),
         })
     }
 
@@ -945,7 +964,7 @@ impl NotezMcpServer {
                     text_err(format!("Internal sync_conflicts serialization error: {e}"))
                 }
             },
-            Err(e) => text_err(format!("Internal sync_conflicts error: {e}")),
+            Err(e) => struct_err(&e),
         })
     }
 
@@ -963,7 +982,7 @@ impl NotezMcpServer {
                         text_err(format!("Internal space_doctor serialization error: {e}"))
                     }
                 },
-                Err(e) => text_err(format!("Internal space_doctor error: {e}")),
+                Err(e) => struct_err(&e),
             }
         })
     }
@@ -975,7 +994,7 @@ impl NotezMcpServer {
                 Ok(v) => text_ok(v),
                 Err(e) => text_err(format!("Internal job_list serialization error: {e}")),
             },
-            Err(e) => text_err(format!("Internal job_list error: {e}")),
+            Err(e) => struct_err(&e),
         })
     }
 
@@ -993,7 +1012,7 @@ impl NotezMcpServer {
                         text_err(format!("Internal artifact_stale serialization error: {e}"))
                     }
                 },
-                Err(e) => text_err(format!("Internal artifact_stale error: {e}")),
+                Err(e) => struct_err(&e),
             }
         })
     }
