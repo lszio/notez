@@ -15,6 +15,24 @@ use serde_json::json;
 use std::fs;
 use std::process::exit;
 
+/// Map an `ApplicationError` to a stable process exit code.
+///
+/// The mapping is part of the CLI contract and must not change without
+/// a coordinated release (see the error design spec).
+fn exit_code_for(err: &notez_core::application::ApplicationError) -> i32 {
+    use notez_core::application::ApplicationError;
+    match err {
+        ApplicationError::NotFound { .. } => 3,
+        ApplicationError::Storage { .. } => 5,
+        ApplicationError::Document { .. } => 5,
+        ApplicationError::Io { .. } => 5,
+        ApplicationError::UnsupportedCapability { .. } => 6,
+        ApplicationError::ReadOnlySource { .. } => 7,
+        ApplicationError::SourceNotFound { .. } => 8,
+        ApplicationError::RevisionConflict { .. } => 9,
+    }
+}
+
 fn main() {
     let cli = Cli::parse();
 
@@ -161,7 +179,7 @@ fn main() {
             }
             Err(e) => {
                 eprintln!("Scan error: {e}");
-                exit(5);
+                exit(exit_code_for(&e));
             }
         },
 
@@ -187,7 +205,7 @@ fn main() {
             }
             Err(e) => {
                 eprintln!("Resolve error: {e}");
-                exit(5);
+                exit(exit_code_for(&e));
             }
         },
 
@@ -211,7 +229,7 @@ fn main() {
                     }
                     Err(e) => {
                         eprintln!("Error querying occurrences: {e}");
-                        exit(5);
+                        exit(exit_code_for(&e));
                     }
                 },
                 Err(e) => {
@@ -235,7 +253,7 @@ fn main() {
                     }
                     Err(e) => {
                         eprintln!("Error querying resolved relations: {e}");
-                        exit(5);
+                        exit(exit_code_for(&e));
                     }
                 },
                 Err(e) => {
@@ -262,7 +280,7 @@ fn main() {
                     }
                     Err(e) => {
                         eprintln!("Error diagnosing links: {e}");
-                        exit(5);
+                        exit(exit_code_for(&e));
                     }
                 },
                 Err(e) => {
@@ -288,7 +306,7 @@ fn main() {
                 }
                 Err(e) => {
                     eprintln!("Error reindexing links: {e}");
-                    exit(5);
+                    exit(exit_code_for(&e));
                 }
             },
         },
@@ -333,7 +351,7 @@ fn main() {
                 }
                 Err(e) => {
                     eprintln!("Query error: {e}");
-                    exit(5);
+                    exit(exit_code_for(&e));
                 }
             }
         }
@@ -350,7 +368,7 @@ fn main() {
             }
             Err(e) => {
                 eprintln!("Recent error: {e}");
-                exit(5);
+                exit(exit_code_for(&e));
             }
         },
 
@@ -380,7 +398,7 @@ fn main() {
                     }
                     Err(e) => {
                         eprintln!("Upsert error: {e}");
-                        exit(5);
+                        exit(exit_code_for(&e));
                     }
                 }
             }
@@ -402,7 +420,7 @@ fn main() {
                     }
                     Err(e) => {
                         eprintln!("Delete error: {e}");
-                        exit(5);
+                        exit(exit_code_for(&e));
                     }
                 }
             }
@@ -419,7 +437,7 @@ fn main() {
                     }
                     Err(e) => {
                         eprintln!("List error: {e}");
-                        exit(5);
+                        exit(exit_code_for(&e));
                     }
                 }
             }
@@ -452,7 +470,7 @@ fn main() {
                 }
                 Err(e) => {
                     eprintln!("Read error: {e}");
-                    exit(5);
+                    exit(exit_code_for(&e));
                 }
             }
         }
@@ -482,7 +500,7 @@ fn main() {
                     }
                     Err(e) => {
                         eprintln!("Inspect error: {e}");
-                        exit(5);
+                        exit(exit_code_for(&e));
                     }
                 }
             } else {
@@ -500,7 +518,7 @@ fn main() {
                     }
                     Err(e) => {
                         eprintln!("Read error: {e}");
-                        exit(5);
+                        exit(exit_code_for(&e));
                     }
                 }
             }
@@ -518,7 +536,7 @@ fn main() {
             }
             Err(e) => {
                 eprintln!("Agenda error: {e}");
-                exit(5);
+                exit(exit_code_for(&e));
             }
         },
 
@@ -547,7 +565,7 @@ fn main() {
                         }
                         Err(e) => {
                             eprintln!("Transition error: {e}");
-                            exit(5);
+                            exit(exit_code_for(&e));
                         }
                     }
                 }
@@ -631,7 +649,7 @@ fn main() {
                         }
                         Err(e) => {
                             eprintln!("Detail error: {e}");
-                            exit(5);
+                            exit(exit_code_for(&e));
                         }
                     }
                 }
@@ -664,7 +682,7 @@ fn main() {
                     }
                     Err(e) => {
                         eprintln!("List error: {e}");
-                        exit(5);
+                        exit(exit_code_for(&e));
                     }
                 },
                 commands::TaskCommands::Agenda => match TaskUseCase::agenda(&service) {
@@ -750,7 +768,7 @@ fn main() {
                     }
                     Err(e) => {
                         eprintln!("Agenda error: {e}");
-                        exit(5);
+                        exit(exit_code_for(&e));
                     }
                 },
                 commands::TaskCommands::Para => match TaskUseCase::para_overview(&service) {
@@ -780,7 +798,7 @@ fn main() {
                     }
                     Err(e) => {
                         eprintln!("Para overview error: {e}");
-                        exit(5);
+                        exit(exit_code_for(&e));
                     }
                 },
                 commands::TaskCommands::Jobs => match InspectUseCase::list_jobs(&service) {
@@ -796,7 +814,7 @@ fn main() {
                     }
                     Err(e) => {
                         eprintln!("Job list error: {e}");
-                        exit(5);
+                        exit(exit_code_for(&e));
                     }
                 },
             }
@@ -828,7 +846,7 @@ fn main() {
                     }
                     Err(e) => {
                         eprintln!("Add source error: {e}");
-                        exit(5);
+                        exit(exit_code_for(&e));
                     }
                 }
             }
@@ -845,7 +863,7 @@ fn main() {
                 }
                 Err(e) => {
                     eprintln!("List sources error: {e}");
-                    exit(5);
+                    exit(exit_code_for(&e));
                 }
             },
 
@@ -870,7 +888,7 @@ fn main() {
                 }
                 Err(e) => {
                     eprintln!("Source sync error: {e}");
-                    exit(5);
+                    exit(exit_code_for(&e));
                 }
             },
 
@@ -891,7 +909,7 @@ fn main() {
                     }
                     Err(e) => {
                         eprintln!("Source writeback error: {e}");
-                        exit(5);
+                        exit(exit_code_for(&e));
                     }
                 }
             }
@@ -908,7 +926,7 @@ fn main() {
                     }
                     Err(e) => {
                         eprintln!("Add attachment error: {e}");
-                        exit(5);
+                        exit(exit_code_for(&e));
                     }
                 }
             }
@@ -938,7 +956,7 @@ fn main() {
                     }
                     Err(e) => {
                         eprintln!("Extract attachment error: {e}");
-                        exit(5);
+                        exit(exit_code_for(&e));
                     }
                 }
             }
@@ -964,7 +982,7 @@ fn main() {
                     }
                     Err(e) => {
                         eprintln!("Query segments error: {e}");
-                        exit(5);
+                        exit(exit_code_for(&e));
                     }
                 }
             }
@@ -1003,7 +1021,7 @@ fn main() {
                     }
                     Err(e) => {
                         eprintln!("Create community error: {e}");
-                        exit(5);
+                        exit(exit_code_for(&e));
                     }
                 }
             }
@@ -1020,7 +1038,7 @@ fn main() {
                 }
                 Err(e) => {
                     eprintln!("List communities error: {e}");
-                    exit(5);
+                    exit(exit_code_for(&e));
                 }
             },
         },
@@ -1036,7 +1054,7 @@ fn main() {
                 }
                 Err(e) => {
                     eprintln!("Derive artifact error: {e}");
-                    exit(5);
+                    exit(exit_code_for(&e));
                 }
             }
         }
@@ -1058,7 +1076,7 @@ fn main() {
             }
             Err(e) => {
                 eprintln!("Skill export error: {e}");
-                exit(5);
+                exit(exit_code_for(&e));
             }
         },
         Commands::Sync(commands::SyncSubcommand { command }) => match command {
@@ -1079,7 +1097,7 @@ fn main() {
                     }
                     Err(e) => {
                         eprintln!("Sync push error: {e}");
-                        exit(5);
+                        exit(exit_code_for(&e));
                     }
                 }
             }
@@ -1105,7 +1123,7 @@ fn main() {
                     }
                     Err(e) => {
                         eprintln!("Sync pull error: {e}");
-                        exit(5);
+                        exit(exit_code_for(&e));
                     }
                 }
             }
@@ -1122,7 +1140,7 @@ fn main() {
                 }
                 Err(e) => {
                     eprintln!("Sync conflicts error: {e}");
-                    exit(5);
+                    exit(exit_code_for(&e));
                 }
             },
             commands::SyncCommands::Relay { id } => match SyncUseCase::relay_sync(&service, &id, &r_config.space_root) {
@@ -1144,7 +1162,7 @@ fn main() {
                 }
                 Err(e) => {
                     eprintln!("Sync relay error: {e}");
-                    exit(5);
+                    exit(exit_code_for(&e));
                 }
             },
         },
@@ -1161,7 +1179,7 @@ fn main() {
             }
             Err(e) => {
                 eprintln!("Artifact freshness check error: {e}");
-                exit(5);
+                exit(exit_code_for(&e));
             }
         },
         Commands::Mcp(McpSubcommand {
@@ -1207,7 +1225,7 @@ fn main() {
                 }
                 Err(e) => {
                     eprintln!("Rebuild error: {e}");
-                    exit(5);
+                    exit(exit_code_for(&e));
                 }
             },
 
@@ -1224,7 +1242,7 @@ fn main() {
                 }
                 Err(e) => {
                     eprintln!("Space doctor error: {e}");
-                    exit(5);
+                    exit(exit_code_for(&e));
                 }
             },
             SpaceCommands::List => {
