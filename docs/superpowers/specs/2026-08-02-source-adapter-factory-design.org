@@ -210,10 +210,17 @@ composition root 解耦。第三方如需添加 factory，在调用
   dummy factory。
 - =SourceRegistry= 提供 =register= / =get= / =build= / =kinds= /
   =with_builtins= 方法。
-- =ApplicationFacade= 内部 =writeback_resource= 与
+
   =scan_federation= 不再有 6 路 =match= 分支。
 - =ApplicationFacade::with_registry= 与
   =register_source_factory= 公开方法存在。
 - =cargo test --workspace= 通过；≥180 测试。
 - =cargo check --workspace --all-targets= 通过。
 - 一次 git commit 描述本轮改动。
+
+** 8. Verification
+
+- cargo test --workspace: 183 tests passed, 0 failed.
+- cargo check --workspace --all-targets: exit 0.
+- CLI scan smoke against /tmp/notez-source-reg-smoke: "Scanned 1 files, 2 resources, 0 relations."
+- Audit grep: no 6-arm `match SourceKind =>` remains in service.rs; the only `SourceKind::` references are construction-site defaults at two locations.
