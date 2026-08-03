@@ -6,7 +6,8 @@ pub mod rule;
 pub mod schema;
 pub mod link;
 pub use link::{
-    LinkOccurrence, LinkTarget, ResolvedRelation, ResolutionStatus, ResourceAddress, TextSpan,
+    LinkOccurrence, LinkTarget, RelationDirection, RelationType, ResolvedRelation,
+    ResolutionStatus, ResourceAddress, TextSpan,
 };
 pub use rule::{InspectResult, Rule, RuleEngine, RuleKind, RuleTrace};
 

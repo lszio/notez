@@ -128,7 +128,21 @@ pub struct ResourceRelation {
     pub source_ref: ResourceRef,
     pub relation: String,
     pub target_ref: ResourceRef,
+    #[serde(default)]
+    pub relation_type: crate::domain::link::RelationType,
+    #[serde(default)]
+    pub direction: crate::domain::link::RelationDirection,
+    #[serde(default = "default_evidence_json")]
+    pub evidence_json: serde_json::Value,
+    #[serde(default = "default_created_at")]
+    pub created_at: String,
+    #[serde(default = "default_creator")]
+    pub creator: String,
 }
+
+fn default_evidence_json() -> serde_json::Value { serde_json::json!({}) }
+fn default_created_at() -> String { String::new() }
+fn default_creator() -> String { "legacy".to_string() }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SegmentRecord {

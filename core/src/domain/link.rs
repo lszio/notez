@@ -1,5 +1,58 @@
 use crate::domain::resource::{ResourceKind, ResourceRef, ResourceRefError};
 use serde::{Deserialize, Serialize};
+use std::fmt;
+
+/// 关系类型（spec §3 Relation）。
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RelationType {
+    References,
+    Embeds,
+    Backlink,
+    Custom(String),
+}
+
+impl Default for RelationType {
+    fn default() -> Self { Self::References }
+}
+
+impl fmt::Display for RelationType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::References => f.write_str("references"),
+            Self::Embeds => f.write_str("embeds"),
+            Self::Backlink => f.write_str("backlink"),
+            Self::Custom(s) => write!(f, "{s}"),
+        }
+    }
+}
+
+/// 关系方向（spec §2.3）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RelationDirection {
+    Forward,
+    Backward,
+    Unknown,
+}
+
+impl Default for RelationDirection {
+    fn default() -> Self { Self::Unknown }
+}
+
+impl fmt::Display for RelationDirection {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Forward => f.write_str("forward"),
+            Self::Backward => f.write_str("backward"),
+            Self::Unknown => f.write_str("unknown"),
+        }
+    }
+}
+
+fn default_evidence_json() -> serde_json::Value { serde_json::json!({}) }
+fn default_created_at() -> String { String::new() }
+fn default_creator() -> String { "legacy".to_string() }
 
 /// Raw link target as found in source text, before resolution.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -171,17 +224,22 @@ pub enum ResolutionStatus {
 /// A resolved relation: one link occurrence that resolved successfully.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ResolvedRelation {
-    /// The resource containing this link.
     pub source_ref: ResourceRef,
-    /// The resolved target resource.
     pub target_ref: ResourceRef,
-    /// How the link was expressed.
     pub target: LinkTarget,
-    /// Resolution status.
     pub status: ResolutionStatus,
-    /// If ambiguous, the candidate refs.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub candidates: Vec<ResourceRef>,
+    #[serde(default)]
+    pub relation_type: RelationType,
+    #[serde(default)]
+    pub direction: RelationDirection,
+    #[serde(default = "default_evidence_json")]
+    pub evidence_json: serde_json::Value,
+    #[serde(default = "default_created_at")]
+    pub created_at: String,
+    #[serde(default = "default_creator")]
+    pub creator: String,
 }
 
 /// A `ResourceAddress` is what the public API accepts as input: either a stable
@@ -315,5 +373,36 @@ mod tests {
         let t = LinkTarget::title("Some Title", None);
         let addr = ResourceAddress::from(t);
         assert!(matches!(addr, ResourceAddress::Locator { .. }));
+    }
+}
+
+#[cfg(test)]
+mod relation_evidence_tests {
+    use super::*;
+    use crate::domain::resource::ResourceRef;
+
+    #[test]
+    fn relation_type_default_is_references() { assert_eq!(RelationType::default(), RelationType::References); }
+
+    #[test]
+    fn direction_default_is_unknown() { assert_eq!(RelationDirection::default(), RelationDirection::Unknown); }
+
+    #[test]
+    fn resource_relation_serializes_with_evidence_fields() {
+        let rel = crate::domain::resource::ResourceRelation {
+            source_ref: ResourceRef::parse("heading:01ARZ3NDEKTSV4RRFFQ69G5FAV").unwrap(),
+            relation: "references".to_string(),
+            target_ref: ResourceRef::parse("heading:01ARZ3NDEKTSV4RRFFQ69G5FAW").unwrap(),
+            relation_type: RelationType::References,
+            direction: RelationDirection::Forward,
+            evidence_json: serde_json::json!({"source_id": "notes", "span_line": 1}),
+            created_at: "2026-08-03T00:00:00Z".to_string(),
+            creator: "scan".to_string(),
+        };
+        let j = serde_json::to_string(&rel).unwrap();
+        assert!(j.contains("\"relation_type\":\"references\""));
+        assert!(j.contains("\"direction\":\"forward\""));
+        assert!(j.contains("\"created_at\":\"2026-08-03T00:00:00Z\""));
+        assert!(j.contains("\"creator\":\"scan\""));
     }
 }

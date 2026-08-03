@@ -146,10 +146,14 @@ impl LinkResolver {
                     target: occ.target.clone(),
                     status: status.clone(),
                     candidates: candidates.clone(),
+                    relation_type: crate::domain::RelationType::References,
+                    direction: crate::domain::RelationDirection::Unknown,
+                    evidence_json: serde_json::json!({}),
+                    created_at: String::new(),
+                    creator: "scan".to_string(),
                 });
             }
         }
-
         store
             .replace_resolved_relations(source_id, resolved_relations)
             .map_err(|e| ApplicationError::Storage {

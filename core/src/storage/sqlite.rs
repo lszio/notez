@@ -594,6 +594,11 @@ impl ProjectionStore for SqliteProjection {
                 target,
                 status,
                 candidates,
+                relation_type: crate::domain::RelationType::References,
+                direction: crate::domain::RelationDirection::Unknown,
+                evidence_json: serde_json::json!({}),
+                created_at: String::new(),
+                creator: "scan".to_string(),
             });
         }
         Ok(results)

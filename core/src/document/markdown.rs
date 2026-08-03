@@ -217,6 +217,11 @@ impl MarkdownScanner {
                         source_ref: current_source_ref,
                         relation: "id_link".to_string(),
                         target_ref,
+                        relation_type: crate::domain::RelationType::References,
+                        direction: crate::domain::RelationDirection::Unknown,
+                        evidence_json: serde_json::json!({}),
+                        created_at: String::new(),
+                        creator: "scan".to_string(),
                     });
                 }
                 link_occurrences.push(occ);
