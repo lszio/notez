@@ -112,6 +112,84 @@ impl SqliteProjection {
             CREATE INDEX IF NOT EXISTS idx_resolved_source_id ON resolved_relations(source_id);
             ",
         )?;
+        self.migrate_to_v2()?;
+        Ok(())
+     }
+
+    fn migrate_to_v2(&mut self) -> Result<(), StorageError> {
+        let current: i64 = self
+            .conn
+            .query_row("PRAGMA user_version", [], |r| r.get(0))
+            .unwrap_or(0);
+        if current >= 2 {
+            return Ok(());
+        }
+
+        // Add new columns idempotently. SQLite has no `IF NOT EXISTS` for
+        // ALTER TABLE ADD COLUMN, so we tolerate "duplicate column" errors
+        // via `let _ = ...` for each statement. Opening a freshly-built DB
+        // (v0→v2 in one shot) is also covered because the CREATE TABLE in
+        // init_schema already added the v1 columns and user_version starts
+        // at 0, so we land here once.
+        let _ = self
+            .conn
+            .execute("ALTER TABLE resources ADD COLUMN object_id TEXT", []);
+        let _ = self
+            .conn
+            .execute("ALTER TABLE resources ADD COLUMN content_hash TEXT", []);
+
+        let _ = self.conn.execute(
+            "ALTER TABLE relations ADD COLUMN relation_type TEXT NOT NULL DEFAULT 'references'",
+            [],
+        );
+        let _ = self.conn.execute(
+            "ALTER TABLE relations ADD COLUMN direction TEXT NOT NULL DEFAULT 'unknown'",
+            [],
+        );
+        let _ = self.conn.execute(
+            "ALTER TABLE relations ADD COLUMN evidence_json TEXT NOT NULL DEFAULT '{}'",
+            [],
+        );
+        let _ = self.conn.execute(
+            "ALTER TABLE relations ADD COLUMN created_at TEXT NOT NULL DEFAULT ''",
+            [],
+        );
+        let _ = self.conn.execute(
+            "ALTER TABLE relations ADD COLUMN creator TEXT NOT NULL DEFAULT 'legacy'",
+            [],
+        );
+
+        let _ = self.conn.execute(
+            "ALTER TABLE resolved_relations ADD COLUMN relation_type TEXT NOT NULL DEFAULT 'references'",
+            [],
+        );
+        let _ = self.conn.execute(
+            "ALTER TABLE resolved_relations ADD COLUMN direction TEXT NOT NULL DEFAULT 'unknown'",
+            [],
+        );
+        let _ = self.conn.execute(
+            "ALTER TABLE resolved_relations ADD COLUMN evidence_json TEXT NOT NULL DEFAULT '{}'",
+            [],
+        );
+        let _ = self.conn.execute(
+            "ALTER TABLE resolved_relations ADD COLUMN created_at TEXT NOT NULL DEFAULT ''",
+            [],
+        );
+        let _ = self.conn.execute(
+            "ALTER TABLE resolved_relations ADD COLUMN creator TEXT NOT NULL DEFAULT 'legacy'",
+            [],
+        );
+
+        let _ = self.conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_resources_object ON resources(object_id)",
+            [],
+        );
+        let _ = self.conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_relations_target ON relations(target_ref)",
+            [],
+        );
+
+        self.conn.execute_batch("PRAGMA user_version = 2")?;
         Ok(())
     }
     pub fn insert_segments(&mut self, segments: &[SegmentRecord]) -> Result<(), StorageError> {
@@ -188,8 +266,8 @@ impl ProjectionStore for SqliteProjection {
 
         {
             let mut stmt_res = tx.prepare(
-                "INSERT INTO resources (ref, kind, title, revision, source_id, locator, properties_json)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                "INSERT INTO resources (ref, kind, title, revision, source_id, locator, properties_json, object_id, content_hash)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
             )?;
 
             for res in resources {
@@ -204,25 +282,34 @@ impl ProjectionStore for SqliteProjection {
                     source_id,
                     res.locator,
                     props_json,
+                    res.object_id.to_string(),
+                    String::new(), // content_hash placeholder; filled by Task 6 scan path
                 ])?;
             }
         }
 
         {
             let mut stmt_rel = tx.prepare(
-                "INSERT INTO relations (source_ref, relation, target_ref, source_id)
-                 VALUES (?1, ?2, ?3, ?4)",
+                "INSERT INTO relations (source_ref, relation, target_ref, source_id, relation_type, direction, evidence_json, created_at, creator)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
             )?;
 
             for rel in relations {
+                let evidence_json = serde_json::to_string(&rel.evidence_json)?;
                 stmt_rel.execute(params![
                     rel.source_ref.to_string(),
                     rel.relation,
                     rel.target_ref.to_string(),
                     source_id,
+                    rel.relation_type.to_string(),
+                    rel.direction.to_string(),
+                    evidence_json,
+                    rel.created_at.clone(),
+                    rel.creator.clone(),
                 ])?;
             }
         }
+
 
         {
             let mut stmt_occ = tx.prepare(
@@ -252,7 +339,7 @@ impl ProjectionStore for SqliteProjection {
     fn get(&self, r#ref: &ResourceRef) -> Result<Option<Resource>, StorageError> {
         let ref_str = r#ref.to_string();
         let mut stmt = self.conn.prepare(
-            "SELECT ref, kind, title, revision, source_id, locator, properties_json
+            "SELECT ref, kind, title, revision, source_id, locator, properties_json, object_id
              FROM resources WHERE ref = ?1",
         )?;
 
@@ -265,6 +352,7 @@ impl ProjectionStore for SqliteProjection {
                 let source_id: String = row.get(4)?;
                 let locator: String = row.get(5)?;
                 let properties_json: String = row.get(6)?;
+                let object_id_str: Option<String> = row.get(7)?;
 
                 Ok((
                     r_ref_str,
@@ -274,16 +362,32 @@ impl ProjectionStore for SqliteProjection {
                     source_id,
                     locator,
                     properties_json,
+                    object_id_str,
                 ))
             })
             .optional()?;
 
-        if let Some((r_ref_str, _kind_str, title, revision, source_id, locator, properties_json)) =
-            row
+        if let Some((
+            r_ref_str,
+            _kind_str,
+            title,
+            revision,
+            source_id,
+            locator,
+            properties_json,
+            object_id_str,
+        )) = row
         {
             let r_ref = ResourceRef::parse(&r_ref_str)
                 .map_err(|e| StorageError::InvalidData(format!("invalid ref in DB: {e}")))?;
             let properties: BTreeMap<String, String> = serde_json::from_str(&properties_json)?;
+            let object_id = object_id_str
+                .as_deref()
+                .filter(|s| !s.is_empty())
+                .map(ObjectId::parse)
+                .transpose()
+                .map_err(|e| StorageError::InvalidData(format!("invalid object_id: {e}")))?
+                .unwrap_or_default();
             Ok(Some(Resource {
                 r#ref: r_ref,
                 kind: r_ref.kind(),
@@ -292,14 +396,14 @@ impl ProjectionStore for SqliteProjection {
                 source_id,
                 locator,
                 properties,
-                object_id: ObjectId::default(),
+                object_id,
             }))
         } else {
             Ok(None)
         }
     }
     fn query(&self, selector: &Selector) -> Result<QueryPage, StorageError> {
-        let mut sql = "SELECT ref, kind, title, revision, source_id, locator, properties_json FROM resources WHERE 1=1".to_string();
+        let mut sql = "SELECT ref, kind, title, revision, source_id, locator, properties_json, object_id FROM resources WHERE 1=1".to_string();
         let mut query_params: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
 
         if let Some(kind) = selector.kind {
@@ -346,6 +450,7 @@ impl ProjectionStore for SqliteProjection {
             let source_id: String = row.get(4)?;
             let locator: String = row.get(5)?;
             let properties_json: String = row.get(6)?;
+            let object_id_str: Option<String> = row.get(7)?;
 
             Ok((
                 r_ref_str,
@@ -354,15 +459,24 @@ impl ProjectionStore for SqliteProjection {
                 source_id,
                 locator,
                 properties_json,
+                object_id_str,
             ))
         })?;
 
         let mut items = Vec::new();
         for row_res in rows {
-            let (r_ref_str, title, revision, source_id, locator, properties_json) = row_res?;
+            let (r_ref_str, title, revision, source_id, locator, properties_json, object_id_str) =
+                row_res?;
             let r_ref = ResourceRef::parse(&r_ref_str)
                 .map_err(|e| StorageError::InvalidData(format!("invalid ref in DB: {e}")))?;
             let properties: BTreeMap<String, String> = serde_json::from_str(&properties_json)?;
+            let object_id = object_id_str
+                .as_deref()
+                .filter(|s| !s.is_empty())
+                .map(ObjectId::parse)
+                .transpose()
+                .map_err(|e| StorageError::InvalidData(format!("invalid object_id: {e}")))?
+                .unwrap_or_default();
             items.push(Resource {
                 r#ref: r_ref,
                 kind: r_ref.kind(),
@@ -371,7 +485,7 @@ impl ProjectionStore for SqliteProjection {
                 source_id,
                 locator,
                 properties,
-                object_id: ObjectId::default(),
+                object_id,
             });
         }
 
@@ -381,20 +495,74 @@ impl ProjectionStore for SqliteProjection {
         })
     }
 
+    fn find_by_object(&self, object_id: ObjectId) -> Result<Vec<Resource>, StorageError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT ref, kind, title, revision, source_id, locator, properties_json, object_id
+               FROM resources WHERE object_id = ?1",
+        )?;
+        let rows = stmt.query_map(params![object_id.to_string()], |row| {
+            let r_ref_str: String = row.get(0)?;
+            let kind_str: String = row.get(1)?;
+            let title: String = row.get(2)?;
+            let revision: String = row.get(3)?;
+            let source_id: String = row.get(4)?;
+            let locator: String = row.get(5)?;
+            let properties_json: String = row.get(6)?;
+            let object_id_str: Option<String> = row.get(7)?;
+            Ok((
+                r_ref_str,
+                kind_str,
+                title,
+                revision,
+                source_id,
+                locator,
+                properties_json,
+                object_id_str,
+            ))
+        })?;
+        let mut items = Vec::new();
+        for r in rows {
+            let (r_ref_str, kind_str, title, revision, source_id, locator, properties_json, object_id_str) = r?;
+            let r_ref = ResourceRef::parse(&r_ref_str)
+                .map_err(|e| StorageError::InvalidData(format!("invalid ref in DB: {e}")))?;
+            let properties: BTreeMap<String, String> = serde_json::from_str(&properties_json)?;
+            let object_id = object_id_str
+                .as_deref()
+                .filter(|s| !s.is_empty())
+                .map(ObjectId::parse)
+                .transpose()
+                .map_err(|e| StorageError::InvalidData(format!("invalid object_id: {e}")))?
+                .unwrap_or_default();
+            items.push(Resource {
+                r#ref: r_ref,
+                kind: r_ref.kind(),
+                title,
+                revision,
+                source_id,
+                locator,
+                properties,
+                object_id,
+            });
+        }
+        Ok(items)
+    }
+
+
     fn upsert_resource(&mut self, resource: &Resource) -> Result<(), StorageError> {
         let ref_str = resource.r#ref.to_string();
         let kind_str = resource.kind.as_str();
         let props_json = serde_json::to_string(&resource.properties)?;
         self.conn.execute(
-            "INSERT INTO resources (ref, kind, title, revision, source_id, locator, properties_json)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+            "INSERT INTO resources (ref, kind, title, revision, source_id, locator, properties_json, object_id)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
              ON CONFLICT(ref) DO UPDATE SET
                  kind = excluded.kind,
                  title = excluded.title,
                  revision = excluded.revision,
                  source_id = excluded.source_id,
                  locator = excluded.locator,
-                 properties_json = excluded.properties_json",
+                 properties_json = excluded.properties_json,
+                 object_id = excluded.object_id",
             params![
                 ref_str,
                 kind_str,
@@ -403,6 +571,7 @@ impl ProjectionStore for SqliteProjection {
                 resource.source_id,
                 resource.locator,
                 props_json,
+                resource.object_id.to_string(),
             ],
         )?;
         Ok(())
