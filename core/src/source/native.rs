@@ -45,17 +45,23 @@ impl SourceTransport for NativeTransport {
                     } else {
                         continue;
                     };
-                    
+
                     let payload = fs::read(path).map_err(TransportError::Io)?;
                     entities.push(RawEntity {
-                        locator: path.to_string_lossy().to_string(),
+                        // Use the path relative to the include_root so the
+                        // locator stays stable across spaces (spec §3.1):
+                        // two Spaces pointing at the same physical
+                        // directory must agree on a per-file locator
+                        // regardless of where the include_root lives on
+                        // disk.
+                        locator: rel_path.to_string_lossy().to_string(),
                         mime_type: mime_type.to_string(),
                         payload,
                     });
                 }
             }
         }
-        
+
         // Maintain deterministic order
         entities.sort_by(|a, b| a.locator.cmp(&b.locator));
         Ok(entities)
@@ -69,8 +75,10 @@ impl FormatParser for OrgParser {
     }
 
     fn parse(&self, entity: &RawEntity, source_id: &str) -> Result<ParsedEntity, ParserError> {
-        let path = PathBuf::from(&entity.locator);
-        let doc = OrgScanner::scan(&path, source_id)
+        // The transport already loaded the bytes; pass them through so
+        // the scanner doesn't re-read from disk using the (relative)
+        // locator as a path.
+        let doc = OrgScanner::parse_bytes(&entity.payload, source_id, &entity.locator)
             .map_err(|e| ParserError::Other(e.to_string()))?;
         Ok(ParsedEntity {
             resources: doc.resources,
@@ -87,8 +95,8 @@ impl FormatParser for MarkdownParser {
     }
 
     fn parse(&self, entity: &RawEntity, source_id: &str) -> Result<ParsedEntity, ParserError> {
-        let path = PathBuf::from(&entity.locator);
-        let doc = MarkdownScanner::scan(&path, source_id)
+        // See OrgParser::parse above.
+        let doc = MarkdownScanner::parse_bytes(&entity.payload, source_id, &entity.locator)
             .map_err(|e| ParserError::Other(e.to_string()))?;
         Ok(ParsedEntity {
             resources: doc.resources,

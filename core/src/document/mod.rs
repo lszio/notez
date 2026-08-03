@@ -9,6 +9,9 @@
 use crate::domain::{LinkOccurrence, Resource, ResourceRelation};
 use std::sync::Arc;
 
+pub mod content_hash;
+pub use content_hash::{content_hash_of_bytes, content_hash_of_file};
+
 pub mod org;
 pub use org::{DocumentError as OrgDocumentError, OrgScanner};
 

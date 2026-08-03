@@ -1,4 +1,4 @@
-use crate::document::ScannedDocument;
+use crate::document::{ScannedDocument, content_hash_of_bytes};
 use crate::domain::{
     LinkOccurrence, LinkTarget, Resource, ResourceKind, ResourceRef, ResourceRelation, TextSpan,
     derived_id, derived_object_id,
@@ -105,6 +105,14 @@ impl MarkdownScanner {
         let doc_ref =
             doc_id_opt.unwrap_or_else(|| derived_id(ResourceKind::Document, source_id, &path_str, ""));
 
+        // Document content_hash covers the full file body (truncated to
+        // 64 KiB + size mix by content_hash_of_bytes — see spec §3.1).
+        let doc_object_id = derived_object_id(
+            &content_hash_of_bytes(content_str.as_bytes()),
+            &path_str,
+            "",
+        );
+
         let doc_resource = Resource {
             r#ref: doc_ref,
             kind: ResourceKind::Document,
@@ -113,7 +121,7 @@ impl MarkdownScanner {
             source_id: source_id.to_string(),
             locator: path_str.clone(),
             properties: doc_properties,
-            object_id: derived_object_id("", &path_str, ""),
+            object_id: doc_object_id,
         };
 
         let mut resources = vec![doc_resource];
@@ -167,15 +175,20 @@ impl MarkdownScanner {
                     let mut props = BTreeMap::new();
                     props.insert("LEVEL".to_string(), hashes.to_string());
 
+                    let heading_hash = content_hash_of_bytes(heading_text.as_bytes());
                     resources.push(Resource {
                         r#ref: h_ref,
                         kind: ResourceKind::Heading,
-                        title: heading_text,
+                        title: heading_text.clone(),
                         revision: revision.clone(),
                         source_id: source_id.to_string(),
                         locator: path_str.clone(),
                         properties: props,
-                        object_id: derived_object_id("", &path_str, &heading_count.to_string()),
+                        object_id: derived_object_id(
+                            &heading_hash,
+                            &path_str,
+                            &format!("h:{heading_count}"),
+                        ),
                     });
                 }
             }
@@ -193,16 +206,22 @@ impl MarkdownScanner {
                     } else {
                         format!("block:{id_val}")
                     };
+                    let block_title = trimmed[..comment_start].trim();
+                    let block_hash = content_hash_of_bytes(block_title.as_bytes());
                     if let Ok(b_ref) = ResourceRef::parse(&full_ref) {
                         resources.push(Resource {
                             r#ref: b_ref,
                             kind: ResourceKind::Block,
-                            title: trimmed[..comment_start].trim().to_string(),
+                            title: block_title.to_string(),
                             revision: revision.clone(),
                             source_id: source_id.to_string(),
                             locator: path_str.clone(),
                             properties: BTreeMap::new(),
-                            object_id: derived_object_id("", &path_str, &b_ref.to_string()),
+                            object_id: derived_object_id(
+                                &block_hash,
+                                &path_str,
+                                &format!("b:{}", b_ref.id()),
+                            ),
                         });
                         current_source_ref = b_ref;
                     }

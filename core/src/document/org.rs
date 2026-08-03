@@ -1,4 +1,4 @@
-use crate::document::ScannedDocument;
+use crate::document::{ScannedDocument, content_hash_of_bytes};
 use crate::domain::{
     LinkOccurrence, LinkTarget, Resource, ResourceKind, ResourceRef, ResourceRelation, TextSpan,
     derived_id, derived_object_id,
@@ -200,6 +200,11 @@ impl OrgScanner {
             None => derived_id(ResourceKind::Document, source_id, &locator, ""),
         };
 
+        // Document content_hash covers the full file body (truncated to
+        // 64 KiB + size mix by content_hash_of_bytes — see spec §3.1).
+        let doc_object_id =
+            derived_object_id(&content_hash_of_bytes(content_str.as_bytes()), &locator, "");
+
         let doc_resource = Resource {
             r#ref: doc_ref,
             kind: ResourceKind::Document,
@@ -208,7 +213,7 @@ impl OrgScanner {
             source_id: source_id.to_string(),
             locator: locator.clone(),
             properties: doc_properties,
-            object_id: derived_object_id("", &locator, ""),
+            object_id: doc_object_id,
         };
 
         let mut resources = vec![doc_resource];
@@ -244,6 +249,7 @@ impl OrgScanner {
             level_stack.push((h.level, h_ref));
             heading_refs.push(h_ref);
 
+            let heading_hash = content_hash_of_bytes(h.title.as_bytes());
             resources.push(Resource {
                 r#ref: h_ref,
                 kind: h_ref.kind(),
@@ -252,7 +258,7 @@ impl OrgScanner {
                 source_id: source_id.to_string(),
                 locator: locator.clone(),
                 properties: props,
-                object_id: derived_object_id("", &locator, &h.index.to_string()),
+                object_id: derived_object_id(&heading_hash, &locator, &format!("h:{}", h.index)),
             });
         }
 
