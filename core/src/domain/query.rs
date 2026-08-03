@@ -148,6 +148,15 @@ pub trait ProjectionStore {
     ) -> Result<Option<Vec<LinkDiagnostic>>, Self::Error> {
         Ok(None)
     }
+
+    /// 跨 Space 同一对象查询：返回所有 `object_id` 匹配的资源。
+    /// 默认空实现（测试替身无需关心），`SqliteProjection` 必须 override。
+    fn find_by_object(
+        &self,
+        object_id: crate::domain::ObjectId,
+    ) -> Result<Vec<crate::domain::Resource>, Self::Error> {
+        Ok(Vec::new())
+    }
  }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

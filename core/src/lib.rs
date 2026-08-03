@@ -36,8 +36,9 @@ mod error_serde;
 pub use domain::{
     Community, CommunityCandidate, CommunitySelector, InspectResult, LinkDiagnostic,
     LinkOccurrence, LinkTarget, Projection, ProjectionStore, QueryPage, Resource, ResourceKind,
-    ResourceRef, ResourceRefError, ResourceRelation, ResolutionStatus, ResolvedRelation, Rule,
-    RuleEngine, RuleKind, RuleTrace, Selector, TextSpan, derived_id,
+    ResourceRef, ResourceRefError, ResourceRelation, ResolutionStatus, ResolvedRelation,
+    RelationDirection, RelationType, Rule, RuleEngine, RuleKind, RuleTrace, Selector, TextSpan,
+    derived_id, derived_object_id, ObjectId, ObjectIdError,
 };
 pub use storage::{BlobMeta, BlobStore, SegmentRecord, SqliteProjection, StorageError};
 pub use application::{ApplicationError, ApplicationService, ResolveResult, ScanReport};

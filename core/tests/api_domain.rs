@@ -5,9 +5,9 @@ use notez_core::domain::schema::{
     PropertyType, SchemaField, Trait, TypeDefinition, TypeRegistry, ValidationError,
 };
 use notez_core::domain::{
-    derived_id, LinkOccurrence, LinkTarget, Projection, ProjectionStore, QueryPage, Resource,
-    ResourceAddress, ResourceKind, ResourceRef, ResourceRefError, ResourceRelation, RuleEngine,
-    Selector,
+    derived_id, LinkOccurrence, LinkTarget, Projection, ProjectionStore, QueryPage,
+    RelationDirection, RelationType, Resource, ResourceAddress, ResourceKind, ResourceRef,
+    ResourceRefError, ResourceRelation, RuleEngine, Selector,
 };
 use notez_core::source::{FormatParser, ParsedEntity, ParserError, RawEntity};
 use notez_core::storage::SqliteProjection;
@@ -149,6 +149,11 @@ fn resource_relation_segment_and_projection_domain_types_round_trip() {
         source_ref,
         relation: "contains".into(),
         target_ref,
+        relation_type: RelationType::References,
+        direction: RelationDirection::Unknown,
+        evidence_json: serde_json::json!({}),
+        created_at: String::new(),
+        creator: "scan".to_string(),
     };
     let json = serde_json::to_string(&relation).unwrap();
     assert_eq!(serde_json::from_str::<ResourceRelation>(&json).unwrap(), relation);

@@ -1,6 +1,7 @@
 use notez_core::domain::{
-    LinkOccurrence, LinkTarget, ProjectionStore, Resource, ResourceKind, ResourceRef,
-    ResourceRelation, ResolutionStatus, ResolvedRelation, SegmentRecord, Selector, TextSpan,
+    LinkOccurrence, LinkTarget, ProjectionStore, RelationDirection, RelationType, Resource,
+    ResourceKind, ResourceRef, ResourceRelation, ResolutionStatus, ResolvedRelation, SegmentRecord,
+    Selector, TextSpan,
 };
 use notez_core::storage::{BlobStore, BlobMeta, SqliteProjection, StorageError};
 use std::collections::BTreeMap;
@@ -50,6 +51,11 @@ fn sqlite_projection_round_trips_sources_queries_and_mutations() {
         source_ref: document.r#ref,
         relation: "contains".into(),
         target_ref: heading.r#ref,
+        relation_type: RelationType::References,
+        direction: RelationDirection::Unknown,
+        evidence_json: serde_json::json!({}),
+        created_at: String::new(),
+        creator: "scan".to_string(),
     };
     let occ = occurrence(document.r#ref, "Design");
 
@@ -111,6 +117,11 @@ fn sqlite_projection_persists_segments_link_resolution_and_diagnostics() {
         target: LinkTarget::title("Design", None),
         status: ResolutionStatus::Resolved,
         candidates: vec![target],
+        relation_type: RelationType::References,
+        direction: RelationDirection::Unknown,
+        evidence_json: serde_json::json!({}),
+        created_at: String::new(),
+        creator: "scan".to_string(),
     };
     store.replace_resolved_relations("native", vec![resolved.clone()]).unwrap();
     assert_eq!(store.query_resolved_relations(&source).unwrap(), vec![resolved]);
