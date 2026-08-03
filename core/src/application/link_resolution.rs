@@ -138,6 +138,17 @@ impl LinkResolver {
 
         for occ in occurrences {
             let (status, target_ref, candidates) = Self::resolve(store, &occ);
+            let now_secs = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|duration| duration.as_secs())
+                .unwrap_or(0);
+            let evidence = serde_json::json!({
+                "source_id": source_id,
+                "span_line": occ.span.line,
+                "span_col_start": occ.span.col_start,
+                "span_col_end": occ.span.col_end,
+                "rule": "default_profile:markdown",
+            });
             diagnostics.push((occ.clone(), status.clone(), candidates.clone()));
             if let Some(t_ref) = target_ref {
                 resolved_relations.push(ResolvedRelation {
@@ -147,9 +158,9 @@ impl LinkResolver {
                     status: status.clone(),
                     candidates: candidates.clone(),
                     relation_type: crate::domain::RelationType::References,
-                    direction: crate::domain::RelationDirection::Unknown,
-                    evidence_json: serde_json::json!({}),
-                    created_at: String::new(),
+                    direction: crate::domain::RelationDirection::Forward,
+                    evidence_json: evidence,
+                    created_at: now_secs.to_string(),
                     creator: "scan".to_string(),
                 });
             }

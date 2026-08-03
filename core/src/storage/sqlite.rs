@@ -699,8 +699,8 @@ impl ProjectionStore for SqliteProjection {
 
         {
             let mut stmt = tx.prepare(
-                "INSERT INTO resolved_relations (source_ref, target_ref, target_json, status, candidates_json, source_id)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                "INSERT INTO resolved_relations (source_ref, target_ref, target_json, status, candidates_json, source_id, relation_type, direction, evidence_json, created_at, creator)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
             )?;
 
             for rel in relations {
@@ -714,6 +714,11 @@ impl ProjectionStore for SqliteProjection {
                     status_str,
                     candidates_json,
                     source_id,
+                    rel.relation_type.to_string(),
+                    rel.direction.to_string(),
+                    serde_json::to_string(&rel.evidence_json)?,
+                    rel.created_at.clone(),
+                    rel.creator.clone(),
                 ])?;
             }
         }

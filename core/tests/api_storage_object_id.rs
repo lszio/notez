@@ -1,6 +1,6 @@
 use notez_core::domain::{
-    derived_object_id, ProjectionStore, RelationDirection, RelationType, Resource, ResourceKind,
-    ResourceRef, ResourceRelation,
+    derived_object_id, LinkTarget, ProjectionStore, RelationDirection, RelationType,
+    ResolutionStatus, ResolvedRelation, Resource, ResourceKind, ResourceRef, ResourceRelation,
 };
 use notez_core::storage::SqliteProjection;
 use rusqlite::Connection;
@@ -144,6 +144,49 @@ fn relation_evidence_round_trip_through_replace_source() {
     let creator: String = conn
         .query_row(
             "SELECT creator FROM relations WHERE source_id = 'src_a'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(creator, "scan");
+}
+
+#[test]
+fn resolved_relation_evidence_persists_with_direction_forward() {
+    let dir = tempdir().unwrap();
+    let db_path = dir.path().join("resolved.sqlite");
+    let mut store = SqliteProjection::open(&db_path).unwrap();
+
+    let src_ref = ResourceRef::parse("heading:01ARZ3NDEKTSV4RRFFQ69G5FAV").unwrap();
+    let tgt_ref = ResourceRef::parse("heading:01ARZ3NDEKTSV4RRFFQ69G5FAW").unwrap();
+    let rel = ResolvedRelation {
+        source_ref: src_ref,
+        target_ref: tgt_ref,
+        target: LinkTarget::id("01ARZ3NDEKTSV4RRFFQ69G5FAW", None),
+        status: ResolutionStatus::Resolved,
+        candidates: vec![],
+        relation_type: RelationType::References,
+        direction: RelationDirection::Forward,
+        evidence_json: serde_json::json!({"source_id": "src_a", "span_line": 5, "rule": "default_profile:markdown"}),
+        created_at: "2026-08-03T00:00:00Z".to_string(),
+        creator: "scan".to_string(),
+    };
+    store
+        .replace_resolved_relations("src_a", vec![rel])
+        .unwrap();
+
+    let conn = Connection::open(&db_path).unwrap();
+    let dir_str: String = conn
+        .query_row(
+            "SELECT direction FROM resolved_relations WHERE source_id = 'src_a'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(dir_str, "forward");
+    let creator: String = conn
+        .query_row(
+            "SELECT creator FROM resolved_relations WHERE source_id = 'src_a'",
             [],
             |r| r.get(0),
         )
