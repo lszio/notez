@@ -22,6 +22,7 @@ fn make_ctx<'a>(
             source_id: "native".to_string(),
             locator: locator.to_string(),
             properties: Default::default(),
+            object_id: notez_core::domain::ObjectId::default(),
         },
         bytes: Some(bytes::Bytes::from_static(bytes)),
         mime: Some(mime.to_string()),

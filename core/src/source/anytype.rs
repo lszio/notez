@@ -42,6 +42,7 @@ impl SourceAdapter for AnytypeSourceAdapter {
             source_id: self.config.id.clone(),
             locator: "/anytype/object/01J00000000000000000000077".to_string(),
             properties: props,
+            object_id: crate::domain::derived_object_id("", "", ""),
         };
 
         Ok(ScannedSource {

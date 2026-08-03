@@ -12,6 +12,7 @@ fn recipe_derivation_summary_llms_txt_and_context_pack() {
         source_id: "native".to_string(),
         locator: "/path1.org".to_string(),
         properties: BTreeMap::new(),
+        object_id: notez_core::domain::ObjectId::default(),
     };
 
     let res2 = Resource {
@@ -22,6 +23,7 @@ fn recipe_derivation_summary_llms_txt_and_context_pack() {
         source_id: "native".to_string(),
         locator: "/path2.org".to_string(),
         properties: BTreeMap::new(),
+        object_id: notez_core::domain::ObjectId::default(),
     };
 
     let resources = vec![res1, res2];

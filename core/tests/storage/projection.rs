@@ -12,6 +12,7 @@ fn sample_resource(kind: ResourceKind, title: &str, ulid_str: &str, source_id: &
         source_id: source_id.to_string(),
         locator: format!("/path/{title}.org"),
         properties: BTreeMap::new(),
+        object_id: notez_core::domain::ObjectId::default(),
     }
 }
 

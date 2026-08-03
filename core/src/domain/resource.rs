@@ -117,6 +117,10 @@ pub struct Resource {
     pub source_id: String,
     pub locator: String,
     pub properties: BTreeMap<String, String>,
+    /// 跨 source 稳定的对象身份（spec §2.1）。同一正文 + 同一 locator +
+    /// 同一 position 在不同 source 下得同一 `ObjectId`。
+    #[serde(default)]
+    pub object_id: ObjectId,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -178,13 +182,8 @@ pub fn derived_id(
     ResourceRef::new(kind, id)
 }
 
-/// 跨 source 稳定的对象身份（spec §2.1）。
-///
-/// 同一正文 + 同一 locator + 同一 position 在不同 source 配置下得到相同
-/// `ObjectId`。文件内容变更后 `ObjectId` 会变（spec §3 第 5 段接受的代价）。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub struct ObjectId(Ulid);
-
 #[derive(Error, Debug, PartialEq, Eq)]
 pub enum ObjectIdError {
     #[error("invalid ObjectId format: expected 26-char Crockford ULID, got `{0}`")]

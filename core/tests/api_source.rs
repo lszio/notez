@@ -23,6 +23,7 @@ fn fake_resource(source_id: &str, locator: &str) -> Resource {
         source_id: source_id.into(),
         locator: locator.into(),
         properties: Default::default(),
+        object_id: notez_core::domain::ObjectId::default(),
     }
 }
 

@@ -30,6 +30,7 @@ fn upsert_then_read_round_trip_via_traits() {
         source_id: "native".to_string(),
         locator: "/x.org".to_string(),
         properties: Default::default(),
+        object_id: notez_core::domain::ObjectId::default(),
     };
     <ApplicationFacade<_> as ResourceUseCase>::upsert_resource(&mut facade, res).unwrap();
     let got = <ApplicationFacade<_> as ResourceUseCase>::read(&facade, &r_ref).unwrap();
@@ -48,6 +49,7 @@ fn resolve_and_resolve_address_share_lookup() {
         source_id: "native".to_string(),
         locator: "/x.org".to_string(),
         properties: Default::default(),
+        object_id: notez_core::domain::ObjectId::default(),
     };
     <ApplicationFacade<_> as ResourceUseCase>::upsert_resource(&mut facade, res).unwrap();
     let r = <ApplicationFacade<_> as ResourceUseCase>::resolve(&facade, "01J000000000000000000000C1").unwrap();
@@ -73,6 +75,7 @@ fn delete_via_trait_removes_resource() {
         source_id: "native".to_string(),
         locator: "/x.org".to_string(),
         properties: Default::default(),
+        object_id: notez_core::domain::ObjectId::default(),
     };
     <ApplicationFacade<_> as ResourceUseCase>::upsert_resource(&mut facade, res).unwrap();
     <ApplicationFacade<_> as ResourceUseCase>::delete_resource(&mut facade, &r_ref).unwrap();

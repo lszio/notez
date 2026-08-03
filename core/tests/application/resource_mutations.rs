@@ -12,6 +12,7 @@ fn fixture(kind: ResourceKind, ulid_str: &str, title: &str, source_id: &str) -> 
         source_id: source_id.to_string(),
         locator: format!("/loc/{title}"),
         properties: BTreeMap::new(),
+        object_id: notez_core::domain::ObjectId::default(),
     }
 }
 

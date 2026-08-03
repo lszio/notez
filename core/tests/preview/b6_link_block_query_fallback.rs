@@ -23,6 +23,7 @@ fn doc_with_body(body: &str) -> Resource {
         source_id: "src-1".into(),
         locator: "doc.org".into(),
         properties,
+        object_id: notez_core::domain::ObjectId::default(),
     }
 }
 
@@ -35,6 +36,7 @@ fn doc_with_props(props: BTreeMap<String, String>) -> Resource {
         source_id: "src-1".into(),
         locator: "doc.org".into(),
         properties: props,
+        object_id: notez_core::domain::ObjectId::default(),
     }
 }
 
@@ -86,6 +88,7 @@ fn link_embed_via_override_resolves_sibling() {
         source_id: "src-1".into(),
         locator: "linked.org".into(),
         properties: BTreeMap::new(),
+        object_id: notez_core::domain::ObjectId::default(),
     };
 
     // Source resource carries the link_target property.

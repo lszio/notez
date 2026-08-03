@@ -63,6 +63,7 @@ use notez_core::domain::{Resource, ResourceKind, ResourceRef, derived_id};
             source_id: source_id.to_string(),
             locator: entity.locator.clone(),
             properties: Default::default(),
+            object_id: notez_core::domain::ObjectId::default(),
         }];
         // We can't synthesise LinkOccurrence without going through the
         // link model; just emit empty occurrences.
@@ -77,6 +78,7 @@ use notez_core::domain::{Resource, ResourceKind, ResourceRef, derived_id};
             source_id: source_id.to_string(),
             locator: entity.locator.clone(),
             properties: Default::default(),
+            object_id: notez_core::domain::ObjectId::default(),
         });
         Ok(ParsedEntity {
             resources,
@@ -105,6 +107,7 @@ use notez_core::domain::{Resource, ResourceKind, ResourceRef, derived_id};
                 source_id: source_id.to_string(),
                 locator: entity.locator.clone(),
                 properties: Default::default(),
+                object_id: notez_core::domain::ObjectId::default(),
             }],
             relations: vec![],
             link_occurrences: vec![],

@@ -1,6 +1,6 @@
 use crate::domain::{
-    LinkOccurrence, LinkTarget, ProjectionStore, QueryPage, ResolvedRelation, ResolutionStatus,
-    Resource, ResourceRef, ResourceRelation, SegmentRecord, Selector, TextSpan,
+    LinkOccurrence, LinkTarget, ObjectId, ProjectionStore, QueryPage, ResolvedRelation,
+    ResolutionStatus, Resource, ResourceRef, ResourceRelation, SegmentRecord, Selector, TextSpan,
 };
 use rusqlite::{Connection, OptionalExtension, params};
 use std::collections::BTreeMap;
@@ -292,6 +292,7 @@ impl ProjectionStore for SqliteProjection {
                 source_id,
                 locator,
                 properties,
+                object_id: ObjectId::default(),
             }))
         } else {
             Ok(None)
@@ -370,6 +371,7 @@ impl ProjectionStore for SqliteProjection {
                 source_id,
                 locator,
                 properties,
+                object_id: ObjectId::default(),
             });
         }
 

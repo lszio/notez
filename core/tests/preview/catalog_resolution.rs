@@ -23,6 +23,7 @@ fn doc_with_body(body: &str) -> Resource {
         source_id: "src-1".into(),
         locator: "doc.org".into(),
         properties,
+        object_id: notez_core::domain::ObjectId::default(),
     }
 }
 
@@ -37,6 +38,7 @@ fn markdown_resource(body: &str) -> Resource {
         source_id: "src-1".into(),
         locator: "note.md".into(),
         properties,
+        object_id: notez_core::domain::ObjectId::default(),
     }
 }
 
@@ -53,6 +55,7 @@ fn attachment(locator: &str, mime: Option<&str>) -> Resource {
         source_id: "src-1".into(),
         locator: locator.to_string(),
         properties,
+        object_id: notez_core::domain::ObjectId::default(),
     }
 }
 

@@ -26,6 +26,7 @@ fn community_creation_and_member_filtering() {
         source_id: "native".to_string(),
         locator: "/path.org".to_string(),
         properties: BTreeMap::new(),
+        object_id: notez_core::domain::ObjectId::default(),
     };
 
     let res_excluded = Resource {
@@ -36,6 +37,7 @@ fn community_creation_and_member_filtering() {
         source_id: "native".to_string(),
         locator: "/path2.org".to_string(),
         properties: BTreeMap::new(),
+        object_id: notez_core::domain::ObjectId::default(),
     };
 
     let res_pinned = Resource {
@@ -46,6 +48,7 @@ fn community_creation_and_member_filtering() {
         source_id: "native".to_string(),
         locator: "/path3.org".to_string(),
         properties: BTreeMap::new(),
+        object_id: notez_core::domain::ObjectId::default(),
     };
 
     let resources = vec![res_matching.clone(), res_excluded, res_pinned.clone()];

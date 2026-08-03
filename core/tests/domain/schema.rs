@@ -56,6 +56,7 @@ fn schema_definition_and_validation() {
         source_id: "native".to_string(),
         locator: "/path/alpha.org".to_string(),
         properties: valid_props,
+        object_id: notez_core::domain::ObjectId::default(),
     };
 
     assert!(registry.validate(&valid_res).is_ok());
@@ -71,6 +72,7 @@ fn schema_definition_and_validation() {
         source_id: "native".to_string(),
         locator: "/path/invalid.org".to_string(),
         properties: invalid_props,
+        object_id: notez_core::domain::ObjectId::default(),
     };
 
     let err = registry.validate(&invalid_res).unwrap_err();

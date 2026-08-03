@@ -69,6 +69,7 @@ impl Previewer for LinkEmbedPreviewer {
                 source_id: ctx.resource.source_id.clone(),
                 locator: target_ref.to_string(),
                 properties: BTreeMap::new(),
+                object_id: crate::domain::derived_object_id("", "", ""),
             }
         };
 

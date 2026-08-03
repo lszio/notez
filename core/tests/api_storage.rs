@@ -23,6 +23,7 @@ fn resource(kind: ResourceKind, id: &str, title: &str, source: &str, revision: &
         source_id: source.into(),
         locator: format!("{source}/{title}"),
         properties: BTreeMap::from([(String::from("TYPE"), String::from("note"))]),
+        object_id: notez_core::domain::ObjectId::default(),
     }
 }
 

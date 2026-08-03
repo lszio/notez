@@ -1,12 +1,11 @@
 use crate::document::ScannedDocument;
 use crate::domain::{
     LinkOccurrence, LinkTarget, Resource, ResourceKind, ResourceRef, ResourceRelation, TextSpan,
-    derived_id,
+    derived_id, derived_object_id,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
-use std::fs;
 use std::path::Path;
 use std::sync::Arc;
 use thiserror::Error;
@@ -114,6 +113,7 @@ impl MarkdownScanner {
             source_id: source_id.to_string(),
             locator: path_str.clone(),
             properties: doc_properties,
+            object_id: derived_object_id("", &path_str, ""),
         };
 
         let mut resources = vec![doc_resource];
@@ -175,6 +175,7 @@ impl MarkdownScanner {
                         source_id: source_id.to_string(),
                         locator: path_str.clone(),
                         properties: props,
+                        object_id: derived_object_id("", &path_str, &heading_count.to_string()),
                     });
                 }
             }
@@ -201,6 +202,7 @@ impl MarkdownScanner {
                             source_id: source_id.to_string(),
                             locator: path_str.clone(),
                             properties: BTreeMap::new(),
+                            object_id: derived_object_id("", &path_str, &b_ref.to_string()),
                         });
                         current_source_ref = b_ref;
                     }

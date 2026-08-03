@@ -117,6 +117,7 @@ fn projection_store_does_not_provide_silent_upsert_noop() {
         source_id: "native".to_string(),
         locator: "/space/single.org".to_string(),
         properties: BTreeMap::new(),
+        object_id: notez_core::domain::ObjectId::default(),
     };
     ProjectionStore::upsert_resource(&mut store, &res).unwrap();
     let got = ProjectionStore::get(&store, &r_ref).unwrap();
@@ -139,6 +140,7 @@ fn upserting_one_resource_preserves_sibling_resources() {
         source_id: "native".to_string(),
         locator: format!("/space/{title}.org"),
         properties: BTreeMap::new(),
+        object_id: notez_core::domain::ObjectId::default(),
     };
 
     use notez_core::domain::ProjectionStore;

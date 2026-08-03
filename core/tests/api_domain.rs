@@ -41,6 +41,7 @@ fn resource(
         source_id: source_id.into(),
         locator: format!("{source_id}/{title}"),
         properties: BTreeMap::new(),
+        object_id: notez_core::domain::ObjectId::default(),
     }
 }
 

@@ -21,6 +21,7 @@ impl SourceAdapter for MockAdapter {
             source_id: self.config.id.clone(),
             locator: "/mock/doc.org".to_string(),
             properties: Default::default(),
+            object_id: notez_core::domain::ObjectId::default(),
         };
         Ok(ScannedSource {
             source_id: self.config.id.clone(),

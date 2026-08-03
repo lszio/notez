@@ -1,12 +1,11 @@
 use crate::document::ScannedDocument;
 use crate::domain::{
     LinkOccurrence, LinkTarget, Resource, ResourceKind, ResourceRef, ResourceRelation, TextSpan,
-    derived_id,
+    derived_id, derived_object_id,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
-use std::fs;
 use std::path::Path;
 use std::sync::Arc;
 use thiserror::Error;
@@ -209,6 +208,7 @@ impl OrgScanner {
             source_id: source_id.to_string(),
             locator: locator.clone(),
             properties: doc_properties,
+            object_id: derived_object_id("", &locator, ""),
         };
 
         let mut resources = vec![doc_resource];
@@ -252,6 +252,7 @@ impl OrgScanner {
                 source_id: source_id.to_string(),
                 locator: locator.clone(),
                 properties: props,
+                object_id: derived_object_id("", &locator, &h.index.to_string()),
             });
         }
 

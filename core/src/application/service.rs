@@ -1234,6 +1234,7 @@ impl<S: ProjectionStore> ApplicationFacade<S> {
             source_id: "native".to_string(),
             locator: file_path.to_string_lossy().to_string(),
             properties,
+            object_id: crate::domain::derived_object_id("", "", ""),
         };
 
         let page = self.query_impl(&Selector::new())?;
