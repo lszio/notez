@@ -177,3 +177,108 @@ pub fn derived_id(
     let id = Ulid::from_bytes(bytes);
     ResourceRef::new(kind, id)
 }
+
+/// 跨 source 稳定的对象身份（spec §2.1）。
+///
+/// 同一正文 + 同一 locator + 同一 position 在不同 source 配置下得到相同
+/// `ObjectId`。文件内容变更后 `ObjectId` 会变（spec §3 第 5 段接受的代价）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ObjectId(Ulid);
+
+#[derive(Error, Debug, PartialEq, Eq)]
+pub enum ObjectIdError {
+    #[error("invalid ObjectId format: expected 26-char Crockford ULID, got `{0}`")]
+    InvalidFormat(String),
+    #[error("invalid ULID: {0}")]
+    InvalidUlid(String),
+}
+
+impl ObjectId {
+    pub fn new(id: Ulid) -> Self { Self(id) }
+    pub fn as_ulid(&self) -> Ulid { self.0 }
+    pub fn parse(s: &str) -> Result<Self, ObjectIdError> {
+        let id = Ulid::from_str(s).map_err(|e| ObjectIdError::InvalidUlid(e.to_string()))?;
+        Ok(Self(id))
+    }
+}
+
+impl fmt::Display for ObjectId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+impl Serialize for ObjectId {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(&self.to_string())
+    }
+}
+
+impl<'de> Deserialize<'de> for ObjectId {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let s = String::deserialize(deserializer)?;
+        ObjectId::parse(&s).map_err(de::Error::custom)
+    }
+}
+
+/// v1 派生：SHA-256( "notez-derived-object-id-v1" || content_hash || locator || position )。
+///
+/// `source_id` 不参与 — 同一文件被多 Space 扫描时 `content_hash` 来自同一正文，
+/// 输出同一 `ObjectId`。
+pub fn derived_object_id(
+    content_hash: &str,
+    locator: &str,
+    position: &str,
+) -> ObjectId {
+    use sha2::{Digest, Sha256};
+
+    let mut hasher = Sha256::new();
+    hasher.update(b"notez-derived-object-id-v1\0");
+    hasher.update(content_hash.as_bytes());
+    hasher.update(b"\0");
+    hasher.update(locator.as_bytes());
+    hasher.update(b"\0");
+    hasher.update(position.as_bytes());
+    let hash = hasher.finalize();
+
+    let mut bytes = [0u8; 16];
+    bytes[6..16].copy_from_slice(&hash[0..10]);
+    let id = Ulid::from_bytes(bytes);
+    ObjectId::new(id)
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::domain::resource::ResourceKind;
+
+    #[test]
+    fn object_id_is_stable_for_same_inputs() {
+        let a = derived_object_id("hash-a", "notes/x.md", "h:0");
+        let b = derived_object_id("hash-a", "notes/x.md", "h:0");
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn object_id_changes_when_content_hash_changes() {
+        let a = derived_object_id("hash-a", "notes/x.md", "h:0");
+        let b = derived_object_id("hash-b", "notes/x.md", "h:0");
+        assert_ne!(a, b);
+    }
+
+    #[test]
+    fn object_id_changes_when_position_changes() {
+        let a = derived_object_id("hash-a", "notes/x.md", "h:0");
+        let b = derived_object_id("hash-a", "notes/x.md", "h:1");
+        assert_ne!(a, b);
+    }
+
+    #[test]
+    fn object_id_parse_and_display_roundtrip() {
+        let id = derived_object_id("hash", "loc", "pos");
+        let s = id.to_string();
+        let parsed = ObjectId::parse(&s).expect("parse");
+        assert_eq!(id, parsed);
+    }
+}

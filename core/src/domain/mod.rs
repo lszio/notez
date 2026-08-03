@@ -12,6 +12,6 @@ pub use rule::{InspectResult, Rule, RuleEngine, RuleKind, RuleTrace};
 
 pub use query::{LinkDiagnostic, Projection, ProjectionStore, QueryPage, Selector};
 pub use resource::{
-    Resource, ResourceKind, ResourceRef, ResourceRefError, ResourceRelation, SegmentRecord,
-    derived_id,
+    derived_id, derived_object_id, ObjectId, ObjectIdError, Resource, ResourceKind, ResourceRef,
+    ResourceRefError, ResourceRelation, SegmentRecord,
 };
