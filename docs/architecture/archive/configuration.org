@@ -1,3 +1,16 @@
+#+STATUS: superseded
+#+SUPERSEDED_BY: docs/superpowers/specs/2026-08-02-notez-federated-knowledge-platform-design.org
+#+SUPERSEDED_ON: 2026-08-03
+
+#+begin_quote
+Superseded by the federated knowledge platform spec dated 2026-08-02.
+Retained as an implementation reference; the technical content here
+remains accurate for its scope (XDG configuration layering and
+space-level notez.toml) but the project-wide positioning, core
+model, and roadmap now live in the spec and the rewritten
+[[file:../architecture.org][architecture]] / [[../roadmap.org][roadmap]] documents.
+#+end_quote
+
 #+title: Notez 配置设计
 #+STARTUP: showeverything
 
