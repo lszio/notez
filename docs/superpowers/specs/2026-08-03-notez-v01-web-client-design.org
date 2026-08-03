@@ -1,0 +1,247 @@
+#+title: Notez v0.1 Web 客户端与部署
+#+date: 2026-08-03
+#+STARTUP: showeverything
+
+本 spec 交付 [[file:2026-08-02-notez-federated-knowledge-platform-design.org][联邦平台设计规范]] §6 客户端 MVP-3 的最小切片 v0.1：阅读器-only（资源列表 + 详情），使用 Dioxus Fullstack 模式，部署到本地与 Docker 容器。
+
+* 1. 范围
+
+** 1.1 做
+
+- 启用 `app` crate 的 Dioxus Fullstack feature（`dioxus = "0.6" features = ["fullstack"]`），重写 `app/src/bin/web.rs` 为 `LaunchBuilder::new().launch(app)`。
+- 新增 `app/src/lib.rs` `pub fn app() -> Element`，Dioxus Router 两页：`/`（列表）+ `/resource/<encoded_ref>`（详情）。
+- 新增 `app/src/server.rs` 暴露两个 server functions：`list_resources()` + `get_resource(ref_str)`，底层调 `core::ApplicationFacade`（`SqliteProjection` + `RuntimeConfig`）。
+- 新增 `app/src/model.rs` DTO `ResourceRow`（`core::domain::Resource` 的视图形态）。
+- 通过环境变量 `NOTEZ_SPACE_ROOT` 与 `NOTEZ_BIND` 注入 Space 路径与绑定地址。
+- 本地运行：`cargo run -p app --bin notez-web`，访问 `http://127.0.0.1:3030`。
+- Docker 多阶段构建：`Dockerfile` builder + runtime，`EXPOSE 3030`，`ENTRYPOINT ["/usr/local/bin/notez-web"]`。
+- 移除 `cli/src/main.rs` 中 `Commands::Web` 分支调用 `web::state::WebState::from_space` / `web::server::serve` 的代码（这两个模块在 workspace 中本就不存在，CLI `web` feature 已实质坏）。保留 `cli/Cargo.toml` 的 `web = []` 空 feature 不动（避免更多 churn）。
+- 1 个集成测试 `app/tests/v0_1_list_and_detail.rs`：构造临时 Space，启 server function，HTTP GET 列表/详情。
+
+** 1.2 不做
+
+- 不做编辑 / mutate / task transition（v0.1 read-only）。
+- 不做反向链接、关系图、代码高亮、PARA、看板、全局命令栏。
+- 不做认证 / 授权（默认绑 127.0.0.1）。
+- 不做 CLI `notez web` 子命令（Dioxus fullstack 替代；`web` feature 文档化为"已停用，请用 `cargo run -p app --bin notez-web`"）。
+- 不做 Dioxus 0.6 → 0.7+ 升级。
+- 不做 WASM-only build（server-rendered + hydration）。
+- 不做 Notion / Anytype / 联邦节点的 web 路由。
+- 不做 docker-compose / cloud deploy / GitHub Actions。
+
+* 2. crate 边界与依赖
+
+
+** 2.1 `app/Cargo.toml` 修改
+
+保留原 3 个 target-* feature（web/desktop/mobile），新增 `dioxus = { version = "0.6", features = ["fullstack"] }` 作为新依赖（不带 optional）。fullstack 模式提供 server-side 运行时（axum + tower），与 target-web 的 WASM 客户端并存。
+
+#+begin_src toml
+[dependencies]
+core          = { path = "../core" }
+serde         = { workspace = true }
+serde_json    = { workspace = true }
+thiserror     = { workspace = true }
+dioxus        = { version = "0.6", features = ["fullstack"] }
+dioxus-web    = { version = "0.6", optional = true, default-features = false }
+dioxus-desktop = { version = "0.6", optional = true, default-features = false }
+dioxus-mobile  = { version = "0.6", optional = true, default-features = false }
+
+[features]
+default        = ["target-web"]
+target-web     = ["dep:dioxus-web"]
+target-desktop = ["dep:dioxus-desktop"]
+target-mobile  = ["dep:dioxus-mobile"]
+#+end_src
+
+
+
+** 2.2 文件结构
+
+- `app/src/lib.rs` — Dioxus fullstack root + `pub fn app()` 组件。
+- `app/src/model.rs` — `ResourceRow` DTO。
+- `app/src/server.rs` — `#[server] async fn list_resources()` + `get_resource(ref_str)`。
+- `app/src/router.rs` — `pub fn router() -> Element` 含两页路由。
+- `app/src/pages/list.rs` — `fn ListPage() -> Element`。
+- `app/src/pages/detail.rs` — `fn DetailPage(cx: Scope, encoded_ref: String) -> Element`。
+- `app/src/bin/web.rs` — 改写为 fullstack 启动入口。
+- `app/src/bin/server.rs` — 改写为 fullstack 启动入口（与 web 同源；保留 desktop 路径的 stub 注释）。
+- `app/tests/v0_1_list_and_detail.rs` — 集成测试。
+- `Dockerfile` — 多阶段构建。
+- `app/Cargo.toml` — features + deps。
+** 3.1 `list_resources()`
+
+server function 走 `core::application::ResourceUseCase::query(Selector::new())`（不是直接调 `SqliteProjection`），与 spec §4「Core 提供唯一领域 Use Case 层」一致。
+
+#+begin_src rust
+#[server]
+pub async fn list_resources() -> Result<Vec<ResourceRow>, ServerFnError> {
+    let space_root = std::env::var("NOTEZ_SPACE_ROOT")
+        .map_err(|_| ServerFnError::ServerError("NOTEZ_SPACE_ROOT not set".into()))?;
+    let db_path = std::path::Path::new(&space_root).join(".notez/index.sqlite");
+    let store = SqliteProjection::open(&db_path)
+        .map_err(|e| ServerFnError::ServerError(e.to_string()))?;
+    let mut facade = core::application::ApplicationFacade::new(store);
+    let page = facade.query(&Selector::new())
+        .map_err(|e| ServerFnError::ServerError(e.to_string()))?;
+}
+#+end_src
+
+** 3.2 `get_resource(ref_str: String)`
+
+走 `core::application::ResourceUseCase::read(&r_ref)`。
+
+#+begin_src rust
+#[server]
+pub async fn get_resource(ref_str: String) -> Result<Option<ResourceRow>, ServerFnError> {
+    let space_root = std::env::var("NOTEZ_SPACE_ROOT")
+        .map_err(|_| ServerFnError::ServerError("NOTEZ_SPACE_ROOT not set".into()))?;
+    let r_ref = ResourceRef::parse(&ref_str)
+        .map_err(|e| ServerFnError::ServerError(format!("invalid ref: {e}")))?;
+    let db_path = std::path::Path::new(&space_root).join(".notez/index.sqlite");
+    let store = SqliteProjection::open(&db_path)
+        .map_err(|e| ServerFnError::ServerError(e.to_string()))?;
+    let facade = core::application::ApplicationFacade::new(store);
+    let res = facade.read(&r_ref)
+        .map_err(|e| ServerFnError::ServerError(e.to_string()))?;
+    Ok(res.map(ResourceRow::from))
+}
+#+end_src
+
+** 3.3 错误传递
+
+server function 返回 `Result<T, ServerFnError>`；`core::application::ApplicationError` 在 server function 边界统一映射为 `ServerFnError::ServerError(format!("{e}"))`，不引入新的错误枚举。客户端 UI 对 `ServerFnError` 显示"加载失败" + 错误文本。
+
+* 4. UI 表面
+
+** 4.1 列表页 `/`
+
+- 标题：`Notez — <space_name>`。
+- 副标题：`<n> resources`。
+- 资源表：
+  - 列：`ref`、`title`、`source_id`、`locator`。
+  - 行可点击跳 `/resource/<encoded_ref>`（`encoded_ref = urlencoding::encode(ref_str).into_owned()`，避免自写 base64）。
+- 空状态：当 `list_resources()` 返回 `Ok(vec![])`，显示"该 Space 还没有被扫描过。运行 `notez scan`"。
+- 加载状态：首次 SSR 时 server function 已渲染好；hydration 后不重渲染（首屏直出）。
+
+** 4.2 详情页 `/resource/<encoded_ref>`
+
+- 标题：`[ref] title`。
+- 属性表：kind / source_id / locator / revision / object_id。
+- properties 表：`BTreeMap<String, String>` 键值对。
+- 404：当 `get_resource()` 返回 `Ok(None)`，显示"资源不存在" + 返回链接。
+- 错误状态：server function 错误时显示"加载失败：<msg>" + 返回链接。
+- 返回链接：`<a href="/">← 返回列表</a>`。
+
+** 4.3 路由实现
+
+#+begin_src rust
+#[derive(Routable, Clone)]
+pub enum Route {
+    #[route("/")]
+    List {},
+    #[route("/resource/:encoded_ref")]
+    Detail { encoded_ref: String },
+}
+#+end_src
+
+* 5. 启动与生命周期
+
+** 5.1 `app/src/bin/web.rs`
+
+#+begin_src rust
+fn main() {
+    // NOTEZ_BIND is read by Dioxus fullstack internally; we only set the
+    // default if missing. NOTEZ_SPACE_ROOT is consumed by the server
+    // functions (see app/src/server.rs).
+    if std::env::var("NOTEZ_BIND").is_err() {
+        std::env::set_var("NOTEZ_BIND", "127.0.0.1:3030");
+    }
+    LaunchBuilder::new()
+        .launch(app);
+}
+#+end_src
+
+** 5.2 启动校验
+
+`app` 函数首次调用时（首个 server function 触发）读取 `NOTEZ_SPACE_ROOT`，若未设置 → `ServerFnError::ServerError("NOTEZ_SPACE_ROOT not set")`，HTTP 500 + 错误信息。
+
+** 5.3 重启
+
+崩溃即退出，退出码 5（与 CLI 错误码 5 一致）。无 daemon / supervisor。
+
+* 6. Docker 部署
+
+** 6.1 `Dockerfile`
+
+#+begin_src dockerfile
+# --- builder ---
+FROM rust:1-bookworm AS builder
+WORKDIR /build
+COPY . .
+RUN cargo build --release -p app --bin notez-web --features app/target-web
+
+# --- runtime ---
+FROM debian:bookworm-slim
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates && rm -rf /var/lib/apt/lists/*
+COPY --from=builder /build/target/release/notez-web /usr/local/bin/notez-web
+ENV NOTEZ_BIND=0.0.0.0:3030
+EXPOSE 3030
+ENTRYPOINT ["/usr/local/bin/notez-web"]
+#+end_src
+
+** 6.2 使用
+
+- 本地：`NOTEZ_SPACE_ROOT=/path/to/space cargo run -p app --bin notez-web`，访问 `http://127.0.0.1:3030`。
+- Docker build：`docker build -t notez-web:v0.1 .`
+- Docker run：`docker run --rm -p 3030:3030 -v /path/to/space:/space -e NOTEZ_SPACE_ROOT=/space notez-web:v0.1`。
+
+* 7. CLI 清理
+
+`cli/src/main.rs` 的 `Commands::Web(args)` 分支（line 1370-1393）调 `web::state::WebState::from_space` / `web::server::serve` —— 这两个模块在 workspace 中不存在（`grep -r "pub mod web" cli/ core/ app/ adapters/` 0 命中）。保留 `#[cfg(feature = "web")]` 守卫，删 `match` 块体替换为 `unimplemented!("CLI web command is replaced by `cargo run -p app --bin notez-web`; see docs/.../v0-1-web-client-spec.org")`。
+
+`cli/Cargo.toml` 的 `web = []` 保留（不增加更多 churn）。
+
+* 8. 测试
+
+** 8.1 单元
+
+`app/src/server.rs` 中 server function 是 `#[server]` 宏生成的、不能直接单测。改成：抽出一个 `pub(crate) async fn list_resources_impl(space_root: &Path) -> Result<Vec<ResourceRow>, ...>`，server function 仅做环境变量读取 + 调 impl。impl 用 in-memory `SqliteProjection` 在 `#[cfg(test)]` 单测：
+
+- `list_resources_impl_returns_upserted_resources` —— 建 in-memory db，upsert 1 resource，调 impl，断言返回 1 行。
+- `get_resource_impl_returns_upserted_resource` —— 同上，upsert + get，断言 `Some`。
+- `get_resource_impl_returns_none_for_missing` —— upsert 一个，get 另一个不存在的 ref，断言 `None`。
+
+** 8.2 集成
+
+`app/tests/v0_1_list_and_detail.rs`：
+
+- 构造 temp Space：写 `notez.toml` + 一个 `.md` 文件 + 跑 `notez_core::ApplicationFacade` 的 scan（直接调 `ApplicationFacade::with_space`）。
+- 启 `app::server::list_resources()` 与 `get_resource()`（直接调 impl，不走 HTTP，因为 `#[server]` 宏要 launch runtime；本测试只测 impl）。
+- 断言：列表含 1 资源；详情返回 `Some(row)` 且 `row.title == "..."`。
+- 完整 HTTP 端到端（启 server、curl）**不在本 spec 范围**（Dioxus 0.6 fullstack runtime 启动测试较重，留给后续 v0.2）。
+
+** 8.3 端到端（手测）
+
+本 spec 不要求 CI 自动化端到端测试。开发者在本地用 `cargo run -p app --bin notez-web` 启服务，浏览器访问 `http://127.0.0.1:3030` 验证。
+
+* 9. 验收
+
+- `cargo test -p app` 通过，impl 单测 3 个全过。
+- `cargo check --workspace --all-targets` 通过。
+- 本地：开发者用 `NOTEZ_SPACE_ROOT=$(pwd)/tmp/space cargo run -p app --bin notez-web` 启服务，浏览器访问列表/详情，看到至少 1 个资源。
+- Docker：`docker build -t notez-web:v0.1 .` 成功；`docker run` 启动后 `curl http://127.0.0.1:3030/` 返回 HTML 含资源列表。
+- CLI `cargo run -p cli --features web -- web` 行为替换为"未实现，请用 `cargo run -p app --bin notez-web`"错误信息（与 spec §7 一致）。
+
+* 10. 风险与缓解
+
+- *Dioxus 0.6 fullstack feature 可能拉入大依赖树*：构建时间变长。缓解：接受；后续升级到 0.7+ 时一次性处理。
+- *Dioxus 0.6 已 EOL*：本 spec 不升级；roadmap 已记录为后续工作。
+- *每个 server function 重新打开 SqliteProjection*：高 QPS 下有性能损耗。v0.1 阅读器本地优先，QPS 极低；接受。后续 v0.2+ 改 `Arc<Mutex<SqliteProjection>>` 或 `r2d2` pool。
+- *`NOTEZ_SPACE_ROOT` 未设置时 server function 报 500*：本 spec 接受。CLI 启动时显式 set 或文档化即可。
+- *CLI `web` 子命令改"未实现"*：与 spec §1.2 "不做"对齐；用户从 README 跳到 `cargo run -p app --bin notez-web` 路径。
+- *App crate `notez-web` binary 名与 future 命名*：本 spec 锁定 `notez-web`；Dioxus 0.7+ 的 `dx` CLI 改名不在范围。
+
+* 11. 不做（再确认）
+
+不做：编辑、关系图、代码高亮、PARA、看板、命令栏、认证、CLI web 子命令、Dioxus 升级、WASM-only、Notion/Anytype web 路由、docker-compose、cloud deploy、CI、HTTP 端到端测试。这些属于 v0.2 / MVP-3 / 后续扩展。
