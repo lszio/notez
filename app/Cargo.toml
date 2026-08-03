@@ -12,7 +12,7 @@ path = "src/lib.rs"
 core = { path = "../core" }
 serde = { workspace = true }
 serde_json = { workspace = true }
-dioxus = { version = "0.6", features = ["fullstack"] }
+dioxus = { version = "0.6", features = ["fullstack", "router"] }
 dioxus-web = { version = "0.6", optional = true, default-features = false }
 dioxus-desktop = { version = "0.6", optional = true, default-features = false }
 dioxus-mobile = { version = "0.6", optional = true, default-features = false }
