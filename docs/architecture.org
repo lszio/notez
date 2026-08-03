@@ -1,30 +1,68 @@
 #+title: Notez 架构
+#+date: 2026-08-03
 #+STARTUP: showeverything
 
-* 1. 系统定位
+本页是 [[file:superpowers/specs/2026-08-02-notez-federated-knowledge-platform-design.org][联邦知识平台设计规范]] 的架构导读，描述当前实现如何落在该规范的语义之下。关于路线与里程碑，见 [[file:roadmap.org][Notez Roadmap]]。规范中尚未实现的语义会显式标注「未实现」并指向 roadmap 中的对应任务。
 
-Notez 将多个本地或外部知识来源投影为统一、可查询、可组合的资源网络，同时保留原始格式的行为语义。系统优化目标依次是：内容安全、保真、稳定寻址、离线可用、接口一致和可重建性。
+* 1. 系统定位与产品优先级
 
-关于系统演进方向，请参考 [[file:roadmap.org][Notez Roadmap]]。
+Notez 是本地优先、可联邦的全功能知识管理平台。它把本地 Markdown/Org 文件、远程服务、桌面 / 浏览器客户端与 AI Agent 用同一套领域协议接起来；不做新文件格式，不绑定特定云服务。
 
-* 2. 核心不变量
+产品优先级（与规范 §1 一致）：
 
-1. 原生 Org/Markdown 文件是事实来源；索引可以删除并重建。
-2. =ResourceRef= 只表示稳定身份，不表示标题、文件路径或其他待解析地址。详情请见 [[file:link-protocol.org][Notez 链接协议]]。
-3. 所有文本链接都应被保留；只有唯一解析成功的链接才能成为 =ResolvedRelation=。
-4. 写操作必须面向唯一资源，并携带冲突保护；歧义地址不能静默修改。
-5. CLI 与 MCP 不实现业务规则，只适配统一应用协议。
-6. 外部 source 必须显式声明能力；默认只读，不以空实现伪装写入能力。
-7. 全局配置负责发现空间，空间配置负责空间行为，=.notez/= 只存运行状态和投影。详细配置架构见 [[file:configuration.org][Notez 配置设计]]。
+1. 个人知识管理体验；
+2. MCP / AI 与代码文档能力；
+3. Notion、Anytype 等远程来源的双向同步；
+4. 跨服务端、跨设备的联邦聚合。
 
-* 3. 组件边界
+本地 Markdown 与 OrgMode 是默认主存储：离线可用、内容可见、无需 Notez 即可访问；外部服务是来源适配器，不是系统的唯一真相来源。
+
+* 2. 本质问题与架构决策
+
+** 2.1 本质问题
+
+需要同时保留文件主权、接入异构远程服务、让同一知识跨空间组合，并让人类客户端和 Agent 以相同规则读写。把任一笔记格式、某个服务商或某个客户端当成中心都会破坏其中至少一项。
+
+** 2.2 决策：虚拟联邦知识图谱
+
+规范 §2.2 的决策，本项目采纳：
+
+- =Knowledge Object= 具有稳定全局 ID；同一对象可被多个空间引用。
+- 文件、远程页面、卡片、Agent 上下文包都是该对象在不同来源或界面中的投影。
+- 领域协议稳定，来源适配器与客户端实现可替换。
+
+不采用：
+
+- 单一中心数据库（会破坏文件可移植性、加重服务锁定）；
+- 纯文件 + Git（不支持远程双写、结构化项目管理与丰富客户端）。
+
+* 3. 核心信息模型
+
+规范 §3 的核心模型在本项目中的当前映射：
+
+| 规范概念         | 本项目实现                                                                    | 状态 |
+|------------------+-------------------------------------------------------------------------------+------|
+| =Knowledge Object= | =Resource=（=ResourceRef= 携带稳定全局 ID）                                   | 已实现 |
+| =Space=          | =Space=（多源聚合 + 投影 + 授权边界）                                         | 已实现 |
+| =Source=         | =Source= + =SourceAdapter=，声明 capability（read / write / attachments / incremental_sync / conflict_details 等） | capability 机制已实现；MVP-1 需把跨空间引用同一对象与 capability 报告收口 |
+| =Projection=     | =Projection= + =Previewer=；Org / Markdown / 远程页面 / 列表 / 看板都是其形态 | 已实现 Org / Markdown / SSR 投影；远程投影随 Adapter 演进 |
+| =Change=         | 本地变更日志 + 同步引擎；尚未稳定的 Change 投递模型                          | 已实现本地日志；规范要求的「失败、冲突、授权结果可检查与重试」在 0.6 强化 |
+| =Relation=       | =ResolvedRelation=；规范要求的关系类型、方向、证据、创建者与版本在 0.6 扩展    | 已实现基础；MVP-2 补齐证据与版本 |
+
+Space 对对象只保存空间语义（分类、排序、标签、视图、访问授权），不复制正文。规范 §3 第 5 段「同一对象在多个 Space 被引用而不复制正文」是 MVP-1 的验收场景 1。
+
+* 4. 边界与统一协议
+
+规范 §4 要求 Core 提供唯一的领域 Use Case 层；Web、桌面、移动端、CLI、HTTP API、MCP 都经由该层执行；来源 Adapter 只负责读取、转换与回写；客户端或 MCP 不得直接依赖 Org/Markdown/Notion/Anytype 的内部格式。
+
+当前架构边界（实现细节）：
 
 #+begin_src text
 Org / Markdown / External Sources
               │
               ▼
       document + source adapters
-       保真扫描、来源能力声明
+       保真扫描、来源 capability 声明
               │ Resource + LinkOccurrence
               ▼
              domain
@@ -45,45 +83,118 @@ Org / Markdown / External Sources
 
 Cargo crate 职责：
 
-| crate | 职责 | 禁止承担 |
-|---|---|---|
-| =domain= | 稳定领域类型、协议 DTO、选择器和关系 | 文件 I/O、CLI/MCP 呈现 |
-| =document= | Org/Markdown 保真扫描、link occurrence 提取 | 数据库查询、跨文档决议 |
-| =source= | 来源枚举、读取、能力和 locator 上下文 | 全局业务编排 |
-| =application= | 用例、地址解析、权限、事务和诊断 | 复制 CLI/MCP 参数模型 |
-| =storage= | 可重建投影及 schema migration | 成为原生内容事实来源 |
-| =sync= | manifest/object/transport/merge | 依赖 SQLite 投影同步 |
-| =artifact= | extraction、recipe 和 Agent 产物 | 修改原始笔记 |
-| =cli= | 参数解析、输出和退出码 | 直接访问文件或数据库 |
-| =mcp= | MCP schema、协议和结果编码 | 独立实现业务能力 |
+| crate             | 职责                                  | 禁止承担                                 |
+|-------------------+---------------------------------------+------------------------------------------|
+| =core::domain=      | 稳定领域类型、协议 DTO、选择器、关系 | 文件 I/O、CLI/MCP 呈现                  |
+| =core::document=    | Org/Markdown 保真扫描、链接抽取       | 数据库查询、跨文档决议                  |
+| =core::source=      | 来源枚举、读取、capability、locator   | 全局业务编排                            |
+| =core::application= | 用例、地址解析、权限、事务、诊断      | 复制 CLI/MCP 参数模型                   |
+| =core::storage=     | 可重建投影与 schema migration         | 成为原生内容事实来源                    |
+| =core::sync=        | manifest / object / transport / merge | 依赖 SQLite 投影同步                    |
+| =core::artifact=    | 提取、recipe、Agent 派生产物          | 修改原始笔记                            |
+| =cli=               | 参数解析、输出与退出码                | 直接访问文件或数据库                    |
+| =mcp=               | MCP schema、协议、结果编码            | 独立实现业务能力                        |
 
-* 4. 稳定信息模型
+公开接口统一暴露对象、空间、关系、查询、变更、同步任务与授权结果，不泄漏具体 Adapter DTO。规范 §4 第 3 段要求的 Source Adapter 能力声明（read / write / attachments / incremental_sync / conflict_details 等）已在 =core::capability= 实现并由 =SourceRegistry= 暴露。
 
-#+begin_src text
-Space
- ├─ Source
- │   └─ Resource ── stable ResourceRef
- │       └─ LinkOccurrence ── raw LinkTarget
- │              └─ resolution ── ResolvedRelation ── ResourceRef
- ├─ Community
- └─ Artifact
-#+end_src
+* 5. MCP、HTTP API、CLI 与 Agent
 
-=ResourceAddress= 是接口输入的联合值：稳定 =Ref(ResourceRef)= 或待解析 =Locator(LinkTarget)=。读取可以返回候选；写入只有唯一命中时才能继续。
+** 5.1 能力（规范 §5.1）
 
-没有显式 ID 的资源使用带版本的确定性派生身份算法。输入至少包含 source identity、规范化的 source-relative locator 和结构位置。文件 rename 不保证自动保持身份；需要 move detection 或显式写入稳定 ID。详情请参考 [[file:link-protocol.org][Notez 链接协议]]。
+MCP、HTTP API、CLI 共用领域协议，提供：
 
-* 5. 关键数据流
+- 发现与查询：列出可访问的空间、来源与类型；全文、标签、关系、时间、代码符号、项目上下文检索。
+- 理解与索引：扫描 Git 工作区与代码注释，建立「符号—文件—实现—设计—决策—任务」关系；按变更范围生成上下文包。
+- 摘要：创建与更新可追溯的 summary，保留来源对象、生成者、输入 revision 与过期状态。
+- 受控写入：创建、编辑、关联对象，更新任务与摘要，并交由来源 Adapter 回写。
+- 审计：记录调用方、授权来源、影响对象、变更集、同步状态与修订入口。
 
-- *扫描流程*：读取原始文件 → 保真解析 → 生成资源与所有链接出现 → 原子替换 source 投影 → 基于 source/profile/context 解析候选 → 写入已解析关系与诊断统计。
-- *读取流程*：传入 =ResourceAddress= → resolve → 返回唯一资源或候选/诊断 → 按 projection 输出。
-- *写入流程*：地址唯一解析 → 检查 source capability 与 expected revision → 生成最小文本补丁 → 预览或原子提交 → 重扫受影响文件 → 写审计记录。
-- *配置流程*：加载内置默认值 → 读取 XDG 全局配置 → 选择空间 → 读取空间配置 → 应用环境变量和 CLI 临时覆盖 → 校验 → 构造应用服务。任何配置错误都在打开数据库或执行命令前失败。（见 [[file:configuration.org][Notez 配置设计]]）
+当前已实现的是第一与第四类的子集；其余能力按 roadmap 推进。
 
-* 6. 一致性与可观察性
+** 5.2 授权（规范 §5.2）
 
-解析、扫描、写回、同步和派生任务携带 trace ID。=inspect= 与 =link diagnose= 应显示采用的 profile、候选、证据和未选择原因。source 暂时不可用时保留最后有效投影并标记 stale；配置无效时不启动服务。日志默认不记录笔记正文或敏感配置值。
+写入不是全局开关。策略判断维度：
 
-* 7. 演化约束
+=Principal × Space × Source × Action × Scope=
 
-新增文本格式时扩展 link profile 或 =LinkTarget::Custom=，不能放宽 =ResourceRef=。新增公共能力时先登记能力目录和共享 DTO，再暴露 CLI/MCP。新增配置必须明确归属全局、空间或运行状态，禁止再创建无版本且静默回退的旁路 JSON 配置。
+令牌或 API Key 只标识调用方；服务端策略决定权限。例：某 Agent 可在个人空间更新项目摘要和任务、只能读取 Notion、不能写入生产空间的文件。拒绝应稳定返回机器可读原因，并写入审计记录。
+
+当前实现：CLI 与 MCP 已通过 =ApplicationError= 结构化错误码与稳定退出码承载拒绝语义；完整的策略维度在 MVP-2 落地。
+
+** 5.3 代码引用协议（规范 §5.3）
+
+使用稳定 URI，供代码注释、文档、CLI、MCP 共用：
+
+#+begin_example
+notez://object/<global-id>
+notez://query/<saved-query-id>
+notez://code/<repo>/<symbol-id>
+#+end_example
+
+=object= 直接定位知识对象；=query= 定位动态上下文；=code= 定位代码符号。索引器从注释和代码解析结果建立证据化 Relation；Agent 可从一个符号检索设计、实现、相关任务与当前 summary，并把实现记录回写至已授权空间。
+
+当前已实现的协议层是 =ResourceAddress=（=ResourceRef= + =LinkTarget=）；notez:// scheme 在 MVP-2 引入。
+
+* 6. 客户端、PARA 与看板（规范 §6）
+
+客户端以 Dioxus 实现共享体验；本项目当前不交付客户端 UI，本节作为面向 MVP-3 的目标态记录。
+
+- 左侧：Space 切换、来源状态、收藏、收件箱、PARA 入口。
+- 主区：块编辑/阅读，可在大纲、关系、文件原文、属性之间切换。
+- 右侧：反向链接、关联代码、活动、同步状态、Agent 审计。
+- 全局命令栏：查询、创建、引用、移动、调用已授权工作流。
+
+PARA 是 Space 内的分类关系与保存查询，不是四个互斥文件夹；看板是保存查询的投影；拖动卡片改变统一任务对象状态，而非创建副本。
+
+当前已实现：=Task= + PARA 模型的 CLI 终端嵌套渲染（见 [[file:roadmap.org][Roadmap]] 0.3 已交付条目）。
+
+* 7. 本地优先同步与冲突（规范 §7）
+
+规范要求：
+
+1. 所有操作先写本地变更日志，离线可用。
+2. 同步引擎按 Source capability 将变更转成文件修改、远程 API 调用或联邦节点消息。
+3. 能安全合并时保留来源 revision 与合并证据；不能合并时生成冲突对象，保留双方版本，供用户或已授权 Agent 决定。
+4. 状态必须可见：已同步、等待远程、冲突、无权限、来源不支持。
+
+系统绝不静默覆盖远程或本地版本；联邦节点即使离线或时钟不可靠，也通过可重放 Change 与显式冲突而非隐含「最后写入获胜」演进。
+
+当前实现：
+
+- 本地变更日志与三路合并已就位（=core::sync=）。
+- 0.6 任务「保真写回与可观察性强化」承担：journal + expected revision、conflict 审计、source stale 标记、链接解析指标。
+
+* 8. MVP 路线（规范 §8）
+
+与规范 §8 的 MVP-1 / MVP-2 / MVP-3 对齐的里程碑见 [[file:roadmap.org][Roadmap]]。本节不复述里程碑，只把架构层面的关键判断列出：
+
+- *MVP-1（本地知识底座）*：多 Space 聚合、Markdown/OrgMode 双向编辑、统一对象 ID、关系与附件、离线变更日志。验收为同一对象能在两个本地 Space 被引用，修改可追踪并可同步，原始文件脱离 Notez 仍可用。
+- *MVP-2（Agent 与代码知识）*：统一 MCP/HTTP/CLI、授权策略、代码注释与符号索引、上下文查询、summary、受控写回。验收为 Agent 可由符号获得设计、任务、实现与摘要，并在授权范围内写回决策、任务与实现记录；未授权操作被拒绝且可审计。
+- *MVP-3（个人客户端）*：Space、编辑器、搜索、反向链接、PARA、查询驱动看板、同步/审计面板。
+- *后续扩展*：Notion / Anytype 双向 Adapter、网页摘录、跨服务端发现与授权。新增来源必须只增加 Adapter 与 capability 声明，不改变 Core、MCP/API/CLI 或客户端的领域语义。
+
+* 9. 非目标与风险控制（规范 §9）
+
+本轮不承诺任意格式的完美无损双向转换、自动解决所有远程冲突、多人实时协作编辑、映射 Notion/Anytype 的全部专有功能。适配器必须显式报告其支持范围与有损行为。
+
+主要风险是把「统一模型」误做成「最低共同能力模型」。缓解原则：Core 只稳定表达对象、关系、变更与授权；来源专有能力留在 capability 声明与扩展字段中，不能倒灌为全系统必选字段。
+
+* 10. 架构验收场景（规范 §10）
+
+1. 一个对象在多个 Space 被引用而不复制正文。
+2. 本地离线变更可被观察、重试与同步，不静默丢失。
+3. 同一 Use Case 在 MCP、API、CLI、客户端中产生一致授权与结果。
+4. 从一个代码符号可解析到设计、任务、实现、关系证据与当前 summary。
+5. Agent 只能在授权 Scope 内改写知识库，所有写入带审计与 revision。
+6. 新增 Notion/Anytype Adapter 不要求修改统一领域语义。
+7. PARA 与看板均为对象的投影，改变分类/状态而非创建内容副本。
+
+每个场景对应的实现状态见 [[file:roadmap.org][Roadmap]] 末尾的「验收场景映射」表。
+
+* 附录 A：归档文档
+
+下列 ADR 已被本架构文档与联邦平台 spec 取代，仅作为实现参考保留：
+
+- [[file:architecture/archive/2026-07-26-unified-data-layer.org][Transport / Parser 解耦 ADR]]（2026-07-26）— Source Adapter 拆解为 Transport + Parser 的工程化方案，仍是 Source 模块的内部参考。
+- [[file:architecture/archive/configuration.org][Notez 配置设计]] — XDG 全局配置与空间配置的分层，仍是 =core::config= 的设计参考。
+- [[file:architecture/archive/link-protocol.org][Notez 链接协议]] — =ResourceAddress= / =LinkTarget= / =ResolvedRelation= / 派生身份算法，仍是 =core::domain::link= 与 =core::document= 的协议参考。
