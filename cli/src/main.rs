@@ -1368,28 +1368,18 @@ fn main() {
             }
         },
         #[cfg(feature = "web")]
-        Commands::Web(args) => {
-            let state = match web::state::WebState::from_space(&r_config.space_root) {
-                Ok(s) => s,
-                Err(e) => {
-                    eprintln!("WebState error: {e}");
-                    exit(5);
-                }
-            };
-            let runtime = match tokio::runtime::Builder::new_multi_thread()
-                .enable_all()
-                .build()
-            {
-                Ok(rt) => rt,
-                Err(e) => {
-                    eprintln!("Tokio runtime error: {e}");
-                    exit(5);
-                }
-            };
-            if let Err(e) = runtime.block_on(web::server::serve(state, &args.bind, args.open)) {
-                eprintln!("Web server error: {e}");
-                exit(5);
-            }
+        Commands::Web(_args) => {
+            eprintln!(
+                "the `notez web` subcommand is no longer implemented.\n\
+                 use the v0.1 Dioxus fullstack client instead:\n\
+                 \n  \
+                 NOTEZ_SPACE_ROOT={} cargo run -p app --bin notez-web\n\
+                 \n\
+                 see docs/superpowers/specs/2026-08-03-notez-v01-web-client-design.org \
+                 for the design and deployment notes.",
+                r_config.space_root.display()
+            );
+            exit(5);
         }
         Commands::ListCapabilities => {
             // Handled by the early-return block above; reaching here is
