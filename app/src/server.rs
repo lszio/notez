@@ -38,7 +38,7 @@ pub async fn get_resource(ref_str: String) -> Result<Option<ResourceRow>, Server
 /// file-backed SqliteProjection without going through the Dioxus
 /// fullstack runtime. The async signature matches the server
 /// functions so the wrapper is a one-liner.
-pub(crate) async fn list_resources_impl(
+pub async fn list_resources_impl(
     space_root: &Path,
 ) -> Result<Vec<ResourceRow>, String> {
     let db_path = space_root.join(".notez/index.sqlite");
@@ -48,7 +48,7 @@ pub(crate) async fn list_resources_impl(
     Ok(page.items.into_iter().map(ResourceRow::from).collect())
 }
 
-pub(crate) async fn get_resource_impl(
+pub async fn get_resource_impl(
     space_root: &Path,
     ref_str: &str,
 ) -> Result<Option<ResourceRow>, String> {

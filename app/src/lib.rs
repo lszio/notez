@@ -10,10 +10,10 @@
 
 use dioxus::prelude::*;
 
-mod model;
+pub mod model;
 mod pages;
 mod router;
-mod server;
+pub mod server;
 
 pub use router::Route;
 
