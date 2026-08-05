@@ -3,11 +3,11 @@ FROM rust:1-bookworm AS builder
 WORKDIR /build
 # Pre-copy manifests to cache deps before the source layer.
 COPY Cargo.toml Cargo.lock ./
-COPY app app
-COPY core core
-COPY cli cli
-COPY adapters adapters
-RUN cargo build --release -p app --bin notez-web --features app/target-web
+COPY crates/core crates/core
+COPY crates/cli crates/cli
+COPY crates/adapters crates/adapters
+COPY packages/web packages/web
+RUN cargo build --release -p web --bin notez-web
 
 # --- runtime ---
 FROM debian:bookworm-slim

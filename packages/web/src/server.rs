@@ -4,14 +4,14 @@
 //! entry points. They read `NOTEZ_SPACE_ROOT`, open the SQLite projection,
 //! construct an `ApplicationFacade`, and delegate to the `_impl` helpers
 //! below. The `_impl` helpers take an explicit `&Path` so they can be
-//! unit-tested directly with an in-memory-or-file `SqliteProjection`
-//! without going through the Dioxus fullstack runtime.
+//! unit-tested directly with a file-backed `SqliteProjection` without
+//! going through the Dioxus fullstack runtime.
 
 use std::path::Path;
 
 use dioxus::prelude::*;
 use notez_core::application::ApplicationFacade;
-use notez_core::domain::{ProjectionStore, Resource, ResourceRef, Selector};
+use notez_core::domain::{Resource, ResourceRef, Selector};
 use notez_core::storage::SqliteProjection;
 
 use crate::model::ResourceRow;
@@ -19,28 +19,25 @@ use crate::model::ResourceRow;
 #[server]
 pub async fn list_resources() -> Result<Vec<ResourceRow>, ServerFnError> {
     let space_root = std::env::var("NOTEZ_SPACE_ROOT")
-        .map_err(|_| ServerFnError::ServerError("NOTEZ_SPACE_ROOT not set".into()))?;
+        .map_err(|_| ServerFnError::new("NOTEZ_SPACE_ROOT not set"))?;
     list_resources_impl(Path::new(&space_root))
         .await
-        .map_err(|e| ServerFnError::ServerError(e.to_string()))
+        .map_err(|e| ServerFnError::new(e.to_string()))
 }
 
 #[server]
 pub async fn get_resource(ref_str: String) -> Result<Option<ResourceRow>, ServerFnError> {
     let space_root = std::env::var("NOTEZ_SPACE_ROOT")
-        .map_err(|_| ServerFnError::ServerError("NOTEZ_SPACE_ROOT not set".into()))?;
+        .map_err(|_| ServerFnError::new("NOTEZ_SPACE_ROOT not set"))?;
     get_resource_impl(Path::new(&space_root), &ref_str)
         .await
-        .map_err(|e| ServerFnError::ServerError(e.to_string()))
+        .map_err(|e| ServerFnError::new(e.to_string()))
 }
 
 /// Implementation that can be exercised by unit tests with a
-/// file-backed SqliteProjection without going through the Dioxus
-/// fullstack runtime. The async signature matches the server
+/// file-backed projection. The async signature matches the server
 /// functions so the wrapper is a one-liner.
-pub async fn list_resources_impl(
-    space_root: &Path,
-) -> Result<Vec<ResourceRow>, String> {
+pub async fn list_resources_impl(space_root: &Path) -> Result<Vec<ResourceRow>, String> {
     let db_path = space_root.join(".notez/index.sqlite");
     let store = SqliteProjection::open(&db_path).map_err(|e| e.to_string())?;
     let facade = ApplicationFacade::new(store);
@@ -52,8 +49,7 @@ pub async fn get_resource_impl(
     space_root: &Path,
     ref_str: &str,
 ) -> Result<Option<ResourceRow>, String> {
-    let r_ref = ResourceRef::parse(ref_str)
-        .map_err(|e| format!("invalid ref: {e}"))?;
+    let r_ref = ResourceRef::parse(ref_str).map_err(|e| format!("invalid ref: {e}"))?;
     let db_path = space_root.join(".notez/index.sqlite");
     let store = SqliteProjection::open(&db_path).map_err(|e| e.to_string())?;
     let facade = ApplicationFacade::new(store);
@@ -65,7 +61,7 @@ pub async fn get_resource_impl(
 mod tests {
     use super::*;
     use notez_core::domain::{
-        derived_object_id, ObjectId, Resource, ResourceKind, ResourceRef,
+        derived_object_id, ProjectionStore, Resource, ResourceKind, ResourceRef,
     };
     use std::collections::BTreeMap;
     use tempfile::tempdir;
@@ -88,14 +84,19 @@ mod tests {
     #[tokio::test]
     async fn list_resources_impl_returns_upserted_resources() {
         let dir = tempdir().unwrap();
+        // Create the .notez/index.sqlite path the impl will open.
         std::fs::create_dir_all(dir.path().join(".notez")).unwrap();
         let db_path = dir.path().join(".notez/index.sqlite");
 
+        // Pre-populate the database directly (skipping ApplicationFacade
+        // mutation methods — they're out of scope for v0.1 read-only).
         let mut store = SqliteProjection::open(&db_path).unwrap();
         let r = ResourceRef::parse("heading:01ARZ3NDEKTSV4RRFFQ69G5FAV").unwrap();
         seed_resource(&mut store, r, "X");
         drop(store);
 
+        // The impl opens a fresh SqliteProjection over the same file
+        // (file-backed, not in-memory).
         let rows = list_resources_impl(dir.path()).await.unwrap();
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].title, "X");
@@ -134,7 +135,8 @@ mod tests {
 
     #[test]
     fn object_id_serializes_through_resource_row() {
-        let oid = ObjectId::default();
+        // Sanity: ObjectId -> String -> ResourceRow.object_id round-trips.
+        let oid = notez_core::domain::ObjectId::default();
         let r_ref = ResourceRef::parse("heading:01ARZ3NDEKTSV4RRFFQ69G5FAV").unwrap();
         let row = ResourceRow::new(
             r_ref,

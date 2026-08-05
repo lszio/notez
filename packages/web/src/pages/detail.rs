@@ -7,12 +7,9 @@ pub fn DetailPage(encoded_ref: String) -> Element {
     let decoded = urlencoding::decode(&encoded_ref)
         .map(|c| c.into_owned())
         .unwrap_or_else(|_| encoded_ref.clone());
-    // `use_server_future` takes ownership of its closure, so we hand it a
-    // clone of the decoded ref. The original `decoded` stays in scope for
-    // the title fallback below.
-    let decoded_for_fetch = decoded.clone();
+    let decoded_disp = decoded.clone();
     let resource = use_server_future(move || {
-        let r = decoded_for_fetch.clone();
+        let r = decoded.clone();
         async move { get_resource(r).await }
     })?;
 
@@ -22,7 +19,7 @@ pub fn DetailPage(encoded_ref: String) -> Element {
                 h1 { class: "text-2xl font-semibold",
                     match resource() {
                         Some(Ok(Some(row))) => format!("[{}] {}", row.ref_str, row.title),
-                        _ => format!("{decoded}"),
+                        _ => format!("{decoded_disp}"),
                     }
                 }
                 a { class: "text-sm text-blue-600 hover:underline", href: "/",

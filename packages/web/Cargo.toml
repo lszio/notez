@@ -1,0 +1,28 @@
+[package]
+name = "web"
+version = "0.1.0"
+edition = "2024"
+description = "notez dioxus fullstack web client (v0.1, reader-only)"
+
+[lib]
+name = "notez_web"
+path = "src/lib.rs"
+
+[dependencies]
+core        = { path = "../../crates/core" }
+serde       = { workspace = true }
+serde_json  = { workspace = true }
+thiserror   = { workspace = true }
+dioxus      = { workspace = true, features = ["router", "fullstack"] }
+urlencoding = "2"
+
+[dev-dependencies]
+tempfile = "3"
+tokio    = { version = "1", features = ["rt-multi-thread", "macros"] }
+
+[features]
+# Default to the native SSR + hydration server. Build with
+# `--no-default-features --features web` to produce the wasm client.
+default = ["server"]
+web     = ["dioxus/web"]
+server  = ["dioxus/server"]
