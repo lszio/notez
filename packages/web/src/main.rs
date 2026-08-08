@@ -10,7 +10,7 @@ fn main() {
         // worker threads are spawned, so no other thread can observe
         // the env var in a partially-updated state.
         unsafe {
-            std::env::set_var("PORT", "3030");
+            std::env::set_var("PORT", "8765");
         }
     }
     if std::env::var("IP").is_err() {

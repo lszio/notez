@@ -7080,6 +7080,7 @@ dependencies = [
 name = "web"
 version = "0.1.0"
 dependencies = [
+ "base64",
  "core",
  "dioxus",
  "serde",

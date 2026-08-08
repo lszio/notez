@@ -169,6 +169,32 @@ clean:
 build:
     cargo build --workspace --bins
 
+# Create a minimal notez space at PATH (default ./demo-space); pass `--scan` to also run `notez scan`.
+seed-space path="demo-space" *extra:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    target="{{path}}"
+    mkdir -p "$target"
+    name="$(basename "$target")"
+    cat > "$target/notez.toml" <<EOF
+    version = 1
+
+    [space]
+    name = "$name"
+    database = ".notez/index.sqlite"
+    EOF
+    mkdir -p "$target/.notez"
+    echo "seeded space at $target (name=$name)"
+    if [ "{{extra}}" = "--scan" ]; then
+        just cli --space "$target" scan
+    fi
+
+# Show what the web picker would auto-discover from $HOME / cwd right now.
+discover-spaces:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cargo run -q -p core --example smoke_discover
+
 # ---- Acceptance helpers ------------------------------------------------------
 
 # Run the web acceptance script (builds CLI + web, exercises SSR endpoints).

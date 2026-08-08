@@ -3,6 +3,7 @@ pub mod defaults;
 pub mod merge;
 pub mod migrate;
 pub mod model;
+pub mod web_space;
 pub use merge::load_runtime_config;
 pub use discovery::{select_space, ConfigPaths, SelectedSpace, SpaceSelector};
 
