@@ -473,72 +473,12 @@ impl<S: ProjectionStore> ApplicationFacade<S> {
     /// Persist a new or updated resource. The projection is updated
     /// atomically; the resource's source adapter (when present and writable)
     /// is invoked so the authoritative backing store stays in sync.
-    pub fn upsert_resource_impl(
-        &mut self,
-        resource: Resource,
-    ) -> Result<(), ApplicationError> {
-        self.store
-            .upsert_resource(&resource)
-            .map_err(|e| ApplicationError::Storage {
-                    kind: StorageErrorKind::Sqlite,
-                    message: e.to_string(),
-                })?;
-        Ok(())
-    }
 
     /// Delete a resource by `ResourceRef`. Idempotent at the projection layer.
-    pub fn delete_resource_impl(
-        &mut self,
-        r_ref: &ResourceRef,
-    ) -> Result<(), ApplicationError> {
-        self.store
-            .delete_resource(r_ref)
-            .map_err(|e| ApplicationError::Storage {
-                    kind: StorageErrorKind::Sqlite,
-                    message: e.to_string(),
-                })?;
-        Ok(())
-    }
 
     /// Recent activity feed, ordered by `revision` descending.
-    pub fn list_recent_impl(
-        &self,
-        limit: usize,
-    ) -> Result<Vec<Resource>, ApplicationError> {
-        let page = self
-            .store
-            .query(&Selector::new())
-            .map_err(|e| ApplicationError::Storage {
-                    kind: StorageErrorKind::Sqlite,
-                    message: e.to_string(),
-                })?;
-        let mut items = page.items;
-        // Revision is monotonic by convention; lexicographic desc gives a
-        // stable "most-recently-touched first" order.
-        items.sort_by(|a, b| b.revision.cmp(&a.revision));
-        items.truncate(limit);
-        Ok(items)
-    }
 
     /// List resources from a given source adapter.
-    pub fn list_by_source_impl(
-        &self,
-        source_id: &str,
-        limit: usize,
-    ) -> Result<Vec<Resource>, ApplicationError> {
-        let page = self
-            .store
-            .query(&Selector::new().with_source(source_id))
-            .map_err(|e| ApplicationError::Storage {
-                    kind: StorageErrorKind::Sqlite,
-                    message: e.to_string(),
-                })?;
-        let mut items = page.items;
-        if items.len() > limit {
-            items.truncate(limit);
-        }
-        Ok(items)
-    }
 
     pub fn list_sources(
         &self,
@@ -563,76 +503,6 @@ impl<S: ProjectionStore> ApplicationFacade<S> {
     }
 
 
-    pub fn resolve_impl(&self, query_str: &str) -> Result<ResolveResult, ApplicationError> {
-        let trimmed = query_str.trim();
-
-        if let Ok(r_ref) = ResourceRef::parse(trimmed)
-            && let Some(res) = self
-                .store
-                .get(&r_ref)
-                .map_err(|e| ApplicationError::Storage {
-                    kind: StorageErrorKind::Sqlite,
-                    message: e.to_string(),
-                })?
-        {
-            return Ok(ResolveResult::Found(res.r#ref));
-        }
-
-        if trimmed.len() == 26 {
-            let mut matched = Vec::new();
-            if let Ok(heading_ref) = ResourceRef::parse(&format!("heading:{trimmed}"))
-                && let Some(res) = self
-                    .store
-                    .get(&heading_ref)
-                    .map_err(|e| ApplicationError::Storage {
-                    kind: StorageErrorKind::Sqlite,
-                    message: e.to_string(),
-                })?
-            {
-                matched.push(res.r#ref);
-            }
-            if let Ok(doc_ref) = ResourceRef::parse(&format!("document:{trimmed}"))
-                && let Some(res) = self
-                    .store
-                    .get(&doc_ref)
-                    .map_err(|e| ApplicationError::Storage {
-                    kind: StorageErrorKind::Sqlite,
-                    message: e.to_string(),
-                })?
-            {
-                matched.push(res.r#ref);
-            }
-            if matched.len() == 1 {
-                return Ok(ResolveResult::Found(matched[0]));
-            } else if matched.len() > 1 {
-                return Ok(ResolveResult::Ambiguous(matched));
-            }
-        }
-
-        let page_all = self.query_impl(&Selector::new())?;
-        let locator_matches: Vec<ResourceRef> = page_all
-            .items
-            .iter()
-            .filter(|r| r.locator == trimmed)
-            .map(|r| r.r#ref)
-            .collect();
-        if locator_matches.len() == 1 {
-            return Ok(ResolveResult::Found(locator_matches[0]));
-        } else if locator_matches.len() > 1 {
-            return Ok(ResolveResult::Ambiguous(locator_matches));
-        }
-
-        let title_selector = Selector::new().with_title_contains(trimmed);
-        let page_title = self.query_impl(&title_selector)?;
-        let title_matches: Vec<ResourceRef> = page_title.items.iter().map(|r| r.r#ref).collect();
-        if title_matches.len() == 1 {
-            return Ok(ResolveResult::Found(title_matches[0]));
-        } else if title_matches.len() > 1 {
-            return Ok(ResolveResult::Ambiguous(title_matches));
-        }
-
-        Ok(ResolveResult::NotFound)
-    }
     pub fn query_link_occurrences(
         &self,
         source_ref: &ResourceRef,
@@ -683,7 +553,7 @@ impl<S: ProjectionStore> ApplicationFacade<S> {
         &self,
         source_ref: &ResourceRef,
     ) -> Result<Vec<LinkOccurrence>, ApplicationError> {
-        self.query_link_occurrences_impl(source_ref)
+        <Self as crate::application::use_cases::LinkUseCase>::query_link_occurrences(self, source_ref)
     }
 
     /// Re-resolve every occurrence for `source_ref` and persist diagnostics.
@@ -698,7 +568,7 @@ impl<S: ProjectionStore> ApplicationFacade<S> {
         &mut self,
         source_ref: &ResourceRef,
     ) -> Result<Vec<ResolvedRelation>, ApplicationError> {
-        let occs = self.query_link_occurrences_impl(source_ref)?;
+        let occs = <Self as crate::application::use_cases::LinkUseCase>::query_link_occurrences(self, source_ref)?;
         // Determine the source_id by inspecting the existing diagnostics row.
         let source_id = occs
             .first()
@@ -759,7 +629,7 @@ impl<S: ProjectionStore> ApplicationFacade<S> {
         // wrote diagnostics. Here we merely tally what is on disk so callers
         // get a stable view of unresolved/ambiguous/external counts.
         let _ = space_root;
-        let page = self.query_impl(&Selector::new())?;
+        let page = <Self as crate::application::use_cases::ResourceUseCase>::query(self, &Selector::new())?;
         let mut report = crate::application::link_resolution::LinkReindexReport::default();
         for res in &page.items {
             let diags = self
@@ -787,73 +657,14 @@ impl<S: ProjectionStore> ApplicationFacade<S> {
 
     /// Resolve a `ResourceAddress` (either a `Ref` or a `Locator`) and
     /// return a [`ResolveResult`].
-    pub fn resolve_address_impl(
-        &self,
-        address: &crate::domain::ResourceAddress,
-    ) -> Result<ResolveResult, ApplicationError> {
-        use crate::domain::ResourceAddress;
-        match address {
-            ResourceAddress::Ref { r#ref } => {
-                if let Some(res) = self.read_impl(r#ref)? {
-                    Ok(ResolveResult::Found(res.r#ref))
-                } else {
-                    Ok(ResolveResult::NotFound)
-                }
-            }
-            ResourceAddress::Locator { target } => {
-                // We don't have a source_ref for a bare locator; pick a
-                // document-kind placeholder so resolver strategies that branch
-                // on kind_hint still work. The resolver never uses source_ref
-                // to compute the answer.
-                let placeholder =
-                    ResourceRef::new(ResourceKind::Document, ulid::Ulid::nil());
-                let occ = LinkOccurrence {
-                    source_ref: placeholder,
-                    target: target.clone(),
-                    raw: target.to_string(),
-                    display_text: None,
-                    span: crate::domain::TextSpan {
-                        line: 0,
-                        col_start: 0,
-                        col_end: 0,
-                    },
-                };
-                let (status, target_ref, candidates) =
-                    crate::application::link_resolution::LinkResolver::resolve(&self.store, &occ);
-                match status {
-                    ResolutionStatus::Resolved => Ok(ResolveResult::Found(
-                        target_ref.expect("resolved has target"),
-                    )),
-                    ResolutionStatus::Ambiguous => Ok(ResolveResult::Ambiguous(candidates)),
-                    _ => Ok(ResolveResult::NotFound),
-                }
-            }
-        }
-    }
 
-    pub fn query_impl(&self, selector: &Selector) -> Result<QueryPage, ApplicationError> {
-        self.store
-            .query(selector)
-            .map_err(|e| ApplicationError::Storage {
-                    kind: StorageErrorKind::Sqlite,
-                    message: e.to_string(),
-                })
-    }
 
-    pub fn read_impl(&self, r_ref: &ResourceRef) -> Result<Option<Resource>, ApplicationError> {
-        self.store
-            .get(r_ref)
-            .map_err(|e| ApplicationError::Storage {
-                    kind: StorageErrorKind::Sqlite,
-                    message: e.to_string(),
-                })
-    }
     pub fn agenda(&self) -> Result<crate::application::task_para::AgendaView, ApplicationError> {
         <Self as crate::application::use_cases::TaskUseCase>::agenda(self)
     }
 
     pub fn agenda_impl(&self) -> Result<crate::application::task_para::AgendaView, ApplicationError> {
-        let page = self.query_impl(&Selector::new())?;
+        let page = <Self as crate::application::use_cases::ResourceUseCase>::query(self, &Selector::new())?;
         let mut items = Vec::new();
 
         for res in page.items {
@@ -893,8 +704,7 @@ impl<S: ProjectionStore> ApplicationFacade<S> {
         to_state: &str,
         timestamp: &str,
     ) -> Result<crate::document::StateTransition, ApplicationError> {
-        let mut res = self
-            .read_impl(r_ref)?
+        let mut res = <Self as crate::application::use_cases::ResourceUseCase>::read(self, r_ref)?
             .ok_or_else(|| ApplicationError::NotFound {
                 kind: r_ref.kind(),
                 r_ref: r_ref.clone(),
@@ -952,7 +762,7 @@ impl<S: ProjectionStore> ApplicationFacade<S> {
     }
 
     pub fn para_overview_impl(&self) -> Result<crate::application::task_para::ParaOverview, ApplicationError> {
-        let page = self.query_impl(&Selector::new())?;
+        let page = <Self as crate::application::use_cases::ResourceUseCase>::query(self, &Selector::new())?;
         let mut projects = Vec::new();
         let mut areas = Vec::new();
         let mut resources = Vec::new();
@@ -980,7 +790,7 @@ impl<S: ProjectionStore> ApplicationFacade<S> {
         }
 
         for res in page.items {
-            let inspect_res = self.inspect_rules_impl(&res.r#ref)?;
+            let inspect_res = <Self as crate::application::use_cases::InspectUseCase>::inspect_rules(self, &res.r#ref)?;
             let para_val = inspect_res
                 .as_ref()
                 .and_then(|i| i.derived_properties.get("para").map(|s| s.to_string()))
@@ -1064,7 +874,7 @@ impl<S: ProjectionStore> ApplicationFacade<S> {
             object_id: crate::domain::derived_object_id("", "", ""),
         };
 
-        let page = self.query_impl(&Selector::new())?;
+        let page = <Self as crate::application::use_cases::ResourceUseCase>::query(self, &Selector::new())?;
         let mut native_resources: Vec<Resource> = page
             .items
             .into_iter()
@@ -1097,8 +907,7 @@ impl<S: ProjectionStore> ApplicationFacade<S> {
     ) -> Result<Vec<crate::domain::SegmentRecord>, ApplicationError> {
         use crate::artifact::{Extractor, ImageMetadataExtractor, SegmentSlicer, TextExtractor};
 
-        let res = self
-            .read_impl(att_ref)?
+        let res = <Self as crate::application::use_cases::ResourceUseCase>::read(self, att_ref)?
             .ok_or_else(|| ApplicationError::NotFound {
                 kind: att_ref.kind(),
                 r_ref: att_ref.clone(),
@@ -1241,7 +1050,7 @@ impl<S: ProjectionStore> ApplicationFacade<S> {
         community_id: &str,
         recipe_name: &str,
     ) -> Result<crate::artifact::DerivedArtifact, ApplicationError> {
-        let communities = self.list_communities_impl(space_root)?;
+        let communities = <Self as crate::application::use_cases::CommunityUseCase>::list_communities(self, space_root)?;
         let comm = communities
             .iter()
             .find(|c| c.id == community_id)
@@ -1250,7 +1059,7 @@ impl<S: ProjectionStore> ApplicationFacade<S> {
                 message: format!("community {community_id} not found"),
             })?;
 
-        let page = self.query_impl(&Selector::new())?;
+        let page = <Self as crate::application::use_cases::ResourceUseCase>::query(self, &Selector::new())?;
         let members: Vec<Resource> = comm
             .filter_members(&page.items)
             .into_iter()
@@ -1305,7 +1114,7 @@ impl<S: ProjectionStore> ApplicationFacade<S> {
         description: &str,
         export_path: &Path,
     ) -> Result<crate::artifact::SkillPackage, ApplicationError> {
-        let communities = self.list_communities_impl(space_root)?;
+        let communities = <Self as crate::application::use_cases::CommunityUseCase>::list_communities(self, space_root)?;
         let comm = communities
             .iter()
             .find(|c| c.id == community_id)
@@ -1314,7 +1123,7 @@ impl<S: ProjectionStore> ApplicationFacade<S> {
                 message: format!("community {community_id} not found"),
             })?;
 
-        let page = self.query_impl(&Selector::new())?;
+        let page = <Self as crate::application::use_cases::ResourceUseCase>::query(self, &Selector::new())?;
         let members: Vec<Resource> = comm
             .filter_members(&page.items)
             .into_iter()
@@ -1569,42 +1378,6 @@ impl<S: ProjectionStore> ApplicationFacade<S> {
 }
 
 
-impl<S: crate::domain::ProjectionStore> crate::application::use_cases::ResourceUseCase
-    for ApplicationFacade<S>
-{
-    fn upsert_resource(&mut self, resource: Resource) -> Result<(), ApplicationError> {
-        ApplicationFacade::upsert_resource_impl(self, resource)
-    }
-    fn delete_resource(&mut self, r_ref: &ResourceRef) -> Result<(), ApplicationError> {
-        ApplicationFacade::delete_resource_impl(self, r_ref)
-    }
-    fn query(&self, selector: &Selector) -> Result<QueryPage, ApplicationError> {
-        ApplicationFacade::query_impl(self, selector)
-    }
-    fn read(&self, r_ref: &ResourceRef) -> Result<Option<Resource>, ApplicationError> {
-        ApplicationFacade::read_impl(self, r_ref)
-    }
-    fn list_recent(&self, limit: usize) -> Result<Vec<Resource>, ApplicationError> {
-        ApplicationFacade::list_recent_impl(self, limit)
-    }
-    fn list_by_source(
-        &self,
-        source_id: &str,
-        limit: usize,
-    ) -> Result<Vec<Resource>, ApplicationError> {
-        ApplicationFacade::list_by_source_impl(self, source_id, limit)
-    }
-    fn resolve(&self, query_str: &str) -> Result<ResolveResult, ApplicationError> {
-        ApplicationFacade::resolve_impl(self, query_str)
-    }
-    fn resolve_address(
-        &self,
-        address: &crate::domain::ResourceAddress,
-    ) -> Result<ResolveResult, ApplicationError> {
-        ApplicationFacade::resolve_address_impl(self, address)
-}
-
-}
 
 impl<S: crate::domain::ProjectionStore> crate::application::use_cases::LinkUseCase for ApplicationFacade<S> {
     fn query_link_occurrences(
