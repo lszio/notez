@@ -3,8 +3,7 @@
 //! Method bodies were previously inlined in `service.rs`; this file
 //! is part of the 0.5.x-A1+A3 use-case impl split.
 
-use crate::application::service::{ApplicationError, ResolveResult, StorageErrorKind};
-use crate::application::ApplicationFacade;
+use crate::application::service::{ApplicationError, ApplicationFacade, ResolveResult, StorageErrorKind};
 use crate::application::use_cases::ResourceUseCase;
 use crate::domain::{
     LinkOccurrence, ProjectionStore, QueryPage, ResolutionStatus, Resource, ResourceKind,
