@@ -4,6 +4,7 @@
 //! is part of the 0.5.x-A1+A3 use-case impl split.
 
 use crate::application::service::{ApplicationError, ApplicationFacade, DocumentErrorKind, StorageErrorKind};
+use crate::application::write_check;
 use crate::application::use_cases::ResourceUseCase;
 use crate::application::use_cases::AttachmentUseCase;
 use crate::domain::{ProjectionStore, Resource, ResourceKind, ResourceRef, SegmentRecord, Selector};
@@ -16,6 +17,8 @@ impl<S: ProjectionStore> AttachmentUseCase for ApplicationFacade<S> {
         file_path: &Path,
         default_mime: &str,
     ) -> Result<ResourceRef, ApplicationError> {
+        write_check::check_capability(self, "attachment")?;
+
         let bytes = std::fs::read(file_path).map_err(|e| ApplicationError::Io {
             path: Some(file_path.to_path_buf()),
             source: e.kind(),

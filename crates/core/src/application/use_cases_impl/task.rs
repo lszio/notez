@@ -4,6 +4,7 @@
 //! is part of the 0.5.x-A1+A3 use-case impl split.
 
 use crate::application::service::{ApplicationError, ApplicationFacade, DocumentErrorKind, StorageErrorKind};
+use crate::application::write_check;
 use crate::application::task_para::{AgendaItem, AgendaView, ParaNode, ParaOverview};
 use crate::application::use_cases::TaskUseCase;
 use crate::domain::{ProjectionStore, ResourceRef, Selector};
@@ -43,6 +44,8 @@ impl<S: ProjectionStore> TaskUseCase for ApplicationFacade<S> {
         to_state: &str,
         timestamp: &str,
     ) -> Result<crate::document::StateTransition, ApplicationError> {
+        write_check::check_capability(self, "task")?;
+
         let mut res = <Self as crate::application::use_cases::ResourceUseCase>::read(self, r_ref)?
             .ok_or_else(|| ApplicationError::NotFound {
                 kind: r_ref.kind(),

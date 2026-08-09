@@ -4,6 +4,7 @@
 //! is part of the 0.5.x-A1+A3 use-case impl split.
 
 use crate::application::service::{ApplicationError, ApplicationFacade, DocumentErrorKind, StorageErrorKind};
+use crate::application::write_check;
 use crate::application::use_cases::{ArtifactUseCase, ResourceUseCase};
 use crate::artifact::{DerivedArtifact, SkillPackage};
 use crate::domain::{ProjectionStore, Resource, Selector};
@@ -16,6 +17,8 @@ impl<S: ProjectionStore> ArtifactUseCase for ApplicationFacade<S> {
         community_id: &str,
         recipe_name: &str,
     ) -> Result<crate::artifact::DerivedArtifact, ApplicationError> {
+        write_check::check_capability(self, "artifact")?;
+
         let communities = <Self as crate::application::use_cases::CommunityUseCase>::list_communities(self, space_root)?;
         let comm = communities
             .iter()
@@ -70,6 +73,8 @@ impl<S: ProjectionStore> ArtifactUseCase for ApplicationFacade<S> {
         description: &str,
         export_path: &Path,
     ) -> Result<crate::artifact::SkillPackage, ApplicationError> {
+        write_check::check_capability(self, "artifact")?;
+
         let communities = <Self as crate::application::use_cases::CommunityUseCase>::list_communities(self, space_root)?;
         let comm = communities
             .iter()

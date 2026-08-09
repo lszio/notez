@@ -4,6 +4,7 @@
 //! is part of the 0.5.x-A1+A3 use-case impl split.
 
 use crate::application::service::{ApplicationError, ApplicationFacade, ResolveResult, StorageErrorKind};
+use crate::application::write_check;
 use crate::application::use_cases::ResourceUseCase;
 use crate::domain::{
     LinkOccurrence, ProjectionStore, QueryPage, ResolutionStatus, Resource, ResourceKind,
@@ -15,6 +16,13 @@ impl<S: ProjectionStore> ResourceUseCase for ApplicationFacade<S> {
         &mut self,
         resource: Resource,
     ) -> Result<(), ApplicationError> {
+        write_check::check_capability(self, "resource")?;
+        write_check::check_address_uniqueness(
+            self,
+            &crate::domain::ResourceAddress::Ref { r#ref: resource.r#ref },
+            &resource.r#ref,
+        )?;
+
         self.store
             .upsert_resource(&resource)
             .map_err(|e| ApplicationError::Storage {
@@ -28,6 +36,8 @@ impl<S: ProjectionStore> ResourceUseCase for ApplicationFacade<S> {
         &mut self,
         r_ref: &ResourceRef,
     ) -> Result<(), ApplicationError> {
+        write_check::check_capability(self, "resource")?;
+
         self.store
             .delete_resource(r_ref)
             .map_err(|e| ApplicationError::Storage {

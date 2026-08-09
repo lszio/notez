@@ -4,6 +4,7 @@
 //! is part of the 0.5.x-A1+A3 use-case impl split.
 
 use crate::application::service::{ApplicationError, ApplicationFacade, StorageErrorKind};
+use crate::application::write_check;
 use crate::application::use_cases::LinkUseCase;
 use crate::domain::{
     LinkDiagnostic, LinkOccurrence, ProjectionStore, ResolutionStatus, ResolvedRelation,
@@ -47,6 +48,8 @@ impl<S: ProjectionStore> LinkUseCase for ApplicationFacade<S> {
         &mut self,
         source_ref: &ResourceRef,
     ) -> Result<Vec<ResolvedRelation>, ApplicationError> {
+        write_check::check_capability(self, "link")?;
+
         let occs = <Self as crate::application::use_cases::LinkUseCase>::query_link_occurrences(self, source_ref)?;
         // Determine the source_id by inspecting the existing diagnostics row.
         let source_id = occs

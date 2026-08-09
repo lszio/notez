@@ -4,6 +4,7 @@
 //! is part of the 0.5.x-A1+A3 use-case impl split.
 
 use crate::application::service::{ApplicationError, ApplicationFacade, StorageErrorKind};
+use crate::application::write_check;
 use crate::application::use_cases::CommunityUseCase;
 use crate::domain::ProjectionStore;
 use crate::domain::community::Community;
@@ -15,6 +16,8 @@ impl<S: ProjectionStore> CommunityUseCase for ApplicationFacade<S> {
         space_root: &Path,
         community: crate::domain::community::Community,
     ) -> Result<(), ApplicationError> {
+        write_check::check_capability(self, "community")?;
+
         let mut cfg = crate::application::community_app::SpaceCommunitiesConfig::load(space_root)
             .map_err(|e| ApplicationError::Storage {
                 kind: StorageErrorKind::InvalidState,

@@ -4,6 +4,7 @@
 //! is part of the 0.5.x-A1+A3 use-case impl split.
 
 use crate::application::service::{ApplicationError, ApplicationFacade, StorageErrorKind};
+use crate::application::write_check;
 use crate::application::use_cases::SyncUseCase;
 use crate::domain::ProjectionStore;
 use crate::sync::ConflictRecord;
@@ -16,6 +17,8 @@ impl<S: ProjectionStore> SyncUseCase for ApplicationFacade<S> {
         space_root: &Path,
         shared_folder: &Path,
     ) -> Result<crate::sync::PushReport, ApplicationError> {
+        write_check::check_capability(self, "sync")?;
+
         let transport = crate::sync::FolderTransport::new(shared_folder);
         let engine = crate::sync::SyncEngine::new(actor_id, space_root, transport);
         let report = engine
