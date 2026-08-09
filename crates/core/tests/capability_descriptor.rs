@@ -1,6 +1,6 @@
-//! Contract tests for the public `CapabilityDescriptor` and the
-//! `register_capability` no-op on `ApplicationService`.
-
+//! Contract tests for the public `CapabilityDescriptor` and
+//! `ApplicationFacade::register_capability`, which persists descriptors
+//! into the active `CapabilityCatalog`.
 use notez_core::application::ApplicationService;
 use notez_core::capability::{CapabilityDescriptor, Mutability};
 use notez_core::storage::SqliteProjection;
@@ -14,13 +14,23 @@ fn capability_descriptor_constructor_and_accessors() {
 }
 
 #[test]
-fn register_capability_is_a_no_op_that_accepts_descriptors() {
+fn register_capability_persists_descriptor_in_catalog() {
     let dir = tempfile::tempdir().unwrap();
     let db = dir.path().join("idx.sqlite");
     let store = SqliteProjection::open(&db).unwrap();
     let mut facade = ApplicationService::new(store);
-    let desc = CapabilityDescriptor::new("scan", "scan native source", Mutability::Read);
-    // Must not panic, must not error, must not change observable state.
+    let before = facade.capability_catalog().list().len();
+
+    let desc = CapabilityDescriptor::new("custom_test_cap", "custom test cap", Mutability::Read);
     facade.register_capability(&desc);
     facade.register_capability(&desc);
+
+    let after = facade.capability_catalog().list().len();
+    assert_eq!(after, before + 1, "register must persist the descriptor");
+    let stored = facade
+        .capability_catalog()
+        .get("custom_test_cap")
+        .expect("descriptor is observable in the catalog");
+    assert_eq!(stored.description, "custom test cap");
+    assert_eq!(stored.mutability, Mutability::Read);
 }

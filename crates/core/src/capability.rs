@@ -1,10 +1,15 @@
 //! Public capability descriptors.
 //!
-//! This module exists so that subsequent P1 capability-directory work
-//! has a stable public surface to extend. The current revision only
-//! ships the data type and the [`Mutability`] enum. `ApplicationFacade`
-//! accepts a descriptor via `register_capability` but the call is a
-//! no-op; it is intentionally a future hook, not a behavior.
+//! `ApplicationFacade` owns a [`CapabilityCatalog`] seeded with the nine
+//! built-in capabilities (one per `core::application::use_cases` trait).
+//! `ApplicationFacade::register_capability` inserts/replaces a
+//! [`CapabilityDescriptor`] in that catalog; the public-facing CLI
+//! `list-capabilities` subcommand and the MCP `list_capabilities` tool
+//! both read the same catalog, so the two surfaces stay in lockstep.
+//!
+//! The catalog is a `HashMap<&'static str, CapabilityDescriptor>` keyed
+//! by id. See [`CapabilityCatalog::with_builtins`] for the canonical
+//! descriptor set.
 
 use serde::{Deserialize, Serialize};
 
@@ -19,8 +24,10 @@ pub enum Mutability {
 
 /// Stable description of a capability exposed by the system. Capability
 /// descriptors are the unit that MCP tools, CLI subcommands, and
-/// previewer registrations will eventually consume. Today they are only
-/// accepted by `ApplicationFacade::register_capability` as a no-op.
+/// previewer registrations consume. `ApplicationFacade::register_capability`
+/// inserts the descriptor into the live `CapabilityCatalog`; readers such
+/// as `ApplicationFacade::capability_catalog` and the JSON serializers
+/// below observe the resulting set.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CapabilityDescriptor {
     pub id: &'static str,
@@ -145,5 +152,79 @@ impl CapabilityCatalog {
     /// Iterate over `(id, descriptor)` pairs in arbitrary order.
     pub fn iter(&self) -> impl Iterator<Item = (&'static str, &CapabilityDescriptor)> {
         self.descriptors.iter().map(|(id, d)| (*id, d))
+    }
+}
+
+/// Stable JSON shape used by both the CLI `list-capabilities` subcommand
+/// and the MCP `list_capabilities` tool. The exact key set is part of
+/// the public contract for capability listings:
+///
+/// ```json
+/// { "id": "<static str>",
+///   "description": "<static str>",
+///   "mutability": "read" | "write" }
+/// ```
+///
+/// `CapabilityDescriptor::to_json` produces a `serde_json::Value` in this
+/// shape, and [`catalog_to_json_array`] renders a full catalog as an
+/// array of such entries.
+impl CapabilityDescriptor {
+    /// Render this descriptor as a `serde_json::Value` in the stable
+    /// public shape.
+    pub fn to_json(&self) -> serde_json::Value {
+        serde_json::json!({
+            "id": self.id,
+            "description": self.description,
+            "mutability": match self.mutability {
+                Mutability::Read => "read",
+                Mutability::Write => "write",
+            },
+        })
+    }
+}
+
+/// Render a full [`CapabilityCatalog`] as a JSON array of
+/// [`CapabilityDescriptor::to_json`] entries. Used by the CLI
+/// `list-capabilities` subcommand and the MCP `list_capabilities`
+/// tool so both surfaces emit byte-identical payloads.
+pub fn catalog_to_json_array(catalog: &CapabilityCatalog) -> serde_json::Value {
+    let entries: Vec<serde_json::Value> = catalog
+        .list()
+        .into_iter()
+        .map(CapabilityDescriptor::to_json)
+        .collect();
+    serde_json::Value::Array(entries)
+}
+
+#[cfg(test)]
+mod json_shape_tests {
+    use super::*;
+
+    #[test]
+    fn descriptor_to_json_uses_stable_keys() {
+        let desc = CapabilityDescriptor::new("scan", "scan source", Mutability::Read);
+        let v = desc.to_json();
+        assert_eq!(v["id"], "scan");
+        assert_eq!(v["description"], "scan source");
+        assert_eq!(v["mutability"], "read");
+    }
+
+    #[test]
+    fn write_mutability_serialises_as_write() {
+        let desc = CapabilityDescriptor::new("task", "task", Mutability::Write);
+        assert_eq!(desc.to_json()["mutability"], "write");
+    }
+
+    #[test]
+    fn catalog_to_json_array_emits_one_entry_per_descriptor() {
+        let cat = CapabilityCatalog::with_builtins();
+        let arr = catalog_to_json_array(&cat);
+        let entries = arr.as_array().expect("array");
+        assert_eq!(entries.len(), 9);
+        for entry in entries {
+            assert!(entry.get("id").is_some());
+            assert!(entry.get("description").is_some());
+            assert!(entry.get("mutability").is_some());
+        }
     }
 }

@@ -41,31 +41,16 @@ fn main() {
     // the catalog as JSON and exits 0. All other variants fall through
     // to the existing space-selection flow.
     if let Commands::ListCapabilities = cli.command {
-        let stub_db = std::path::Path::new("/tmp/notez-capabilities-stub.sqlite");
-        let store = match SqliteProjection::open(stub_db) {
-            Ok(s) => s,
-            Err(e) => {
-                eprintln!("Failed to open stub database: {e}");
+        // The catalog is purely in-memory; no SQLite needed. Skip the
+        // space / store wiring entirely.
+        let store = notez_core::storage::SqliteProjection::in_memory()
+            .unwrap_or_else(|e| {
+                eprintln!("Failed to open in-memory store: {e}");
                 std::process::exit(5);
-            }
-        };
+            });
         let facade = notez_core::application::ApplicationFacade::new(store);
-        let entries: Vec<serde_json::Value> = facade
-            .capability_catalog()
-            .list()
-            .iter()
-            .map(|d| {
-                serde_json::json!({
-                    "id": d.id,
-                    "description": d.description,
-                    "mutability": match d.mutability {
-                        notez_core::capability::Mutability::Read => "read",
-                        notez_core::capability::Mutability::Write => "write",
-                    },
-                })
-            })
-            .collect();
-        match serde_json::to_string_pretty(&entries) {
+        let payload = facade.capabilities_json();
+        match serde_json::to_string_pretty(&payload) {
             Ok(s) => println!("{s}"),
             Err(e) => {
                 eprintln!("Failed to serialise capabilities: {e}");

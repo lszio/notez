@@ -386,10 +386,13 @@ impl<S: ProjectionStore> ApplicationFacade<S> {
         self.format_parsers.push(parser);
     }
 
-    /// Register a public capability descriptor. This is a no-op in the
-    /// current revision; it exists so that the future P1 capability
-    /// directory can collect descriptors without a breaking change.
-    /// See `core::capability::CapabilityDescriptor`.
+    /// Register a public capability descriptor. The descriptor is
+    /// inserted into (or replaces the entry in) the active
+    /// [`CapabilityCatalog`]; subsequent calls to
+    /// [`ApplicationFacade::capability_catalog`] and the
+    /// `capabilities_json` helper observe the change. This is the
+    /// canonical write path used by third-party composition roots to
+    /// surface custom `UseCase` traits via the same CLI/MCP listing.
     pub fn register_capability(
         &mut self,
         descriptor: &crate::capability::CapabilityDescriptor,
@@ -403,12 +406,21 @@ impl<S: ProjectionStore> ApplicationFacade<S> {
     pub fn capability_catalog(&self) -> &crate::capability::CapabilityCatalog {
         &self.capability_catalog
     }
-    pub fn store(&self) -> &S {
-        &self.store
+
+    /// Render the active capability catalog as a JSON array using the
+    /// shared [`crate::capability::catalog_to_json_array`] helper. This
+    /// is the canonical "list capabilities" payload used by both the
+    /// CLI `list-capabilities` subcommand and the MCP
+    /// `list_capabilities` tool, so the two surfaces stay byte-equal.
+    pub fn capabilities_json(&self) -> serde_json::Value {
+        crate::capability::catalog_to_json_array(&self.capability_catalog)
     }
 
     pub fn store_mut(&mut self) -> &mut S {
         &mut self.store
+    }
+    pub fn store(&self) -> &S {
+        &self.store
     }
     pub fn inspect_rules(
         &self,

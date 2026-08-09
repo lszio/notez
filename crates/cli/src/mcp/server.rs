@@ -1016,8 +1016,16 @@ impl NotezMcpServer {
             }
         })
     }
-}
 
+    /// List the capabilities the current build exposes. The payload is
+    /// byte-equal to the JSON printed by the `notez list-capabilities`
+    /// CLI subcommand; both call into the same `ApplicationFacade`.
+    #[tool(description = "List the capabilities the current build exposes")]
+    fn list_capabilities(&self) -> Result<CallToolResult, McpError> {
+        self.with_service(|svc| text_ok(svc.capabilities_json()))
+    }
+
+}
 #[tool_handler]
 impl ServerHandler for NotezMcpServer {
     fn get_info(&self) -> ServerInfo {
