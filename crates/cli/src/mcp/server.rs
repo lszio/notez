@@ -364,6 +364,7 @@ fn struct_err(err: &notez_core::application::ApplicationError) -> Result<CallToo
         notez_core::application::ApplicationError::ReadOnlySource { .. } => "read_only_source",
         notez_core::application::ApplicationError::SourceNotFound { .. } => "source_not_found",
         notez_core::application::ApplicationError::RevisionConflict { .. } => "revision_conflict",
+        notez_core::application::ApplicationError::AddressUniqueness { .. } => "address_uniqueness",
     };
     text_err(serde_json::json!({ "kind": kind, "message": err.to_string() }).to_string())
 }

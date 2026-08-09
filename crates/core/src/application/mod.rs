@@ -3,6 +3,8 @@ pub mod link_resolution;
 
 pub mod attachment;
 pub mod writeback;
+pub mod write_check;
+pub use write_check::{check_address_uniqueness, check_capability, check_revision};
 pub use writeback::{RelaySyncReport, WritebackReport};
 pub mod job_manager;
 pub use job_manager::{ArtifactStaleReport, JobRecord};

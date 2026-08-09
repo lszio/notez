@@ -42,6 +42,13 @@ pub enum ApplicationError {
     ReadOnlySource { source_id: String },
     /// A source with the given id is not registered in the space.
     SourceNotFound { source_id: String },
+    /// The same ResourceAddress already binds to a different ResourceRef.
+    /// See spec `docs/superpowers/specs/2026-08-09-0.5x-a1-a3-usecase-impl-split-and-write-checks-design.org` §2.4.
+    AddressUniqueness {
+        addr: crate::domain::ResourceAddress,
+        existing: ResourceRef,
+        candidate: ResourceRef,
+    },
 }
 
 /// Classification of storage-layer failures.
@@ -95,6 +102,15 @@ impl std::fmt::Display for ApplicationError {
             ApplicationError::SourceNotFound { source_id } => {
                 write!(f, "source not found: {source_id}")
             }
+            ApplicationError::AddressUniqueness { addr, existing, candidate } => {
+                // ResourceAddress has no Display impl yet; render the
+                // bound refs (which are Copy) instead.
+                let _ = addr;
+                write!(
+                    f,
+                    "address uniqueness: already bound to {existing}; cannot rebind to {candidate}"
+                )
+            }
         }
     }
 }
@@ -144,6 +160,12 @@ impl serde::Serialize for ApplicationError {
             ApplicationError::SourceNotFound { source_id } => {
                 map.serialize_entry("kind", "source_not_found")?;
                 map.serialize_entry("source_id", source_id)?;
+            }
+            ApplicationError::AddressUniqueness { addr, existing, candidate } => {
+                map.serialize_entry("kind", "address_uniqueness")?;
+                map.serialize_entry("addr", addr)?;
+                map.serialize_entry("existing", existing)?;
+                map.serialize_entry("candidate", candidate)?;
             }
         }
         map.end()
@@ -262,6 +284,22 @@ impl<'de> serde::Deserialize<'de> for ApplicationError {
                     .ok_or_else(|| D::Error::custom("ApplicationError: missing `source_id`"))?;
                 Ok(ApplicationError::SourceNotFound {
                     source_id: serde_json::from_value(source_id.clone()).map_err(D::Error::custom)?,
+                })
+            }
+            "address_uniqueness" => {
+                let addr = value
+                    .get("addr")
+                    .ok_or_else(|| D::Error::custom("ApplicationError: missing `addr`"))?;
+                let existing = value
+                    .get("existing")
+                    .ok_or_else(|| D::Error::custom("ApplicationError: missing `existing`"))?;
+                let candidate = value
+                    .get("candidate")
+                    .ok_or_else(|| D::Error::custom("ApplicationError: missing `candidate`"))?;
+                Ok(ApplicationError::AddressUniqueness {
+                    addr: serde_json::from_value(addr.clone()).map_err(D::Error::custom)?,
+                    existing: serde_json::from_value(existing.clone()).map_err(D::Error::custom)?,
+                    candidate: serde_json::from_value(candidate.clone()).map_err(D::Error::custom)?,
                 })
             }
             other => Err(D::Error::custom(format!(
