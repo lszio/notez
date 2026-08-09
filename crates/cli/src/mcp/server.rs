@@ -128,6 +128,22 @@ impl schemars::JsonSchema for RefArgs {
         object_schema(serde_json::Value::Object(p), &["ref"])
     }
 }
+ /// Arguments for `watch_status` — a space path and an event limit.
+#[derive(Debug, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub struct WatchStatusArgs {
+    pub space: Option<String>,
+    pub limit: Option<usize>,
+}
+impl schemars::JsonSchema for WatchStatusArgs {
+    fn schema_name() -> Cow<'static, str> { "WatchStatusArgs".into() }
+    fn json_schema(g: &mut SchemaGenerator) -> Schema {
+        let mut p = serde_json::Map::new();
+        p.insert("space".into(), prop_str("Optional space name or absolute path. Defaults to the active space."));
+        p.insert("limit".into(), prop_str("Maximum number of recent events to return. Default 50."));
+        object_schema(serde_json::Value::Object(p), &[])
+    }
+}
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -388,6 +404,7 @@ fn space_path(arg: Option<&str>) -> std::path::PathBuf {
 #[derive(Clone)]
 pub struct NotezMcpServer {
     service: Arc<Mutex<ApplicationService<SqliteProjection>>>,
+    watch: Arc<notez_core::application::WatchService>,
     tool_router: ToolRouter<Self>,
 }
 
@@ -395,11 +412,10 @@ impl NotezMcpServer {
     pub fn new(service: ApplicationService<SqliteProjection>) -> Self {
         Self {
             service: Arc::new(Mutex::new(service)),
+            watch: notez_core::application::WatchService::new(),
             tool_router: Self::tool_router(),
         }
     }
-
-    /// Read-only view over the wrapped service.
     fn with_service<R>(
         &self,
         f: impl FnOnce(&ApplicationService<SqliteProjection>) -> R,
@@ -1026,8 +1042,48 @@ impl NotezMcpServer {
         self.with_service(|svc| text_ok(svc.capabilities_json()))
     }
 
+    #[tool(description = "Start watching a space root for filesystem events")]
+    fn watch_start(
+        &self,
+        Parameters(args): Parameters<SpaceArgs>,
+    ) -> Result<CallToolResult, McpError> {
+        let space = space_path(args.space.as_deref());
+        match self.watch.start(&space) {
+            Ok(_) => text_ok(json!({ "started": true, "space": space.to_string_lossy() })),
+            Err(e) => text_err(format!("watch start failed: {e}")),
+        }
+    }
+
+    #[tool(description = "Stop watching a space root")]
+    fn watch_stop(
+        &self,
+        Parameters(args): Parameters<SpaceArgs>,
+    ) -> Result<CallToolResult, McpError> {
+        let space = space_path(args.space.as_deref());
+        let stopped = self.watch.stop(&space);
+        text_ok(json!({ "stopped": stopped }))
+    }
+
+    #[tool(description = "Return the current watch state and recent events for a space root")]
+    fn watch_status(
+        &self,
+        Parameters(args): Parameters<WatchStatusArgs>,
+    ) -> Result<CallToolResult, McpError> {
+        let space = space_path(args.space.as_deref());
+        let limit = args.limit.unwrap_or(50);
+        let status = self.watch.status(&space);
+        let events = self.watch.events(&space, limit);
+        match serde_json::to_value(serde_json::json!({
+            "status": status,
+            "events": events,
+        })) {
+            Ok(v) => text_ok(v),
+            Err(e) => text_err(format!("watch_status serialization: {e}")),
+        }
+    }
 }
-#[tool_handler]
+
+ #[tool_handler]
 impl ServerHandler for NotezMcpServer {
     fn get_info(&self) -> ServerInfo {
         ServerInfo::new(ServerCapabilities::builder().enable_tools().build())

@@ -87,6 +87,9 @@ pub enum Commands {
     /// Launch the local web server over the active space.
     #[cfg(feature = "web")]
     Web(WebArgs),
+
+    /// Watch the active space for filesystem changes.
+    Watch(WatchArgs),
 }
 #[derive(Args, Debug)]
 pub struct QueryArgs {
@@ -459,11 +462,27 @@ impl From<CliSourceKind> for notez_core::source::SourceKind {
     }
 }
 
-#[cfg(feature = "web")]
+/// `notez watch` — start or query the in-process filesystem
+/// watcher. The watcher records events; it does not auto-scan.
+/// Combine with a manual `notez scan` (or a periodic job) to
+/// keep the index in sync.
 #[derive(Args, Debug)]
-pub struct WebArgs {
-    #[arg(long, default_value = "127.0.0.1:3030")]
-    pub bind: String,
-    #[arg(long, default_value_t = false)]
-    pub open: bool,
+pub struct WatchArgs {
+    /// Sub-action. `start` (default), `stop`, or `status`.
+    #[command(subcommand)]
+    pub command: Option<WatchCommands>,
 }
+
+#[derive(Subcommand, Debug)]
+pub enum WatchCommands {
+    /// Start watching the active space.
+    Start,
+    /// Stop watching the active space.
+    Stop,
+    /// Print the watch state (status + recent events).
+    Status {
+        #[arg(long, default_value_t = 20)]
+        limit: usize,
+    },
+}
+

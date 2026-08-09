@@ -127,10 +127,24 @@
 | 6    | 后续扩展         | Notion / Anytype Adapter 仅新增 capability 声明                      |
 | 7    | MVP-3            | PARA 与看板作为保存查询投影，=task transition= 经授权路径            |
 
-* 历史里程碑（已交付）
-
-保留 0.3 / 0.4 / 0.5 的发布记录，便于审计与回溯：
-
 - *0.3 — 无损链接与稳定身份*（CLOSED 2026-07-24）：见 MVP-1 列表。
 - *0.4 — 两级配置与空间注册表*：见 MVP-1 列表。
 - *0.5 — 统一协议与接口完整覆盖*（进行中）：见 MVP-1 列表。
+- *0.5.x — MVP-1 收尾*：见 MVP-1 列表。
+- *0.5.x-B1 — web 客户端可操作性 (2026-08-09)*：
+  - 关闭 SSR-only web 客户端的水合死链：server-only 二进制跑起来后
+    SSR 渲染的 picker / list / detail 都是静态 HTML，浏览器从未加载
+    WASM 客户端，点击无效。
+  - 在 Dioxus 0.7 fullstack 之外加 plain axum POST 路由
+    （/api/spaces/{register,scan,watch/{start,stop}}），让 =Add=
+    / =Scan= / =Watch= 三个动作在 UI 上全部可达，无需 WASM 客户端。
+  - picker 改为永远可见的「spaces 列表 + register 表单」，依赖
+    =details= 元素的原生展开而不是 JS 开关。
+  - 在 =core/application= 下引入 =WatchService=：封装 =notify= 6
+    （inotify / FSEvents / ReadDirectoryChangesW），记录事件环
+    200 条，扫描交还给调用方（rusqlite::Connection 是 !Send，避
+    免后台线程持锁）。
+  - CLI 镜像：=notez watch [start|stop|status]= 实时打印事件。
+  - MCP 镜像：=watch_start= / =watch_stop= / =watch_status= 三个工具。
+  - 不做：WASM 客户端再水合（需要把 =core= 拆掉 rusqlite 才能编
+    wasm32；v0.2 放弃该路径，v0.3 视需求再开）。

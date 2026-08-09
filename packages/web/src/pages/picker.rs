@@ -1,155 +1,108 @@
-//! SpacePicker — the trigger + popover for switching spaces.
+//! SpacePicker — a navigation aid for switching spaces.
 //!
-//! Closed by default; clicking the trigger toggles a popover below
-//! it. The popover lists every registered space (from the
-//! `list_registered_spaces` server fn) as a clickable option and
-//! offers a text input for an arbitrary absolute path. Manual
-//! entries are validated by `resolve_space_path` before navigating.
+//! The Dioxus fullstack web client runs without a hydrated WASM
+//! bundle: every interaction is a plain HTML form submit or anchor
+//! click. The picker reflects that:
 //!
-//! Visual style: an old filing-cabinet drawer. The trigger reads
-//! "[space name] ▾"; the panel is a small index-card with a thin
-//! border and a 4px drop-shadow drawn as a solid offset block
-//! (no real `box-shadow` blur — that would feel too modern).
+//! - A short table of every registered / discovered space, each row
+//!   a link to `/space/<encoded>/list`.
+//! - A `<details>` block with a form to register a new space by path.
+//!   Submitting POSTs to `/api/spaces/register` and the server
+//!   redirects to the new space's list page on success.
+//!
+//! The list is fetched via `use_server_future`; the SSR pass
+//! suspends until the list is ready, then the rendered HTML is
+//! static. No client hydration is required. That is the right
+//! trade-off for a v0.1 reader that must work without a client
+//! bundle.
+//!
+//! Visual style: an old filing-cabinet drawer. The picker label
+//! reads "spaces"; each option is a small index-card with the space
+//! name and absolute path.
 
 use dioxus::prelude::*;
-
+use crate::pages::ui::{Breadcrumb, BreadcrumbSegment};
 use crate::router::route_for_space_list;
-use crate::server::{list_registered_spaces, resolve_space_path, RegisteredSpaceDto};
+use crate::server::{list_registered_spaces, RegisteredSpaceDto};
 
 #[component]
 pub fn SpacePicker() -> Element {
-    let navigator = use_navigator();
-    let mut registered = use_signal(Vec::<RegisteredSpaceDto>::new);
-    let mut open = use_signal(|| false);
-    let mut manual = use_signal(String::new);
-    let mut pending = use_signal(|| false);
-    let mut error = use_signal(|| None::<String>);
+    // `use_server_future` blocks the SSR render until the future
+    // resolves, so the list is already in the HTML on first paint.
+    // Without client hydration, the value is read once.
+    let spaces_resource = use_server_future(|| async {
+        list_registered_spaces().await.unwrap_or_default()
+    })?;
 
-    // Fetch the registered list on first open, not at mount — that
-    // way the home page doesn't pay the cost when there's no
-    // popover to populate. The fetch is cached by the server
-    // runtime; re-opening won't re-hit the server.
-    use_effect(move || {
-        let is_open = open();
-        if is_open {
-            spawn(async move {
-                if let Ok(list) = list_registered_spaces().await {
-                    registered.set(list);
-                }
-            });
-        }
-    });
-
-    let trigger_label = if registered().is_empty() {
-        "select space…".to_string()
-    } else {
-        format!("{} spaces ▾", registered().len())
-    };
+    let spaces = spaces_resource.cloned().unwrap_or_default();
 
     rsx! {
-        button {
-            class: "picker-trigger",
-            onclick: move |_| open.set(!open()),
-            "{trigger_label}"
-        }
-        if open() {
-            // Click-outside to close: a transparent overlay that
-            // absorbs clicks anywhere outside the panel.
-            div {
-                class: "picker-overlay",
-                style: "position: fixed; inset: 0; z-index: 40;",
-                onclick: move |_| open.set(false),
+        section { class: "picker",
+
+            div { class: "picker-head",
+                span { class: "picker-label", "spaces" }
+                span { class: "picker-count", "({spaces.len()})" }
             }
-            div { class: "picker-panel",
-                // Stop propagation so clicks inside the panel don't
-                // reach the overlay.
-                onclick: move |e| e.stop_propagation(),
-
-                p { class: "picker-label", "Spaces" }
-                if registered().is_empty() {
-                    p { class: "picker-empty",
-                        "No spaces yet — type a path below, or run `notez space register <name> --path <dir>` from a terminal to add one permanently."
-                    }
-                } else {
-                    for r in registered().iter() {
-                        button {
-                            class: "picker-option",
-                            onclick: {
-                                let path = r.path.clone();
-                                move |_| {
-                                    navigator.push(route_for_space_list(&path));
-                                    open.set(false);
+            if spaces.is_empty() {
+                p { class: "picker-empty",
+                    "No spaces yet. Register a path below, or run "
+                    code { "notez space register <name> --path <dir>" }
+                    " from a terminal to add one permanently."
+                }
+            } else {
+                ul { class: "picker-list",
+                    for s in spaces.iter() {
+                        li { class: "picker-row",
+                            a {
+                                class: "picker-link",
+                                href: "{route_for_space_list(&s.path)}",
+                                span { class: "picker-name", "{s.name}" }
+                                span { class: "picker-path", "{s.path}" }
+                                if s.source == "discovered" {
+                                    span { class: "picker-tag", "found" }
                                 }
-                            },
-                            span { class: "name", "{r.name}" }
-                            if r.source == "discovered" {
-                                span { class: "picker-tag", "found" }
                             }
-                            span { class: "path", "{r.path}" }
                         }
                     }
                 }
-
-                hr { class: "rule" }
-                p { class: "picker-label", "Or open by path" }
-                input {
-                    class: "picker-input",
-                    r#type: "text",
-                    placeholder: "/absolute/path/to/space",
-                    value: "{manual}",
-                    oninput: move |e| manual.set(e.value()),
-                    onkeydown: move |e| {
-                        if e.key() == Key::Enter {
-                            // Trigger switch via the same path the
-                            // button uses; close popover on success.
-                            let p = manual().trim().to_string();
-                            if p.is_empty() { return; }
-                            let nav = navigator.clone();
-                            pending.set(true);
-                            error.set(None);
-                            spawn(async move {
-                                match resolve_space_path(p.clone()).await {
-                                    Ok(_) => {
-                                        nav.push(route_for_space_list(&p));
-                                        open.set(false);
-                                        pending.set(false);
-                                    }
-                                    Err(e) => {
-                                        error.set(Some(e.to_string()));
-                                        pending.set(false);
-                                    }
-                                }
-                            });
-                        }
-                    },
-                }
-                button {
-                    class: "picker-go",
-                    disabled: pending() || manual().trim().is_empty(),
-                    onclick: move |_| {
-                        let p = manual().trim().to_string();
-                        if p.is_empty() { return; }
-                        let nav = navigator.clone();
-                        pending.set(true);
-                        error.set(None);
-                        spawn(async move {
-                            match resolve_space_path(p.clone()).await {
-                                Ok(_) => {
-                                    nav.push(route_for_space_list(&p));
-                                    open.set(false);
-                                    pending.set(false);
-                                }
-                                Err(e) => {
-                                    error.set(Some(e.to_string()));
-                                    pending.set(false);
-                                }
-                            }
-                        });
-                    },
-                    if pending() { "…" } else { "open" }
-                }
-                if let Some(msg) = error() {
-                    p { class: "picker-error", "{msg}" }
+            }
+            details { class: "picker-add",
+                summary { class: "picker-add-summary", "register a space" }
+                form {
+                    class: "picker-add-form",
+                    action: "/api/spaces/register",
+                    method: "post",
+                    label {
+                        class: "picker-add-label",
+                        r#for: "picker-add-name",
+                        "name"
+                    }
+                    input {
+                        id: "picker-add-name",
+                        class: "picker-add-input",
+                        r#type: "text",
+                        name: "name",
+                        placeholder: "personal",
+                        required: true,
+                    }
+                    label {
+                        class: "picker-add-label",
+                        r#for: "picker-add-path",
+                        "absolute path"
+                    }
+                    input {
+                        id: "picker-add-path",
+                        class: "picker-add-input",
+                        r#type: "text",
+                        name: "path",
+                        placeholder: "/absolute/path/to/space",
+                        required: true,
+                    }
+                    button {
+                        class: "picker-add-go",
+                        r#type: "submit",
+                        "register"
+                    }
                 }
             }
         }

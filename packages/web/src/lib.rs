@@ -13,11 +13,11 @@
 #![allow(non_snake_case)]
 
 use dioxus::prelude::*;
-
 pub mod layout;
 pub mod model;
 pub mod pages;
 pub mod router;
+pub mod routes;
 pub mod server;
 pub mod space_ctx;
 

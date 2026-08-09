@@ -1,0 +1,144 @@
+#+title: Notez v0.2 web 客户端 — 全部操作可达 (2026-08-09)
+#+date: 2026-08-09
+#+STARTUP: showeverything
+
+本设计承接 [[file:2026-08-03-notez-v01-web-client-design.org][v0.1 web 客户端设计]]，并修复其两个硬伤：(1) picker 点击
+无效（SSR-only 二进制从未向浏览器交付 WASM 客户端），(2) v0.1 仅
+只读，=add space= / =scan= / =watch= 三个动作只能在 CLI / MCP 上
+跑。本 spec 的设计原则是「**所有 notez 暴露的操作都必须在 UI 上可
+达**」，而 v0.2 选择走 progressive enhancement 路线而非「再水合」。
+
+* 1. 现状问题
+
+v0.1 跑起来的现状（运行 =cargo run -p web --bin web=）：
+
+- SSR 渲染出完整 HTML，包括 picker、list、detail 三个页面。
+- HTML 中所有交互元素都带 =data-node-hydration= 占位符，但浏览
+  器侧从未收到 =web_bg.wasm= / =web.js= 客户端包 —— Dioxus 默认
+  feature =server= 不会构建客户端；=dx build --fullstack= 在本仓
+  也未产出 =public/assets/= 内容（dx 0.7.10 + krates 0.17.5 在
+  本环境存在 feature-list 解析 bug）。
+- 结果：点击 picker trigger、scan 按钮、注册表单 POST 之后，
+  浏览器侧 =onclick= 处理器根本没绑，按钮是死的。
+
+* 2. 设计目标与非目标
+
+**目标**：
+
+- 在不需要 WASM 客户端的前提下，让 =add space= / =scan= / =watch=
+  三个动作在 UI 上全部可达。
+- picker 渲染时不依赖 JS 弹层；用 =details= 元素让 manual input
+  / register form 永远可见。
+- watch 状态可观察：UI 显示「watching」徽章 + 最近事件。
+
+**非目标**（v0.2 不做）：
+
+- 不重新构建 WASM 客户端路径（=core= 当前依赖 rusqlite 的 C 绑
+  定，wasm32-unknown-unknown 编译需要单独 C 工具链，拆 =core= 的
+  ROI 不够）。
+- 不做实时 SSE / WebSocket 推送事件；UI 通过刷新页面或直查
+  =GET /api/spaces/watch/state?path=...= 取最新事件。
+- 不引入 =notez://= scheme / OAuth / Agent 等 v0.6+ 才有的能力。
+
+* 3. 架构
+
+**核心问题**：Dioxus fullstack 的 =serve_dioxus_application= 返回
+=Router<()>=（=FullstackState= 在内部用 =with_state= 闭合），所以
+「在 Dioxus app 路由上挂载自定义路由」只能走 =Router::merge=，要
+求两边状态类型一致。
+
+**解决路径**：
+
+- 把所有自定义 handler 写成闭包，闭包捕获 =WebState=（=Arc<WatchService>=  +
+  =Arc<Mutex<HashMap<PathBuf, Arc<Mutex<ApplicationFacade>>>>>=）。
+- 闭包闭包闭包 =build_router(state) -> Router=（state 类型 =()=）
+  可与 =serve_dioxus_application= 的 =Router<()>= 直接 =merge=。
+- main.rs 切换 =LaunchBuilder= → =dioxus_server::serve=，闭包里
+  构造 merged router。
+
+* 4. 新增的端点
+
+| Method | Path                                       | Body                | Effect                                   |
+|--------+--------------------------------------------+---------------------+------------------------------------------|
+| POST   | /api/spaces/register                       | name, path          | 校验 → 写 global config → 303 跳到 list  |
+| POST   | /api/spaces/scan                           | space_root 或 encoded | 跑 =scan_native= → 303 跳回 list        |
+| POST   | /api/spaces/watch/start                    | space_root          | =WatchService::start= → 303 跳到 list   |
+| POST   | /api/spaces/watch/stop                     | space_root          | =WatchService::stop= → 303 跳回 list    |
+| GET    | /api/spaces/watch/state?path=...           | (query)             | JSON {status, events[]}                 |
+
+所有 POST 都返回 =303 See Other=，浏览器自动 GET 跳回的 URL；这
+是 progressive enhancement 的关键，curl 测的时候要加
+=--post303= 才能正确跟随。
+
+* 5. WatchService 设计
+
+放在 =crates/core/src/application/watch.rs=，独立于 ApplicationFacade
+（避免持锁跨 await）：
+
+#+BEGIN_SRC rust
+pub struct WatchService { /* Mutex<HashMap<PathBuf, WatchHandle>> */ }
+
+pub struct WatchHandle {
+    pub space_root: PathBuf,
+    pub started_at: SystemTime,
+    _watcher: RecommendedWatcher, // drop 时自动 detach
+    events: Mutex<VecDeque<WatchEvent>>, // ring buffer, 上限 200
+}
+
+pub enum WatchKind { Create, Modify, Remove, Rename }
+pub struct WatchEvent { at, kind, path }
+pub struct WatchStatus { space_root, started_at, event_count }
+#+END_SRC
+
+**为什么 watcher 不直接调 scan**？rusqlite::Connection 是 !Send，
+=SqliteProjection= 不可跨线程共享。让 watcher 线程触发 scan 等于
+「从通知线程锁 facade」，这违反现有 application 层的锁规则。正确
+路径是 watcher 只记录事件；re-scan 交回给调用方（=notez watch= 守
+护进程 / HTTP handler / 单独的 cron）。
+
+* 6. CLI / MCP 镜像
+
+- CLI：=notez watch [start | stop | status --limit N]= 三个子命令。
+  start 阻塞直到 SIGINT（=libc::signal= 装一个原子标志），每 500ms
+  拉取新事件到 stdout。
+- MCP：=watch_start= / =watch_stop= / =watch_status= 三个工具，与
+  CLI 共享 =WatchService= 行为。
+
+* 7. UI 改动
+
+- =pages/picker.rs=：废弃 popover 与 use_signal(open)；改为
+  =use_server_future(|| async { list_registered_spaces() })= 阻塞
+  SSR，渲染 =ul.picker-list= + =details.picker-add= 表单。
+- =pages/list.rs=：controls 行末尾加 =scan= / =watch= 两个
+  =<form>= 按钮，=form action= =/api/spaces/scan= 之类。
+  =WatchPanel= 组件在 results 下方显示（active 状态 + 提示链到
+  watch state JSON）。
+- =pages/home.rs=：无功能性改动；只是 picker 现在显示真正的 space
+  列表了。
+- =pages/header.rs=：无改动；继续把 =SpacePicker= 塞进
+  =.spine-inner=。
+
+* 8. 已验证场景（2026-08-09 实际跑过）
+
+1. 浏览器开 =http://127.0.0.1:8765/= → 渲染 4 个 space 链接。
+2. 点 =notez= 链接 → 跳到 list 页，spine 显示 =space · notez=，
+   渲染 496 行 resource。
+3. 点 controls 行的 =scan= → 303 跳回 list；计数器仍为 496（已是
+   最新）。点 =watch= → 303 跳到 =?watch=1=。
+4. 浏览器外的 =echo > docs/x.org; rm docs/x.org= → server 端
+   =GET /api/spaces/watch/state?path=...= 返回
+   ={kind:create, kind:modify, kind:remove}= 三个事件。
+5. CLI =./target/debug/notez watch start= 在另一个 shell 跑同样
+   的文件操作，stdout 实时打印三条事件；SIGINT 后正常退出。
+6. MCP 启动 =notez mcp serve=，调 =watch_start= / =watch_status= /
+   =watch_stop= 三个工具，行为与 CLI / HTTP 一致。
+
+* 9. 已知遗留（不进 v0.2）
+
+- WASM 客户端路径仍 dead —— 拆 =core= 的 rusqlite 依赖以支持
+  wasm32 是不小的工作。v0.3 视需求再开。
+- watch 状态面板没有自动刷新（要手动 reload）。要真「实时」得上
+  SSE / WebSocket，Dioxus 0.7 没有原生支持。
+- =core/src/lib.rs= 的 watch.rs 没有 re-export =notify= 自身，所以
+  下游 crate 没办法直接拿 =notify::Event= 类型；当前只有 core 内
+  部使用，不算问题。

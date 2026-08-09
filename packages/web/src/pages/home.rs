@@ -50,12 +50,24 @@ pub fn HomePage() -> Element {
                         "If the space has not been scanned yet, run "
                         code { "notez scan" }
                         " in that directory from your terminal. The list will populate the next time the page loads."
+                    li {
+                        "Click any space link in the picker to open its resource list. On the list page, use the "
+                        span { class: "mono", "scan" }
+                        " button to re-index the space, and the "
+                        span { class: "mono", "watch" }
+                        " button to start a filesystem watcher. The watcher records events; combine it with a manual scan to keep the index fresh."
+                    }
+                    li {
+                        "If a space is missing from the picker, expand the "
+                        span { class: "mono", "register a space" }
+                        " section at the bottom of the picker and submit the form."
                     }
                 }
                 p { class: "lede dim",
-                    "A space is a directory on disk — it is the single source of truth. The web reader is read-only."
-                }
-            }
+                    "A space is a directory on disk — it is the single source of truth. The web client covers register / scan / watch; mutation is still terminal-only."
+                 }
+             }
+         }
         }
     }
 }

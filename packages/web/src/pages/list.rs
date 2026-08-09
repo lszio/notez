@@ -39,6 +39,7 @@ pub fn ListPage(encoded: String) -> Element {
 
     // Server fetch.
     let active_path = space().map(|s| s.path.clone());
+    let active_path_for_forms = active_path.clone();
     let resources = use_server_future(move || {
         let p = active_path.clone();
         async move {
@@ -158,7 +159,41 @@ pub fn ListPage(encoded: String) -> Element {
                         "{visible.len()} / {total}"
                     }
                 }
-            }
+                div { class: "control-spacer" }
+                div { class: "control",
+                    form {
+                        class: "control-form",
+                        action: "/api/spaces/scan",
+                        method: "post",
+                        input {
+                            r#type: "hidden",
+                            value: "{active_path_for_forms.clone().unwrap_or_default()}",
+                        }
+                        button {
+                            class: "control-action",
+                            r#type: "submit",
+                            "scan"
+                        }
+                    }
+                }
+                div { class: "control",
+                    form {
+                        class: "control-form",
+                        action: "/api/spaces/watch/start",
+                        method: "post",
+                        input {
+                            r#type: "hidden",
+                            name: "space_root",
+                            value: "{active_path_for_forms.clone().unwrap_or_default()}",
+                        }
+                        button {
+                            class: "control-action",
+                            r#type: "submit",
+                            "watch"
+                        }
+                    }
+                }
+             }
 
             // ----- Results -----
             div { class: "results-head",
@@ -194,10 +229,38 @@ pub fn ListPage(encoded: String) -> Element {
                 }
             }
 
+            // ----- Watch panel -----
+            WatchPanel { active_path: active_path_for_forms.clone() }
+
             div { class: "footer-rule",
                 span { "notez · reader" }
                 span { "·" }
                 span { "all kinds in one view" }
+            }
+        }
+    }
+}
+#[component]
+fn WatchPanel(active_path: Option<String>) -> Element {
+    if active_path.is_none() {
+        return rsx! { Fragment {} };
+    }
+    let path_str = active_path.unwrap_or_default();
+    rsx! {
+        section { class: "watch-panel",
+            div { class: "watch-head",
+                span { class: "watch-label", "watch" }
+                form {
+                    action: "/api/spaces/watch/stop",
+                    method: "post",
+                    input { r#type: "hidden", name: "space_root", value: "{path_str}" }
+                    button { class: "watch-btn", r#type: "submit", "stop" }
+                }
+            }
+            p { class: "watch-hint",
+                "Visit /api/spaces/watch/state?path=" 
+                code { "{path_str}" }
+                " for the live event log."
             }
         }
     }
@@ -208,14 +271,14 @@ fn ResultRow(row: ResourceRow, current: String) -> Element {
     let ref_link = format!(
         "/space/{}/resource/{}",
         current,
-        encode_space(&row.ref_str)
+        crate::router::encode_space(&row.ref_str)
     );
     rsx! {
         div { class: "result",
             span { class: "col-ref",
                 KindIcon { kind: row.kind.clone() }
                 a { href: "{ref_link}", "{row.ref_str}" }
-            }
+             }
             span { class: "col-title",
                 a { href: "{ref_link}", "{row.title}" }
                 span { class: "meta", "— {row.source_id}" }
