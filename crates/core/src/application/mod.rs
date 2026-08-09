@@ -16,7 +16,7 @@ pub mod federation;
 pub use attachment::ExtractionResult;
 pub mod service;
 pub mod use_cases;
-pub use federation::SpaceSourcesConfig;
+pub mod use_cases_impl;
 pub mod task_para;
 pub use task_para::{AgendaItem, AgendaView, ParaOverview};
 pub use link_resolution::{LinkReindexReport, LinkResolver};

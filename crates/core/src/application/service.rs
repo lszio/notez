@@ -297,12 +297,12 @@ pub struct ScanReport {
 }
 
 pub struct ApplicationFacade<S: ProjectionStore> {
-    store: S,
-    rule_engine: crate::domain::RuleEngine,
-    format_parsers: Vec<Box<dyn crate::source::FormatParser>>,
-    space: Option<SpaceContext>,
-    capability_catalog: crate::capability::CapabilityCatalog,
-    source_registry: crate::source::SourceRegistry,
+    pub(crate) store: S,
+    pub(crate) rule_engine: crate::domain::RuleEngine,
+    pub(crate) format_parsers: Vec<Box<dyn crate::source::FormatParser>>,
+    pub(crate) space: Option<SpaceContext>,
+    pub(crate) capability_catalog: crate::capability::CapabilityCatalog,
+    pub(crate) source_registry: crate::source::SourceRegistry,
 }
 
 /// Backwards-compatible alias for [`ApplicationFacade`]. New code should
@@ -562,191 +562,6 @@ impl<S: ProjectionStore> ApplicationFacade<S> {
         <Self as crate::application::use_cases::ScanUseCase>::scan_native(self, root)
     }
 
-    pub fn scan_federation_impl(&mut self, space_root: &Path) -> Result<ScanReport, ApplicationError> {
-        use crate::source::SourceAdapter;
-
-        let mut total_resources = 0;
-
-        let sources_cfg = crate::application::federation::SpaceSourcesConfig::load(space_root)
-            .map_err(|e| ApplicationError::Storage {
-                kind: StorageErrorKind::InvalidState,
-                message: e.to_string(),
-            })?;
-        let exclude_paths: Vec<std::path::PathBuf> =
-            sources_cfg.sources.iter().map(|s| s.path.clone()).collect();
-
-        let native_config = crate::source::SourceConfig {
-            id: "native".to_string(),
-            kind: crate::source::SourceKind::Native,
-            path: space_root.to_path_buf(),
-            read_only: false,
-            include_paths: vec![],
-            exclude_paths,
-        };
-        let native_adapter = crate::source::NativeSourceAdapter::new(native_config);
-        let native_scanned = native_adapter
-            .scan()
-            .map_err(|e| {
-                ApplicationError::Storage {
-                    kind: StorageErrorKind::InvalidState,
-                    message: e.to_string(),
-                }
-            })?;
-
-        total_resources += native_scanned.resources.len();
-
-        self.store
-            .replace_source(
-                "native",
-                native_scanned.resources,
-                native_scanned.relations,
-                native_scanned.link_occurrences.clone(),
-            )
-            .map_err(|e| ApplicationError::Storage {
-                    kind: StorageErrorKind::Sqlite,
-                    message: e.to_string(),
-                })?;
-
-        crate::application::link_resolution::resolve_and_store_links(&mut self.store, "native", native_scanned.link_occurrences)?;
-
-        let sources_cfg = crate::application::federation::SpaceSourcesConfig::load(space_root)
-            .map_err(|e| ApplicationError::Storage {
-                kind: StorageErrorKind::InvalidState,
-                message: e.to_string(),
-            })?;
-        for src_cfg in sources_cfg.sources {
-            let adapter = self
-                .source_registry
-                .build(src_cfg.clone())
-                .map_err(|e| {
-                    ApplicationError::Storage {
-                        kind: StorageErrorKind::InvalidState,
-                        message: e.to_string(),
-                    }
-                })?;
-            let scanned = adapter
-                .scan()
-                .map_err(|e| {
-                    ApplicationError::Storage {
-                        kind: StorageErrorKind::InvalidState,
-                        message: e.to_string(),
-                    }
-                })?;
-
-            total_resources += scanned.resources.len();
-
-            self.store
-                .replace_source(
-                    &src_cfg.id,
-                    scanned.resources,
-                    scanned.relations,
-                    scanned.link_occurrences.clone(),
-                )
-                .map_err(|e| ApplicationError::Storage {
-                    kind: StorageErrorKind::Sqlite,
-                    message: e.to_string(),
-                })?;
-
-            crate::application::link_resolution::resolve_and_store_links(&mut self.store, &src_cfg.id, scanned.link_occurrences)?;
-        }
-
-        let mut resolved_count = 0;
-        let page = self.query_impl(&crate::domain::Selector::new())?;
-        for res in page.items {
-            let rels = self.store.query_resolved_relations(&res.r#ref).unwrap_or_default();
-            resolved_count += rels.len();
-        }
-
-        Ok(ScanReport {
-            scanned_files: total_resources, // Note: not fully accurate, but historically used
-            scanned_resources: total_resources,
-            scanned_relations: resolved_count,
-        })
-    }
-
-    pub fn scan_native_impl(&mut self, root: &Path) -> Result<ScanReport, ApplicationError> {
-        use crate::source::native::NativeSourceAdapter;
-        use crate::source::SourceAdapter;
-        use crate::application::link_resolution::resolve_and_store_links;
-
-        if self.format_parsers.is_empty() {
-            return Err(ApplicationError::Storage {
-                kind: StorageErrorKind::InvalidState,
-                message: "no format parsers registered; call ApplicationService::register_format_parser at composition root before scanning".to_string(),
-            });
-        }
-
-        let config = crate::source::SourceConfig {
-            id: "native".to_string(),
-            kind: crate::source::SourceKind::Native,
-            path: root.to_path_buf(),
-            read_only: false,
-            include_paths: vec![],
-            exclude_paths: vec![],
-        };
-        let adapter = NativeSourceAdapter::new(config);
-        // `NativeSourceAdapter` already wires the Org/Markdown parsers it
-        // ships with. We still consult any parsers the service registered
-        // for additional MIME types. Scan via the adapter, then merge any
-        // extra-parser results for non-handled MIMEs (none today, but
-        // keeps the seam open).
-        let mut scanned = adapter
-            .scan()
-            .map_err(|e| {
-                ApplicationError::Storage {
-                    kind: StorageErrorKind::InvalidState,
-                    message: e.to_string(),
-                }
-            })?;
-        for parser in &self.format_parsers {
-            if parser.supports("text/org") || parser.supports("text/markdown") {
-                continue;
-            }
-            // Additional MIME support: not used by the built-in transports.
-            // Reserved for future extension.
-            let _ = parser;
-        }
-
-        let scanned_files = scanned
-            .resources
-            .iter()
-            .map(|r| r.locator.clone())
-            .collect::<std::collections::BTreeSet<_>>()
-            .len();
-        let scanned_resources = scanned.resources.len();
-        let link_occurrences = scanned.link_occurrences.clone();
-        self.store
-            .replace_source(
-                "native",
-                std::mem::take(&mut scanned.resources),
-                std::mem::take(&mut scanned.relations),
-                link_occurrences.clone(),
-            )
-            .map_err(|e| ApplicationError::Storage {
-                    kind: StorageErrorKind::Sqlite,
-                    message: e.to_string(),
-                })?;
-
-        resolve_and_store_links(&mut self.store, "native", link_occurrences)?;
-
-        let mut resolved_count = 0;
-        let page = self.query_impl(&crate::domain::Selector::new())?;
-        for res in page.items {
-            if res.source_id == "native" {
-                let rels = self
-                    .store
-                    .query_resolved_relations(&res.r#ref)
-                    .unwrap_or_default();
-                resolved_count += rels.len();
-            }
-        }
-
-        Ok(ScanReport {
-            scanned_files,
-            scanned_resources,
-            scanned_relations: resolved_count,
-        })
-    }
 
     pub fn resolve_impl(&self, query_str: &str) -> Result<ResolveResult, ApplicationError> {
         let trimmed = query_str.trim();
@@ -1570,7 +1385,7 @@ impl<S: ProjectionStore> ApplicationFacade<S> {
                 }
             })?;
 
-        self.scan_native_impl(space_root)?;
+        <Self as crate::application::use_cases::ScanUseCase>::scan_native(self, space_root)?;
 
         Ok(report)
     }
@@ -1791,18 +1606,6 @@ impl<S: crate::domain::ProjectionStore> crate::application::use_cases::ResourceU
 
 }
 
-impl<S: crate::domain::ProjectionStore> crate::application::use_cases::ScanUseCase for ApplicationFacade<S> {
-    fn scan_native(&mut self, root: &std::path::Path) -> Result<ScanReport, ApplicationError> {
-        ApplicationFacade::scan_native_impl(self, root)
-    }
-
-    fn scan_federation(
-        &mut self,
-        space_root: &std::path::Path,
-    ) -> Result<ScanReport, ApplicationError> {
-        ApplicationFacade::scan_federation_impl(self, space_root)
-    }
-}
 impl<S: crate::domain::ProjectionStore> crate::application::use_cases::LinkUseCase for ApplicationFacade<S> {
     fn query_link_occurrences(
         &self,
