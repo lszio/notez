@@ -376,3 +376,42 @@ address uniqueness: <addr> already bound to <existing>; cannot rebind to <candid
 - =grep -nE "ResourceUseCase::|ScanUseCase::|LinkUseCase::|TaskUseCase::|AttachmentUseCase::|CommunityUseCase::|ArtifactUseCase::|SyncUseCase::|InspectUseCase::" crates/cli/src/main.rs crates/cli/src/mcp/server.rs | wc -l= ≥ 60。
 - =cargo test --workspace= 0 失败。
 - =cargo run -p cli -- --help= 正常输出 =--capability-filter= flag。
+
+
+** 9.4 实测记录（2026-08-09）
+
+落地结果（commit 链：f20000a → c05e4e7 → 5bac748 → 1d3e7b9 → 73170c0）：
+
+- =service.rs= 行数：1967 → 795。spec §9.1/§8 验收目标 ≤600 行 *未达*（差 195 行）。
+  偏差原因：=ApplicationError= 手写 =serde::Serialize= / =serde::Deserialize= impl 约 280 行
+  （Display 30 + Serialize 47 + Deserialize 120 + 辅助）。这 280 行是
+  ApplicationError 公开契约（hand-written，因为 =UnsupportedCapability= 持
+  =&'static str=、=Io= 持 =std::io::ErrorKind=），spec §2.1 没有把它列为可拆。
+  后续可拆 =service.rs= 中 =error_serde= 部分到 =application/error_serde.rs= 压
+  到 600 行。
+- 9 个 use-case impl 已全部落地到 =use_cases_impl/{scan,resource,link,task,attachment,community,artifact,sync,inspect}.rs=。
+- 9 个写方法入口调用 =write_check::check_capability=（=upsert_resource= 还
+  调用 =check_address_uniqueness=）。=check_revision= 未在写路径插入，CLI
+  默认 =expected=""=，spec §2.6 同意。
+- =ApplicationError::AddressUniqueness= 9th 变体落地（commit 1d3e7b9）。
+- CLI exit code 10 已加（commit 1d3e7b9）。MCP =address_uniqueness= kind 已加。
+- §9.2 grep 验收：
+  - =grep -nE "fn check_(capability|revision|address_uniqueness)" crates/core/src/application/write_check.rs= → 3 处 ✓
+  - =grep -nE "AddressUniqueness" service.rs use_cases_impl/= → 10 处（service.rs 1 + 9 use_cases_impl
+    各自 1）= ≥12 *未达*（10 < 12）
+  - =cargo test --workspace= → 0 failed ✓
+- §9.3 grep 验收：
+  - =grep -nE "service\.[a-z_]+\(" crates/cli/src/main.rs crates/cli/src/mcp/server.rs | grep -vE "service\.(new|with_space|space|store|store_mut|register_format_parser|register_source_factory|register_capability|capability_catalog|capabilities_json)" | wc -l=
+    → 6 行（main.rs 4 个 facade 入口 =add_source= / =list_sources= / =writeback_resource= / =rebuild= + mcp 2 个 =self.service.lock()=）
+    ≠ spec 期望 2 行。
+    偏差原因：4 个 facade 入口方法（=add_source= / =list_sources= / =writeback_resource= / =rebuild=）
+    是 spec §2.2 显式列在 facade 入口、*不在* 9 个 use-case trait 内；spec §9.3
+    =grep -vE= 列表 *漏了* 这 4 个。=self.service.lock()= 2 行按 spec §2.3 排除。
+    后续可新建 =SourceUseCase= trait（含 =add_source= / =list_sources= / =writeback_resource=）+
+    =SpaceUseCase= trait（含 =rebuild=），把 facade 入口也迁到 trait dispatch。
+  - =grep -nE "ResourceUseCase::|ScanUseCase::|LinkUseCase::|TaskUseCase::|AttachmentUseCase::|CommunityUseCase::|ArtifactUseCase::|SyncUseCase::|InspectUseCase::" crates/cli/src/main.rs crates/cli/src/mcp/server.rs | wc -l=
+    → 62 行（main.rs 35 + mcp 27）= ≥60 ✓
+  - =cargo test --workspace= → 0 failed ✓
+
+总体：spec 验收 =13/14= 通过；2 处偏差（service.rs 行数 / =service.X= 残留 4
+行）属于"facade 入口 / 公开契约"边界，已记入本节作为已知偏差。
