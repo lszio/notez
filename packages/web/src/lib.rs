@@ -27,7 +27,7 @@ pub use router::Route;
 fn App() -> Element {
     rsx! {
         crate::layout::Layout {
-            crate::router::Router {}
+            crate::router::AppRouter::<Route> {}
         }
     }
 }

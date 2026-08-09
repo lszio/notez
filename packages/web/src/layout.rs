@@ -1,20 +1,13 @@
 //! App shell.
 //!
-//! The Layout is a thin context provider + error banner. The
-//! header (with the SpacePicker that uses `use_navigator`) lives
-//! inside each page component so it always renders as a
-//! descendant of the Router context.
-//!
-//! What Layout does:
-//! 1. Provides the `space_ctx` Signal that the per-page
-//!    `use_space_layout` populates and the picker / error banner
-//!    read.
-//! 2. Renders a global error banner driven by
-//!    `space_ctx.status`.
-//! 3. Renders the page children below.
+//! The Layout is the top-level container that holds the error
+//! banner, the left sidebar, and the per-page main column. The
+//! `space_ctx` signal is provided here so the sidebar, error
+//! banner, and pages can all read the active space's metadata.
 
 use dioxus::prelude::*;
 
+use crate::pages::SpaceSidebar;
 use crate::space_ctx::{SpaceState, SpaceStatus};
 
 #[component]
@@ -22,9 +15,11 @@ pub fn Layout(children: Element) -> Element {
     use_context_provider(|| Signal::new(None::<SpaceState>));
     let space_ctx = use_context::<Signal<Option<SpaceState>>>();
 
+    let active_path = space_ctx().map(|s| s.path.clone());
+
     rsx! {
         div { class: "shell",
-            // Global error banner driven by space_ctx.
+            // ----- Global error banner (above the spine) -----
             {
                 let s = space_ctx();
                 if let Some(SpaceState { status: SpaceStatus::Error(e), path, .. }) = s.clone() {
@@ -42,7 +37,13 @@ pub fn Layout(children: Element) -> Element {
                     rsx! { Fragment {} }
                 }
             }
-            {children}
+
+            div { class: "shell-body",
+                SpaceSidebar { active_path }
+                main { class: "main",
+                    {children}
+                }
+            }
         }
     }
 }

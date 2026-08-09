@@ -13,20 +13,20 @@
 use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
-
 use dioxus::prelude::*;
-use notez_core::application::ApplicationFacade;
-use notez_core::config::web_space::{
-    list_spaces as core_list_spaces, resolve_space as core_resolve_space, RegisteredSpace,
-    SpaceSource, WebSpaceError,
+use notez_core::application::{ApplicationFacade, Graph, GraphEdge, GraphNode};
+use notez_core::config::{
+    web_space::{
+        list_spaces as core_list_spaces, resolve_space as core_resolve_space,
+        RegisteredSpace, SpaceSource, WebSpaceError,
+    },
+    SelectedSpace,
 };
-use notez_core::config::SelectedSpace;
 use notez_core::domain::{Resource, ResourceRef, Selector};
 use notez_core::storage::SqliteProjection;
 use serde::{Deserialize, Serialize};
 
 use crate::model::ResourceRow;
-
 // ---- DTO surface -----------------------------------------------------------
 
 /// Lightweight snapshot of a registered space, returned to the UI for
@@ -195,6 +195,22 @@ pub async fn get_resource(
         .map_err(|e| ServerFnError::new(e.to_string()))
 }
 
+#[server]
+pub async fn list_graph(space_root: String) -> Result<Graph, ServerFnError> {
+    list_graph_impl(Path::new(&space_root))
+        .await
+        .map_err(|e| ServerFnError::new(e.to_string()))
+}
+
+#[server]
+pub async fn neighbor_graph(
+    space_root: String,
+    ref_str: String,
+) -> Result<Graph, ServerFnError> {
+    neighbor_graph_impl(Path::new(&space_root), &ref_str)
+        .await
+        .map_err(|e| ServerFnError::new(e.to_string()))
+}
 // ---- _impl helpers (unit-testable) -----------------------------------------
 
 pub async fn list_resources_impl(space_root: &Path) -> Result<Vec<ResourceRow>, String> {
@@ -219,6 +235,28 @@ pub async fn get_resource_impl(
     let res: Option<Resource> = facade.read(&r_ref).map_err(|e| e.to_string())?;
     Ok(res.map(ResourceRow::from))
 }
+// ---- tests -----------------------------------------------------------------
+
+
+/// Build the full force-directed graph for a space. Used by the
+/// `/space/.../graph` page.
+pub async fn list_graph_impl(space_root: &Path) -> Result<Graph, String> {
+    let sel = core_resolve_space(space_root).map_err(|e| e.to_string())?;
+    let db_path = sel.space_root.join(".notez/index.sqlite");
+    let store = SqliteProjection::open(&db_path).map_err(|e| e.to_string())?;
+    let facade = ApplicationFacade::new(store);
+    Graph::from_facade(&facade).map_err(|e| e.to_string())
+}
+
+/// Build a 1-hop subgraph around `focus_ref`. Used by the
+/// detail-page neighbour graph.
+pub async fn neighbor_graph_impl(space_root: &Path, focus_ref: &str) -> Result<Graph, String> {
+    let sel = core_resolve_space(space_root).map_err(|e| e.to_string())?;
+    let db_path = sel.space_root.join(".notez/index.sqlite");
+    let store = SqliteProjection::open(&db_path).map_err(|e| e.to_string())?;
+    let facade = ApplicationFacade::new(store);
+    Graph::neighborhood(&facade, focus_ref).map_err(|e| e.to_string())
+}
 
 // ---- tests -----------------------------------------------------------------
 
@@ -227,6 +265,8 @@ mod tests {
     use super::*;
     use std::fs;
     use tempfile::tempdir;
+
+
 
     fn write_minimal_space(root: &Path) {
         fs::create_dir_all(root.join(".notez")).unwrap();

@@ -20,8 +20,9 @@ pub mod service;
 pub mod use_cases;
 pub mod use_cases_impl;
 pub mod watch;
+pub mod graph;
 pub use watch::{WatchError, WatchEvent, WatchKind, WatchService, WatchStatus};
-
+pub use graph::{layout_force, Graph, GraphEdge, GraphNode, MAX_NODES};
  pub mod task_para;
 pub use link_resolution::{LinkReindexReport, LinkResolver};
 pub use context::SpaceContext;

@@ -1,105 +1,123 @@
-//! SpacePicker — a navigation aid for switching spaces.
+//! SpaceSidebar — the fixed left sidebar that lists every
+//! registered space and offers the register-a-space form.
 //!
-//! The Dioxus fullstack web client runs without a hydrated WASM
-//! bundle: every interaction is a plain HTML form submit or anchor
-//! click. The picker reflects that:
-//!
-//! - A short table of every registered / discovered space, each row
-//!   a link to `/space/<encoded>/list`.
-//! - A `<details>` block with a form to register a new space by path.
-//!   Submitting POSTs to `/api/spaces/register` and the server
-//!   redirects to the new space's list page on success.
+//! v0.3 of the web client moves the picker out of the page header
+//! into a proper left column so the page main column can breathe.
+//! The sidebar is rendered by `Layout`; it is identical on every
+//! page so the user can switch spaces from anywhere.
 //!
 //! The list is fetched via `use_server_future`; the SSR pass
 //! suspends until the list is ready, then the rendered HTML is
-//! static. No client hydration is required. That is the right
-//! trade-off for a v0.1 reader that must work without a client
-//! bundle.
+//! static. No client hydration is required.
 //!
-//! Visual style: an old filing-cabinet drawer. The picker label
-//! reads "spaces"; each option is a small index-card with the space
-//! name and absolute path.
+//! The "current space" indicator is the encoded path on the active
+//! route (if any) compared against each entry's path. We do not
+//! need `space_ctx` because the route segment is authoritative.
 
 use dioxus::prelude::*;
-use crate::pages::ui::{Breadcrumb, BreadcrumbSegment};
 use crate::router::route_for_space_list;
 use crate::server::{list_registered_spaces, RegisteredSpaceDto};
-
+/// Render the spaces sidebar.
+///
+/// `active_path`: the decoded path of the space the user is
+/// currently inside, or `None` when on the home page. When
+/// `Some`, the matching sidebar row gets the `.is-current`
+/// modifier so the user can see where they are.
 #[component]
-pub fn SpacePicker() -> Element {
-    // `use_server_future` blocks the SSR render until the future
-    // resolves, so the list is already in the HTML on first paint.
-    // Without client hydration, the value is read once.
+pub fn SpaceSidebar(active_path: Option<String>) -> Element {
     let spaces_resource = use_server_future(|| async {
         list_registered_spaces().await.unwrap_or_default()
     })?;
+    let spaces: Vec<RegisteredSpaceDto> = spaces_resource.cloned().unwrap_or_default();
 
-    let spaces = spaces_resource.cloned().unwrap_or_default();
+    let current_normalized = active_path
+        .as_deref()
+        .map(|p| std::fs::canonicalize(p).ok())
+        .flatten()
+        .map(|p| p.to_string_lossy().into_owned())
+        .or(active_path);
 
     rsx! {
-        section { class: "picker",
-
-            div { class: "picker-head",
-                span { class: "picker-label", "spaces" }
-                span { class: "picker-count", "({spaces.len()})" }
+        nav { class: "side", aria_label: "spaces",
+            div { class: "side-head",
+                span { class: "side-label", "spaces" }
+                span { class: "side-count", "({spaces.len()})" }
             }
+
+            a {
+                class: if current_normalized.is_none() { "side-home-link is-current" } else { "side-home-link" },
+                href: "/",
+                "all notes"
+            }
+
             if spaces.is_empty() {
-                p { class: "picker-empty",
-                    "No spaces yet. Register a path below, or run "
+                p { class: "side-empty",
+                    "No spaces yet. Use the form below, or run "
                     code { "notez space register <name> --path <dir>" }
                     " from a terminal to add one permanently."
                 }
             } else {
-                ul { class: "picker-list",
+                ul { class: "side-list",
                     for s in spaces.iter() {
-                        li { class: "picker-row",
-                            a {
-                                class: "picker-link",
-                                href: "{route_for_space_list(&s.path)}",
-                                span { class: "picker-name", "{s.name}" }
-                                span { class: "picker-path", "{s.path}" }
-                                if s.source == "discovered" {
-                                    span { class: "picker-tag", "found" }
+                        {
+                            let is_current = current_normalized
+                                .as_deref()
+                                .map(|cur| {
+                                    std::fs::canonicalize(&s.path)
+                                        .map(|p| p.to_string_lossy() == cur)
+                                        .unwrap_or(false)
+                                        || cur == s.path
+                                })
+                                .unwrap_or(false);
+                            rsx! {
+                                li { class: "side-item",
+                                    a {
+                                        class: if is_current { "side-link is-current" } else { "side-link" },
+                                        href: "{route_for_space_list(&s.path)}",
+                                        span { class: "side-link-name",
+                                            "{s.name}"
+                                            if s.source == "discovered" {
+                                                span { class: "side-tag", "found" }
+                                            }
+                                        }
+                                        span { class: "side-link-path", "{s.path}" }
+                                    }
                                 }
                             }
                         }
                     }
                 }
             }
-            details { class: "picker-add",
-                summary { class: "picker-add-summary", "register a space" }
+
+            details { class: "side-add",
+                summary { "register a space" }
                 form {
-                    class: "picker-add-form",
+                    class: "side-add-form",
                     action: "/api/spaces/register",
                     method: "post",
                     label {
-                        class: "picker-add-label",
-                        r#for: "picker-add-name",
+                        r#for: "side-add-name",
                         "name"
                     }
                     input {
-                        id: "picker-add-name",
-                        class: "picker-add-input",
+                        id: "side-add-name",
                         r#type: "text",
                         name: "name",
                         placeholder: "personal",
                         required: true,
                     }
                     label {
-                        class: "picker-add-label",
-                        r#for: "picker-add-path",
+                        r#for: "side-add-path",
                         "absolute path"
                     }
                     input {
-                        id: "picker-add-path",
-                        class: "picker-add-input",
+                        id: "side-add-path",
                         r#type: "text",
                         name: "path",
                         placeholder: "/absolute/path/to/space",
                         required: true,
                     }
                     button {
-                        class: "picker-add-go",
                         r#type: "submit",
                         "register"
                     }

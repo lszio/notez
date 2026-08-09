@@ -10,7 +10,8 @@ use std::collections::BTreeMap;
 use dioxus::prelude::*;
 
 use crate::model::ResourceRow;
-use crate::pages::{use_space_layout, Breadcrumb, BreadcrumbSegment, KindIcon, PageHeader};
+use crate::pages::{use_space_layout, PageHeader};
+use crate::pages::ui::{Breadcrumb, BreadcrumbSegment, KindIcon};
 use crate::router::route_for_space_list;
 use crate::server::get_resource;
 use crate::space_ctx::{SpaceState, SpaceStatus};
@@ -69,7 +70,7 @@ pub fn DetailPage(encoded: String, encoded_ref: String) -> Element {
 
     rsx! {
         PageHeader {}
-        main { class: "page",
+        div { class: "page",
             Breadcrumb {
                 segments: vec![
                     BreadcrumbSegment::link("notez", "/"),
@@ -112,6 +113,7 @@ pub fn DetailPage(encoded: String, encoded_ref: String) -> Element {
                     DetailBody {
                         row: row.clone(),
                         list_href: list_href.clone(),
+                        current_encoded: current_encoded.clone(),
                     }
                 },
                 (_, None) => rsx! {
@@ -125,73 +127,128 @@ pub fn DetailPage(encoded: String, encoded_ref: String) -> Element {
 }
 
 #[component]
-fn DetailBody(row: ResourceRow, list_href: String) -> Element {
+fn DetailBody(row: ResourceRow, list_href: String, current_encoded: String) -> Element {
     rsx! {
-        div { class: "page-h",
-            p { class: "eyebrow", "{row.kind}" }
+        div { class: "detail-main",
             h1 { "{row.title}" }
-            p { class: "lede mono-sm",
+            p { class: "ref-line",
                 "{row.ref_str}"
                 span { class: "dim", "  ·  " }
-                "←"
+                "← "
                 a { href: "{list_href}", "back to index" }
             }
-        }
 
-        div { class: "detail-grid",
-            aside { class: "detail-side",
-                dl { class: "meta-list",
-                    dt { "kind" }
-                    dd {
-                        KindIcon { kind: row.kind.clone() }
-                        span { class: "mono-sm", "{row.kind}" }
+            details { class: "meta-drawer",
+                summary { "metadata" }
+                div { class: "meta-drawer-body",
+                    dl { class: "meta-list",
+                        dt { "kind" }
+                        dd {
+                            KindIcon { kind: row.kind.clone() }
+                            span { class: "mono-sm", "{row.kind}" }
+                        }
+                        dt { "source" }
+                        dd { "{row.source_id}" }
+                        dt { "locator" }
+                        dd { class: "muted", "{row.locator}" }
+                        dt { "revision" }
+                        dd { class: "muted", "{row.revision}" }
+                        dt { "object_id" }
+                        dd { class: "muted", "{row.object_id}" }
                     }
-                    dt { "source" }
-                    dd { "{row.source_id}" }
-                    dt { "locator" }
-                    dd { class: "muted", "{row.locator}" }
-                    dt { "revision" }
-                    dd { class: "muted", "{row.revision}" }
-                    dt { "object_id" }
-                    dd { class: "muted", "{row.object_id}" }
-                    dt { "ref" }
-                    dd { class: "muted", "{row.ref_str}" }
                 }
             }
 
-            section { class: "detail-main",
-                h2 { "Properties" }
-                PropertiesView { properties: row.properties.clone() }
+            h2 { "Properties" }
+            if row.properties.is_empty() {
+                p { class: "props-empty", "no properties attached to this resource." }
+            } else {
+                div { class: "props",
+                    for (k, v) in row.properties.iter() {
+                        div { class: "row",
+                            span { class: "k", "{k}" }
+                            span { class: "v", "{v}" }
+                        }
+                    }
+                }
             }
-        }
 
-        div { class: "footer-rule",
-            span { "notez · reader" }
-            span { "·" }
-            span { "details" }
+            // Local neighborhood graph.
+            div { class: "neighbor-graph",
+                h2 { "Relations" }
+                p { class: "ng-caption", "1-hop neighborhood" }
+                NeighborGraph {
+                    space_encoded: current_encoded.clone(),
+                    focus_ref: row.ref_str.clone(),
+                }
+            }
         }
     }
 }
 
 #[component]
-fn PropertiesView(properties: BTreeMap<String, String>) -> Element {
-    let entries: Vec<(String, String)> = properties
-        .iter()
-        .map(|(k, v)| (k.clone(), v.clone()))
-        .collect();
-    if entries.is_empty() {
-        return rsx! {
-            p { class: "props-empty", "no properties on this resource." }
-        };
-    }
-    rsx! {
-        div { class: "props",
-            for (k, v) in entries.iter() {
-                div { class: "row",
-                    span { class: "k", "{k}" }
-                    span { class: "v", "{v}" }
+fn NeighborGraph(space_encoded: String, focus_ref: String) -> Element {
+    use crate::server::neighbor_graph;
+    use notez_core::application::{Graph, GraphEdge, GraphNode, layout_force};
+
+    
+    let focus_for_fetch = focus_ref.clone();
+    let enc = space_encoded.clone();
+    let graph_resource = use_server_future(move || {
+        let f = focus_for_fetch.clone();
+        let p = crate::router::decode_space(&enc);
+        async move {
+            neighbor_graph(p, f).await.unwrap_or(Graph { nodes: vec![], edges: vec![], total_nodes: 0, truncated: false })
+        }
+    })?;
+
+    if let Some(graph) = graph_resource.cloned() {
+        if graph.nodes.is_empty() {
+            return rsx! { p { class: "skel", "no relations" } };
+        }
+        
+        let w = 400.0;
+        let h = 280.0;
+        let positions = layout_force(&graph, w, h, 120);
+        
+        rsx! {
+            svg {
+                class: "ng-svg",
+                view_box: "0 0 {w} {h}",
+                width: "100%",
+                role: "img",
+                "aria-label": "local graph",
+                for e in graph.edges.iter() {
+                    {
+                        let (sx, sy) = positions.get(&e.source).copied().unwrap_or((0.0, 0.0));
+                        let (tx, ty) = positions.get(&e.target).copied().unwrap_or((0.0, 0.0));
+                        let active = if e.kind == "ok" { "" } else { "is-active" };
+                        rsx! {
+                            line { class: "ng-link {active}", x1: "{sx}", y1: "{sy}", x2: "{tx}", y2: "{ty}" }
+                        }
+                    }
+                }
+                for n in graph.nodes.iter() {
+                    {
+                        let (x, y) = positions.get(&n.ref_str).copied().unwrap_or((w/2.0, h/2.0));
+                        let is_focus = n.ref_str == focus_ref;
+                        let state_cls = if is_focus { "is-focus" } else { "is-neighbor" };
+                        let r = if is_focus { 8.0 } else { 5.0 };
+                        let label: String = n.title.chars().take(12).collect();
+                        let href = format!("/space/{}/resource/{}", space_encoded, crate::router::encode_space(&n.ref_str));
+                        rsx! {
+                            a { href: "{href}",
+                                g { transform: "translate({x},{y})",
+                                    circle { class: "ng-node {state_cls}", r: "{r}", cx: "0", cy: "0" }
+                                    text { class: "ng-label {state_cls}", y: "{r + 9.0}", "{label}" }
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }
+    } else {
+        rsx! { p { class: "skel", "loading graph…" } }
     }
 }

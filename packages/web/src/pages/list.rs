@@ -10,7 +10,8 @@
 use dioxus::prelude::*;
 
 use crate::model::ResourceRow;
-use crate::pages::{use_space_layout, KindIcon, PageHeader};
+use crate::pages::{use_space_layout, PageHeader};
+use crate::pages::ui::KindIcon;
 use crate::router::encode_space;
 use crate::server::list_resources;
 use crate::space_ctx::{SpaceState, SpaceStatus};
@@ -111,7 +112,7 @@ pub fn ListPage(encoded: String) -> Element {
 
     rsx! {
         PageHeader {}
-        main { class: "page",
+        div { class: "page",
             div { class: "page-h",
                 p { class: "eyebrow", "{eyebrow}" }
                 h1 { "{h1}" }
