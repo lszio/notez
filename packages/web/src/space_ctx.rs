@@ -14,7 +14,8 @@ use crate::server::{SelectedSpaceDto, WebServerError};
 
 /// Whether we have a fully validated space, are still resolving it, or
 /// hit an error.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
 pub enum SpaceStatus {
     /// Resolving the path against the server (first load).
     Resolving,
@@ -25,7 +26,7 @@ pub enum SpaceStatus {
 }
 
 /// The information a page needs to act on the current space.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct SpaceState {
     /// The urlencoded path segment, kept verbatim so navigation
     /// (`/space/<encoded>/list`) round-trips without re-encoding.

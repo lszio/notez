@@ -1,7 +1,7 @@
 //! `web` — notez dioxus fullstack web client (v0.1, reader-only).
 //!
 //! Three routes:
-//! - `/`                                     — picker home (redirects to a space)
+//! - `/`                                     — picker home (onboarding card)
 //! - `/space/:encoded/list`                  — resource list inside a space
 //! - `/space/:encoded/resource/:encoded_ref` — resource detail inside a space
 //!
