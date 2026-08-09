@@ -49,7 +49,11 @@ impl<S: ProjectionStore> LinkUseCase for ApplicationFacade<S> {
         source_ref: &ResourceRef,
     ) -> Result<Vec<ResolvedRelation>, ApplicationError> {
         write_check::check_capability(self, "link")?;
-
+        write_check::check_address_uniqueness(
+            self,
+            &crate::domain::ResourceAddress::Ref { r#ref: *source_ref },
+            &source_ref,
+        )?;
         let occs = <Self as crate::application::use_cases::LinkUseCase>::query_link_occurrences(self, source_ref)?;
         // Determine the source_id by inspecting the existing diagnostics row.
         let source_id = occs

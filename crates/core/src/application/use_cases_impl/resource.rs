@@ -36,6 +36,11 @@ impl<S: ProjectionStore> ResourceUseCase for ApplicationFacade<S> {
         &mut self,
         r_ref: &ResourceRef,
     ) -> Result<(), ApplicationError> {
+        write_check::check_address_uniqueness(
+            self,
+            &crate::domain::ResourceAddress::Ref { r#ref: *r_ref },
+            &r_ref,
+        )?;
         write_check::check_capability(self, "resource")?;
 
         self.store

@@ -45,7 +45,11 @@ impl<S: ProjectionStore> TaskUseCase for ApplicationFacade<S> {
         timestamp: &str,
     ) -> Result<crate::document::StateTransition, ApplicationError> {
         write_check::check_capability(self, "task")?;
-
+        write_check::check_address_uniqueness(
+            self,
+            &crate::domain::ResourceAddress::Ref { r#ref: *r_ref },
+            &r_ref,
+        )?;
         let mut res = <Self as crate::application::use_cases::ResourceUseCase>::read(self, r_ref)?
             .ok_or_else(|| ApplicationError::NotFound {
                 kind: r_ref.kind(),
