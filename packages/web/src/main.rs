@@ -18,17 +18,23 @@
 //! via `ServeConfig::with_index_html` so SSR pages inherit the
 //! hand-tuned "paper-terminal" stylesheet, the custom `<div
 //! id="main">`, and the `<head>` meta tags.
-
+#[cfg(not(target_arch = "wasm32"))]
 use axum::Router;
+#[cfg(not(target_arch = "wasm32"))]
 use dioxus::prelude::*;
+#[cfg(not(target_arch = "wasm32"))]
 use dioxus_server::serve;
+#[cfg(not(target_arch = "wasm32"))]
 use notez_web::app;
+#[cfg(not(target_arch = "wasm32"))]
 use notez_web::routes::{self, WebState};
 
 /// The SSR HTML template. Compiled into the binary so the running
 /// server does not need a `public/` directory next to the executable.
+#[cfg(not(target_arch = "wasm32"))]
 const INDEX_HTML: &str = include_str!("../public/index.html");
 
+#[cfg(not(target_arch = "wasm32"))]
 fn main() {
     if std::env::var("PORT").is_err() {
         // SAFETY: single-threaded early init; no other thread
@@ -69,3 +75,6 @@ fn main() {
         }
     });
 }
+
+#[cfg(target_arch = "wasm32")]
+fn main() {}
