@@ -102,7 +102,7 @@ cli-build:
 
 # ---- Web (v0.1 Dioxus fullstack SSR) ----------------------------------------
 
-# Run the v0.1 Dioxus fullstack web client (SSR + hydration). Override bind with `HOST=0.0.0.0 PORT=3030 just web`.
+# Run the web client with hot reload (`dx serve`). Override bind with `HOST=0.0.0.0 PORT=3030 just web`.
 web:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -111,8 +111,11 @@ web:
     if [ -n "{{space}}" ]; then export NOTEZ_SPACE_ROOT="{{space}}"; fi
     echo "→ starting web SSR on http://${IP}:${PORT}"
     cd "{{web_pkg}}" 2>/dev/null || cd "packages/{{web_pkg}}"
-    cargo {{_cargo_profile}} run -p {{web_pkg}} --bin {{web_pkg}}
-
+    if command -v dx >/dev/null 2>&1; then
+        dx serve --platform fullstack
+    else
+        cargo {{_cargo_profile}} run -p {{web_pkg}} --bin {{web_pkg}}
+    fi
 # Build the web client only (no run).
 web-build:
     cargo {{_cargo_profile}} build -p {{web_pkg}} --bin {{web_pkg}}
