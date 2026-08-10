@@ -35,91 +35,115 @@ pub fn SpaceSidebar(active_path: Option<String>) -> Element {
         .map(|p| std::fs::canonicalize(p).ok())
         .flatten()
         .map(|p| p.to_string_lossy().into_owned())
-        .or(active_path);
+        .or(active_path.clone());
 
+    let current_encoded = active_path.as_deref().map(crate::router::encode_space).unwrap_or_default();
     rsx! {
         nav { class: "side", aria_label: "spaces",
-            div { class: "side-head",
-                span { class: "side-label", "spaces" }
-                span { class: "side-count", "({spaces.len()})" }
-            }
-
-            a {
-                class: if current_normalized.is_none() { "side-home-link is-current" } else { "side-home-link" },
-                href: "/",
-                "all notes"
-            }
-
-            if spaces.is_empty() {
-                p { class: "side-empty",
-                    "No spaces yet. Use the form below, or run "
-                    code { "notez space register <name> --path <dir>" }
-                    " from a terminal to add one permanently."
+            // ----- Top: Space Switcher Dropdown -----
+            details { class: "side-add space-picker-dropdown", open: false,
+                summary { class: "side-label",
+                    "space · "
+                    if let Some(ref p) = active_path {
+                        span { class: "accent", "{p}" }
+                    } else {
+                        span { "select space" }
+                    }
                 }
-            } else {
-                ul { class: "side-list",
-                    for s in spaces.iter() {
-                        {
-                            let is_current = current_normalized
-                                .as_deref()
-                                .map(|cur| {
-                                    std::fs::canonicalize(&s.path)
-                                        .map(|p| p.to_string_lossy() == cur)
-                                        .unwrap_or(false)
-                                        || cur == s.path
-                                })
-                                .unwrap_or(false);
-                            rsx! {
-                                li { class: "side-item",
-                                    a {
-                                        class: if is_current { "side-link is-current" } else { "side-link" },
-                                        href: "{route_for_space_list(&s.path)}",
-                                        span { class: "side-link-name",
-                                            "{s.name}"
-                                            if s.source == "discovered" {
-                                                span { class: "side-tag", "found" }
+                div { class: "side-head", style: "margin-top:0.5rem;",
+                    span { class: "side-label", "spaces" }
+                    span { class: "side-count", "({spaces.len()})" }
+                }
+
+                a {
+                    class: if current_normalized.is_none() { "side-home-link is-current" } else { "side-home-link" },
+                    href: "/",
+                    "all notes"
+                }
+
+                if spaces.is_empty() {
+                    p { class: "side-empty",
+                        "No spaces yet. Use the form below."
+                    }
+                } else {
+                    ul { class: "side-list",
+                        for s in spaces.iter() {
+                            {
+                                let is_current = current_normalized
+                                    .as_deref()
+                                    .map(|cur| {
+                                        std::fs::canonicalize(&s.path)
+                                            .map(|p| p.to_string_lossy() == cur)
+                                            .unwrap_or(false)
+                                            || cur == s.path
+                                    })
+                                    .unwrap_or(false);
+                                rsx! {
+                                    li { class: "side-item", key: "{s.path}",
+                                        a {
+                                            class: if is_current { "side-link is-current" } else { "side-link" },
+                                            href: "{route_for_space_list(&s.path)}",
+                                            span { class: "side-link-name",
+                                                "{s.name}"
+                                                if s.source == "discovered" {
+                                                    span { class: "side-tag", "found" }
+                                                }
                                             }
+                                            span { class: "side-link-path", "{s.path}" }
                                         }
-                                        span { class: "side-link-path", "{s.path}" }
                                     }
                                 }
                             }
                         }
                     }
                 }
+
+                details { class: "side-add", style: "margin-top:0.5rem;",
+                    summary { "+ register a space" }
+                    form {
+                        class: "side-add-form",
+                        action: "/api/spaces/register",
+                        method: "post",
+                        label {
+                            r#for: "side-add-name",
+                            "name"
+                        }
+                        input {
+                            id: "side-add-name",
+                            r#type: "text",
+                            name: "name",
+                            placeholder: "personal",
+                            required: true,
+                        }
+                        label {
+                            r#for: "side-add-path",
+                            "absolute path"
+                        }
+                        input {
+                            id: "side-add-path",
+                            r#type: "text",
+                            name: "path",
+                            placeholder: "/absolute/path/to/space",
+                            required: true,
+                        }
+                        button {
+                            r#type: "submit",
+                            "register"
+                        }
+                    }
+                }
             }
 
-            details { class: "side-add",
-                summary { "register a space" }
-                form {
-                    class: "side-add-form",
-                    action: "/api/spaces/register",
-                    method: "post",
-                    label {
-                        r#for: "side-add-name",
-                        "name"
+            // ----- Lower: Directory Tree Section -----
+            if !current_encoded.is_empty() {
+                div { class: "side-tree-section", style: "margin-top:1.5rem; border-top:1px solid var(--ink-rule); padding-top:0.8rem;",
+                    div { class: "side-head",
+                        span { class: "side-label", "directory tree" }
                     }
-                    input {
-                        id: "side-add-name",
-                        r#type: "text",
-                        name: "name",
-                        placeholder: "personal",
-                        required: true,
-                    }
-                    label {
-                        r#for: "side-add-path",
-                        "absolute path"
-                    }
-                    input {
-                        id: "side-add-path",
-                        r#type: "text",
-                        name: "path",
-                        placeholder: "/absolute/path/to/space",
-                        required: true,
-                    }
-                    button {
-                        r#type: "submit",
-                        "register"
+                    a {
+                        class: "side-home-link",
+                        href: "/space/{current_encoded}/list",
+                        "📁 / (all files)"
                     }
                 }
             }
