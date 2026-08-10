@@ -23,7 +23,8 @@ urlencoding = "2"
 base64      = "0.22"
 mime_guess  = "2.0"
 html-escape = "0.2"
-[dev-dependencies]
+bytes       = "1.0"
+ulid        = "1.0"
 tempfile = "3"
 tokio    = { version = "1", features = ["rt-multi-thread", "macros"] }
 [features]

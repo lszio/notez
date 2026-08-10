@@ -50,6 +50,26 @@ impl ResourceRow {
             body_html,
         }
     }
+    pub fn to_domain_resource(&self) -> notez_core::domain::Resource {
+        let kind = match self.kind.as_str() {
+            "document" => ResourceKind::Document,
+            "heading" => ResourceKind::Heading,
+            "block" => ResourceKind::Block,
+            "attachment" => ResourceKind::Attachment,
+            _ => ResourceKind::Document,
+        };
+        notez_core::domain::Resource {
+            r#ref: ResourceRef::parse(&self.ref_str)
+                .unwrap_or_else(|_| ResourceRef::new(kind, ulid::Ulid::new())),
+            kind,
+            title: self.title.clone(),
+            revision: self.revision.clone(),
+            source_id: self.source_id.clone(),
+            locator: self.locator.clone(),
+            properties: self.properties.clone(),
+            object_id: notez_core::domain::ObjectId::new(ulid::Ulid::new()),
+        }
+    }
 }
 
 impl From<Resource> for ResourceRow {

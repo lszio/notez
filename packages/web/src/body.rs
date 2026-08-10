@@ -22,6 +22,7 @@
 
 use std::path::{Path, PathBuf};
 
+use notez_core::preview::Previewer;
 use pulldown_cmark::{html, Options, Parser};
 
 use crate::model::ResourceRow;
@@ -34,17 +35,9 @@ use crate::model::ResourceRow;
 /// missing, unreadable, or the resource has no inline content
 /// (attachments).
 pub fn render_body(row: &ResourceRow, space_root: &Path) -> String {
-    // Attachments live outside the inline-body model.
-    if row.kind == "attachment" {
-        return String::new();
-    }
     let file_path = resolve_file_path(space_root, &row.locator);
     let bytes = match std::fs::read(&file_path) {
         Ok(b) => b,
-        Err(_) => return String::new(),
-    };
-    let text = match std::str::from_utf8(&bytes) {
-        Ok(s) => s,
         Err(_) => return String::new(),
     };
     let ext = file_path
@@ -52,10 +45,108 @@ pub fn render_body(row: &ResourceRow, space_root: &Path) -> String {
         .and_then(|e| e.to_str())
         .map(|s| s.to_ascii_lowercase())
         .unwrap_or_default();
+
+    let raw_url = format!(
+        "/api/spaces/attachment/raw?space_root={}&locator={}",
+        urlencoding::encode(&space_root.to_string_lossy()),
+        urlencoding::encode(&row.locator)
+    );
+
     match ext.as_str() {
-        "md" | "markdown" => render_markdown(text),
-        "org" => render_org(text),
-        _ => render_fallback(text),
+        "png" | "jpg" | "jpeg" | "gif" | "svg" | "webp" => {
+            format!(
+                "<div class=\"preview-img\"><img src=\"{raw_url}\" alt=\"{}\" style=\"max-width:100%;height:auto;\" /></div>",
+                html_escape::encode_safe(&row.title)
+            )
+        }
+        "pdf" => {
+            let previewer = notez_core::preview::builders::pdf::PdfPreviewer;
+            let mut catalog = notez_core::preview::PreviewerCatalog::new();
+            catalog.register(notez_core::preview::builders::pdf::PdfPreviewer);
+            let ctx = notez_core::preview::PreviewContext {
+                resource: row.to_domain_resource(),
+                bytes: Some(bytes::Bytes::from(bytes.clone())),
+                mime: Some("application/pdf".into()),
+                locator: file_path.clone(),
+                segments: vec![],
+                siblings: vec![],
+                catalog: &catalog,
+            };
+            let text_preview = if let Ok(notez_core::preview::PreviewModel::Pdf { text, .. }) = previewer.render(&ctx) {
+                if text.trim().is_empty() {
+                    String::new()
+                } else {
+                    format!("<details><summary class=\"mono-sm\">Extracted PDF Text Preview</summary><pre class=\"raw\">{}</pre></details>", html_escape::encode_safe(&text))
+                }
+            } else {
+                String::new()
+            };
+
+            format!(
+                "<div class=\"preview-pdf\"><p><a href=\"{raw_url}\" target=\"_blank\" class=\"spine-action\">📄 Open PDF in new tab ({})</a></p>{text_preview}<iframe src=\"{raw_url}\" width=\"100%\" height=\"600px\" style=\"border:1px solid var(--ink-rule);margin-top:0.5rem;\"></iframe></div>",
+                html_escape::encode_safe(&row.title)
+            )
+        }
+        "xlsx" | "xls" => {
+            let previewer = notez_core::preview::builders::xlsx::XlsxPreviewer;
+            let mut catalog = notez_core::preview::PreviewerCatalog::new();
+            catalog.register(notez_core::preview::builders::xlsx::XlsxPreviewer);
+            let ctx = notez_core::preview::PreviewContext {
+                resource: row.to_domain_resource(),
+                bytes: Some(bytes::Bytes::from(bytes.clone())),
+                mime: Some("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet".into()),
+                locator: file_path.clone(),
+                segments: vec![],
+                siblings: vec![],
+                catalog: &catalog,
+            };
+            if let Ok(notez_core::preview::PreviewModel::Xlsx { sheets }) = previewer.render(&ctx) {
+                let mut html = String::from("<div class=\"preview-xlsx\">");
+                for sheet in sheets {
+                    html.push_str(&format!("<h3>Sheet: {}</h3><table class=\"preview-table\" style=\"border-collapse:collapse;width:100%;margin-bottom:1rem;\">", html_escape::encode_safe(&sheet.name)));
+                    for r in sheet.rows {
+                        html.push_str("<tr>");
+                        for cell in r {
+                            html.push_str(&format!("<td style=\"border:1px solid var(--ink-rule);padding:0.2rem 0.5rem;\">{}</td>", html_escape::encode_safe(&cell)));
+                        }
+                        html.push_str("</tr>");
+                    }
+                    html.push_str("</table>");
+                }
+                html.push_str("</div>");
+                return html;
+            }
+            format!("<div class=\"preview-download\"><a href=\"{raw_url}\" class=\"spine-action\">📥 Download Excel File</a></div>")
+        }
+        "md" | "markdown" => {
+            if let Ok(text) = std::str::from_utf8(&bytes) {
+                render_markdown(text)
+            } else {
+                String::new()
+            }
+        }
+        "org" => {
+            if let Ok(text) = std::str::from_utf8(&bytes) {
+                render_org(text)
+            } else {
+                String::new()
+            }
+        }
+        _ => {
+            if row.kind == "attachment" {
+                format!(
+                    "<div class=\"preview-download\"><a href=\"{raw_url}\" target=\"_blank\" class=\"spine-action\">📥 Download Attachment File ({})</a></div>",
+                    html_escape::encode_safe(&row.title)
+                )
+            } else if let Ok(text) = std::str::from_utf8(&bytes) {
+                render_fallback(text)
+            } else {
+                format!(
+                    "<div class=\"preview-download\"><a href=\"{raw_url}\" target=\"_blank\" class=\"spine-action\">📥 Download Binary File ({})</a></div>",
+                    html_escape::encode_safe(&row.title)
+                )
+            }
+        }
     }
 }
 
@@ -127,7 +218,7 @@ mod tests {
     }
 
     #[test]
-    fn attachments_have_no_body() {
+    fn missing_attachment_yields_empty_body() {
         let row = row_with_kind_locator("attachment", "x.png");
         assert_eq!(render_body(&row, Path::new("/nope")), "");
     }
