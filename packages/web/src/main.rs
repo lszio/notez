@@ -61,10 +61,9 @@ fn main() {
             let app_router: Router = Router::new()
                 .serve_dioxus_application(cfg, app)
                 .with_state(());
-            // Now both routers are `Router<()>`. Custom routes
-            // take precedence because they are added last.
-            let router = app_router
-                .merge(routes::build_router(state))
+            // Custom routes take precedence by placing them first in the merge.
+            let router = routes::build_router(state)
+                .merge(app_router)
                 .layer(axum::middleware::from_fn(routes::auto_watch_middleware));
             Ok::<_, anyhow::Error>(router)
         }
