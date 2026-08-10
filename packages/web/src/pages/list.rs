@@ -120,47 +120,60 @@ pub fn ListPage(encoded: String) -> Element {
             }
 
             // ----- Controls row -----
-            div { class: "controls",
-                div { class: "control",
-                    span { class: "control-label", "find" }
-                    input {
-                        class: "grow",
-                        r#type: "search",
-                        placeholder: "title, ref, or locator…",
-                        value: "{query}",
-                        oninput: move |e| query.set(e.value()),
+            div { class: "controls-wrapper", style: "display:flex; gap:1rem; align-items:center; width:100%; flex-wrap:wrap;",
+                form {
+                    class: "controls",
+                    method: "get",
+                    action: format!("/space/{}/list", encoded),
+                    style: "flex:1; display:flex; gap:0.6rem; align-items:center;",
+                    div { class: "control",
+                        span { class: "control-label", "find" }
+                        input {
+                            class: "grow",
+                            r#type: "search",
+                            name: "q",
+                            placeholder: "title, ref, or locator…",
+                            value: "{query}",
+                            oninput: move |e| query.set(e.value()),
+                        }
+                    }
+                    div { class: "control",
+                        span { class: "control-label", "kind" }
+                        select {
+                            name: "kind",
+                            value: "{kind_filter}",
+                            onchange: move |e| kind_filter.set(e.value()),
+                            option { value: "all", "all" }
+                            option { value: "document", "document" }
+                            option { value: "heading", "heading" }
+                            option { value: "attachment", "attachment" }
+                            option { value: "block", "block" }
+                        }
+                    }
+                    div { class: "control",
+                        span { class: "control-label", "sort" }
+                        select {
+                            name: "sort",
+                            value: "{sort_key}",
+                            onchange: move |e| sort_key.set(e.value()),
+                            option { value: "title", "title" }
+                            option { value: "kind", "kind" }
+                            option { value: "locator", "locator" }
+                        }
+                    }
+                    button {
+                        class: "control-action",
+                        r#type: "submit",
+                        "filter"
+                    }
+                    div { class: "control-spacer" }
+                    div { class: "control",
+                        span { class: "control-label", "showing" }
+                        span { class: "mono-sm",
+                            "{visible.len()} / {total}"
+                        }
                     }
                 }
-                div { class: "control",
-                    span { class: "control-label", "kind" }
-                    select {
-                        value: "{kind_filter}",
-                        onchange: move |e| kind_filter.set(e.value()),
-                        option { value: "all", "all" }
-                        option { value: "document", "document" }
-                        option { value: "heading", "heading" }
-                        option { value: "attachment", "attachment" }
-                        option { value: "block", "block" }
-                    }
-                }
-                div { class: "control",
-                    span { class: "control-label", "sort" }
-                    select {
-                        value: "{sort_key}",
-                        onchange: move |e| sort_key.set(e.value()),
-                        option { value: "title", "title" }
-                        option { value: "kind", "kind" }
-                        option { value: "locator", "locator" }
-                    }
-                }
-                div { class: "control-spacer" }
-                div { class: "control",
-                    span { class: "control-label", "showing" }
-                    span { class: "mono-sm",
-                        "{visible.len()} / {total}"
-                    }
-                }
-                div { class: "control-spacer" }
                 div { class: "control",
                     form {
                         class: "control-form",
@@ -195,7 +208,7 @@ pub fn ListPage(encoded: String) -> Element {
                         }
                     }
                 }
-             }
+            }
 
             // ----- Results -----
             div { class: "results-head",
