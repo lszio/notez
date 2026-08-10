@@ -250,6 +250,35 @@ fn do_watch_stop(state: &WebState, form: SpaceForm) -> Result<Redirect, WebRoute
     Ok(Redirect::to(&route_for_space_list(&space_root.to_string_lossy())))
 }
 
+#[derive(Debug, Deserialize)]
+pub struct AttachmentRawQuery {
+    pub space_root: String,
+    pub locator: String,
+}
+
+async fn raw_attachment_get(
+    axum::extract::Query(query): axum::extract::Query<AttachmentRawQuery>,
+) -> Result<impl axum::response::IntoResponse, WebRouteError> {
+    let space_path = PathBuf::from(&query.space_root);
+    let file_path = space_path.join(&query.locator);
+    let canonical_space = std::fs::canonicalize(&space_path).unwrap_or(space_path);
+    let canonical_file = match std::fs::canonicalize(&file_path) {
+        Ok(f) => f,
+        Err(_) => file_path.clone(),
+    };
+    if !canonical_file.starts_with(&canonical_space) || !file_path.exists() {
+        return Err(WebRouteError::Invalid("file not found or access denied".into()));
+    }
+    let bytes = std::fs::read(&file_path).map_err(|e| WebRouteError::Internal(e.to_string()))?;
+    let mime = mime_guess::from_path(&file_path).first_or_octet_stream().to_string();
+    let mut headers = axum::http::HeaderMap::new();
+    headers.insert(axum::http::header::CONTENT_TYPE, mime.parse().unwrap());
+    headers.insert(
+        axum::http::header::CONTENT_DISPOSITION,
+        "inline".parse().unwrap(),
+    );
+    Ok((headers, bytes))
+}
 pub async fn auto_watch_middleware(
     req: axum::extract::Request,
     next: axum::middleware::Next,
@@ -314,6 +343,10 @@ pub fn build_router(state: WebState) -> axum::Router {
                 let s = state_wg.clone();
                 async move { watch_state_get(&s, params).await }
             }),
+        )
+        .route(
+            "/api/spaces/attachment/raw",
+            get(move |query| async move { raw_attachment_get(query).await }),
         )
         .layer(axum::middleware::from_fn(auto_watch_middleware))
 }
