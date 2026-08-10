@@ -216,6 +216,7 @@ pub async fn neighbor_graph(
 }
 // ---- _impl helpers (unit-testable) -----------------------------------------
 
+#[cfg(not(target_arch = "wasm32"))]
 pub async fn list_resources_impl(space_root: &Path) -> Result<Vec<ResourceRow>, String> {
     let sel = core_resolve_space(space_root).map_err(|e| e.to_string())?;
     crate::routes::auto_start_watch(&sel.space_root);
@@ -226,6 +227,12 @@ pub async fn list_resources_impl(space_root: &Path) -> Result<Vec<ResourceRow>, 
     Ok(page.items.into_iter().map(ResourceRow::from).collect())
 }
 
+#[cfg(target_arch = "wasm32")]
+pub async fn list_resources_impl(_space_root: &Path) -> Result<Vec<ResourceRow>, String> {
+    Err("server-only".to_string())
+}
+
+#[cfg(not(target_arch = "wasm32"))]
 pub async fn get_resource_impl(
     space_root: &Path,
     ref_str: &str,
@@ -243,11 +250,13 @@ pub async fn get_resource_impl(
         row
     }))
 }
-// ---- tests -----------------------------------------------------------------
 
+#[cfg(target_arch = "wasm32")]
+pub async fn get_resource_impl(_space_root: &Path, _ref_str: &str) -> Result<Option<ResourceRow>, String> {
+    Err("server-only".to_string())
+}
 
-/// Build the full force-directed graph for a space. Used by the
-/// `/space/.../graph` page.
+#[cfg(not(target_arch = "wasm32"))]
 pub async fn list_graph_impl(space_root: &Path) -> Result<Graph, String> {
     let sel = core_resolve_space(space_root).map_err(|e| e.to_string())?;
     let db_path = sel.space_root.join(".notez/index.sqlite");
@@ -256,8 +265,12 @@ pub async fn list_graph_impl(space_root: &Path) -> Result<Graph, String> {
     Graph::from_facade(&facade).map_err(|e| e.to_string())
 }
 
-/// Build a 1-hop subgraph around `focus_ref`. Used by the
-/// detail-page neighbour graph.
+#[cfg(target_arch = "wasm32")]
+pub async fn list_graph_impl(_space_root: &Path) -> Result<Graph, String> {
+    Err("server-only".to_string())
+}
+
+#[cfg(not(target_arch = "wasm32"))]
 pub async fn neighbor_graph_impl(space_root: &Path, focus_ref: &str) -> Result<Graph, String> {
     let sel = core_resolve_space(space_root).map_err(|e| e.to_string())?;
     let db_path = sel.space_root.join(".notez/index.sqlite");
@@ -266,6 +279,10 @@ pub async fn neighbor_graph_impl(space_root: &Path, focus_ref: &str) -> Result<G
     Graph::neighborhood(&facade, focus_ref).map_err(|e| e.to_string())
 }
 
+#[cfg(target_arch = "wasm32")]
+pub async fn neighbor_graph_impl(_space_root: &Path, _focus_ref: &str) -> Result<Graph, String> {
+    Err("server-only".to_string())
+}
 // ---- tests -----------------------------------------------------------------
 
 #[cfg(test)]

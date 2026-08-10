@@ -2675,9 +2675,11 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "899def5c37c4fd7b2664648c28120ecec138e4d395b459e5ca34f9cce2dd77fd"
 dependencies = [
  "cfg-if",
+ "js-sys",
  "libc",
  "r-efi 5.3.0",
  "wasip2",
+ "wasm-bindgen",
 ]
 
 [[package]]
@@ -3015,6 +3017,12 @@ name = "heck"
 version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2304e00983f87ffb38b55b444b5e3b60a884b5d30c0fca7d82fe33449bbe55ea"
+
+[[package]]
+name = "html-escape"
+version = "0.2.15"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c9356095b4b41197bba32173600e1582792cda618f65d12f68e2e77d273413c5"
 
 [[package]]
 name = "html5ever"
@@ -7175,9 +7183,14 @@ dependencies = [
  "anyhow",
  "axum",
  "base64",
+ "bytes",
  "core",
  "dioxus",
+ "getrandom 0.3.4",
+ "getrandom 0.4.3",
+ "html-escape",
  "markdown",
+ "mime_guess",
  "orgmode",
  "pulldown-cmark",
  "serde",
@@ -7185,6 +7198,7 @@ dependencies = [
  "tempfile",
  "tokio",
  "toml 0.8.2",
+ "ulid",
  "urlencoding",
 ]
 
