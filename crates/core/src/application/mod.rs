@@ -19,9 +19,36 @@ pub use attachment::ExtractionResult;
 pub mod service;
 pub mod use_cases;
 pub mod use_cases_impl;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod watch;
-pub mod graph;
+#[cfg(not(target_arch = "wasm32"))]
 pub use watch::{WatchError, WatchEvent, WatchKind, WatchService, WatchStatus};
+
+#[cfg(target_arch = "wasm32")]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct WatchStatus {
+    pub space_root: std::path::PathBuf,
+    pub started_at: std::time::SystemTime,
+    pub event_count: usize,
+}
+#[cfg(target_arch = "wasm32")]
+#[derive(Debug, thiserror::Error)]
+pub enum WatchError {
+    #[error("watch not supported on wasm32")]
+    WasmUnavailable,
+}
+#[cfg(target_arch = "wasm32")]
+#[derive(Debug, Clone)]
+pub struct WatchService;
+#[cfg(target_arch = "wasm32")]
+impl WatchService {
+    pub fn new() -> std::sync::Arc<Self> { std::sync::Arc::new(Self) }
+    pub fn start(&self, _path: &std::path::Path) -> Result<std::time::SystemTime, WatchError> { Err(WatchError::WasmUnavailable) }
+    pub fn stop(&self, _path: &std::path::Path) -> bool { false }
+    pub fn status(&self, _path: &std::path::Path) -> Option<WatchStatus> { None }
+    pub fn events(&self, _path: &std::path::Path, _limit: usize) -> Vec<()> { vec![] }
+}
+pub mod graph;
 pub use graph::{layout_force, Graph, GraphEdge, GraphNode, MAX_NODES};
  pub mod task_para;
 pub use link_resolution::{LinkReindexReport, LinkResolver};

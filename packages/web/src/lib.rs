@@ -18,6 +18,7 @@ pub mod body;
 pub mod model;
 pub mod pages;
 pub mod router;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod routes;
 pub mod server;
 pub mod space_ctx;

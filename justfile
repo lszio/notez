@@ -112,7 +112,7 @@ web:
     echo "→ starting web SSR on http://${IP}:${PORT}"
     cd "{{web_pkg}}" 2>/dev/null || cd "packages/{{web_pkg}}"
     if command -v dx >/dev/null 2>&1; then
-        dx serve --platform server
+        dx serve --platform web
     else
         cargo {{_cargo_profile}} run -p {{web_pkg}} --bin {{web_pkg}}
     fi
