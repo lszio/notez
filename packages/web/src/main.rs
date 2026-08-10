@@ -63,7 +63,9 @@ fn main() {
                 .with_state(());
             // Now both routers are `Router<()>`. Custom routes
             // take precedence because they are added last.
-            let router = app_router.merge(routes::build_router(state));
+            let router = app_router
+                .merge(routes::build_router(state))
+                .layer(axum::middleware::from_fn(routes::auto_watch_middleware));
             Ok::<_, anyhow::Error>(router)
         }
     });

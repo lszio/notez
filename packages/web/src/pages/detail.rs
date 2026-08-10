@@ -138,6 +138,13 @@ fn DetailBody(row: ResourceRow, list_href: String, current_encoded: String) -> E
                 a { href: "{list_href}", "back to index" }
             }
 
+            // Inline body preview (markdown/org rendered server-side).
+            if !row.body_html.is_empty() {
+                div { class: "detail-body",
+                    div { dangerous_inner_html: "{row.body_html}" }
+                }
+            }
+
             details { class: "meta-drawer",
                 summary { "metadata" }
                 div { class: "meta-drawer-body",

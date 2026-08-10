@@ -26,6 +26,7 @@ use axum::extract::Form;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Redirect, Response};
 use axum::routing::{get, post};
+use toml;
 use notez_core::application::{
     ApplicationError, ApplicationFacade, ApplicationService, SpaceContext, WatchError, WatchService,
 };
@@ -48,6 +49,13 @@ use crate::router::{decode_space, route_for_space_list};
 /// resulting router is `Router<()>` — required so the Dioxus app
 /// router (also `Router<()>` after its `with_state(FullstackState)`
 /// call) can `merge` with it.
+pub static GLOBAL_WATCH: std::sync::LazyLock<Arc<WatchService>> =
+    std::sync::LazyLock::new(|| WatchService::new());
+pub fn auto_start_watch(space_root: &std::path::Path) {
+    let canonical = std::fs::canonicalize(space_root).unwrap_or_else(|_| space_root.to_path_buf());
+    let _ = GLOBAL_WATCH.start(&canonical);
+}
+
 #[derive(Clone)]
 pub struct WebState {
     pub watch: Arc<WatchService>,
@@ -57,7 +65,7 @@ pub struct WebState {
 impl WebState {
     pub fn new() -> Self {
         Self {
-            watch: WatchService::new(),
+            watch: GLOBAL_WATCH.clone(),
             facades: Arc::new(Mutex::new(HashMap::new())),
         }
     }
@@ -68,6 +76,7 @@ impl WebState {
         space_root: &PathBuf,
     ) -> Result<Arc<Mutex<ApplicationFacade<SqliteProjection>>>, WebRouteError> {
         let canonical = std::fs::canonicalize(space_root).unwrap_or_else(|_| space_root.clone());
+        auto_start_watch(&canonical);
         {
             let cache = self.facades.lock().expect("facade cache poisoned");
             if let Some(f) = cache.get(&canonical) {
@@ -150,7 +159,7 @@ pub struct RegisterForm {
     pub path: String,
 }
 
-fn do_register(state: &WebState, form: RegisterForm) -> Result<Redirect, WebRouteError> {
+fn do_register(_state: &WebState, form: RegisterForm) -> Result<Redirect, WebRouteError> {
     let name = form.name.trim();
     if name.is_empty() {
         return Err(WebRouteError::Invalid("name must not be empty".into()));
@@ -190,7 +199,7 @@ fn do_register(state: &WebState, form: RegisterForm) -> Result<Redirect, WebRout
     std::fs::write(&tmp, text).map_err(|e| WebRouteError::Internal(e.to_string()))?;
     std::fs::rename(&tmp, &cfg_path).map_err(|e| WebRouteError::Internal(e.to_string()))?;
 
-    let _ = state; // unused, but kept for future logging
+    auto_start_watch(&path);
     Ok(Redirect::to(&route_for_space_list(path_str)))
 }
 
@@ -241,6 +250,25 @@ fn do_watch_stop(state: &WebState, form: SpaceForm) -> Result<Redirect, WebRoute
     Ok(Redirect::to(&route_for_space_list(&space_root.to_string_lossy())))
 }
 
+pub async fn auto_watch_middleware(
+    req: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    let path = req.uri().path();
+    if path.starts_with("/space/") {
+        if let Some(rest) = path.strip_prefix("/space/") {
+            let encoded = rest.split('/').next().unwrap_or("");
+            if !encoded.is_empty() {
+                let space_path = crate::router::decode_space(encoded);
+                if !space_path.is_empty() {
+                    auto_start_watch(std::path::Path::new(&space_path));
+                }
+            }
+        }
+    }
+    next.run(req).await
+}
+
 /// Build the sub-router with all custom POST endpoints. Each
 /// handler is a closure that captures `state`, so the resulting
 /// router is `Router<()>` and can be `merge`d with the Dioxus
@@ -287,6 +315,7 @@ pub fn build_router(state: WebState) -> axum::Router {
                 async move { watch_state_get(&s, params).await }
             }),
         )
+        .layer(axum::middleware::from_fn(auto_watch_middleware))
 }
 
 async fn watch_state_get(

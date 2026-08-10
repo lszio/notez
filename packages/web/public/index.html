@@ -105,6 +105,7 @@
       min-width: 0;
       overflow: hidden;
       text-overflow: ellipsis;
+    }
     .spine-actions { display: flex; gap: 0.5rem; align-items: center; }
     .spine-action {
       font-family: var(--mono); font-size: 0.78rem;
@@ -448,6 +449,32 @@
     }
     .detail-main .ref-line a { color: var(--ink-2); border-bottom: 0; }
     .detail-main .ref-line a:hover { color: var(--ink); border-bottom: 1px solid var(--ink); }
+    .detail-body {
+      font-family: var(--serif);
+      font-size: 1.0rem;
+      line-height: 1.7;
+      margin: 1.2rem 0 1.5rem;
+    }
+    .detail-body h1, .detail-body h2, .detail-body h3, .detail-body h4 {
+      font-family: var(--serif);
+      font-weight: 600;
+      margin: 1.6rem 0 0.6rem;
+    }
+    .detail-body h1 { font-size: 1.4rem; border-bottom: 1px solid var(--ink-rule); padding-bottom: 0.2rem; }
+    .detail-body h2 { font-size: 1.2rem; }
+    .detail-body h3 { font-size: 1.05rem; }
+    .detail-body p { margin: 0.5rem 0 0.7rem; }
+    .detail-body ul, .detail-body ol { margin: 0.4rem 0 0.8rem 1.5rem; }
+    .detail-body li { margin: 0.15rem 0; }
+    .detail-body code { font-family: var(--mono); font-size: 0.9em; background: var(--paper-2); padding: 0.05rem 0.3rem; border: 1px solid var(--ink-rule); }
+    .detail-body pre { font-family: var(--mono); font-size: 0.86rem; background: var(--paper-2); border: 1px solid var(--ink-rule); padding: 0.8rem; overflow-x: auto; line-height: 1.5; }
+    .detail-body pre code { background: transparent; border: 0; padding: 0; }
+    .detail-body blockquote { border-left: 3px solid var(--ink-rule); margin: 0.5rem 0; padding: 0.2rem 0.8rem; color: var(--ink-2); }
+    .detail-body a { color: var(--ink); }
+    .detail-body hr { border: 0; border-top: 1px solid var(--ink-rule); margin: 1.5rem 0; }
+    .detail-body table { border-collapse: collapse; margin: 0.5rem 0; }
+    .detail-body th, .detail-body td { border: 1px solid var(--ink-rule); padding: 0.3rem 0.6rem; text-align: left; }
+    .detail-body th { background: var(--paper-2); }
     .detail-main h2 {
       font-family: var(--serif);
       font-size: 1.05rem;
@@ -456,8 +483,6 @@
       border-bottom: 1px solid var(--ink-rule);
       padding-bottom: 0.25rem;
     }
-    .detail-main h2:first-child { margin-top: 0; }
-
     .props {
       font-family: var(--mono);
       font-size: 0.82rem;

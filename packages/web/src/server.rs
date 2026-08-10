@@ -22,9 +22,10 @@ use notez_core::config::{
     },
     SelectedSpace,
 };
+use crate::body::render_body;
 use notez_core::domain::{Resource, ResourceRef, Selector};
-use notez_core::storage::SqliteProjection;
 use serde::{Deserialize, Serialize};
+use notez_core::storage::SqliteProjection;
 
 use crate::model::ResourceRow;
 // ---- DTO surface -----------------------------------------------------------
@@ -161,10 +162,11 @@ pub async fn list_registered_spaces() -> Result<Vec<RegisteredSpaceDto>, ServerF
 /// embeds an absolute filesystem path.
 #[server]
 pub async fn resolve_space_path(path: String) -> Result<SelectedSpaceDto, ServerFnError> {
-    core_resolve_space(Path::new(&path))
-        .map(SelectedSpaceDto::from)
+    let sel = core_resolve_space(Path::new(&path))
         .map_err(WebServerError::from)
-        .map_err(|e| ServerFnError::new(e.to_string()))
+        .map_err(|e| ServerFnError::new(e.to_string()))?;
+    crate::routes::auto_start_watch(&sel.space_root);
+    Ok(SelectedSpaceDto::from(sel))
 }
 
 /// Return the friendly space info for a given path. Used by the layout
@@ -172,10 +174,11 @@ pub async fn resolve_space_path(path: String) -> Result<SelectedSpaceDto, Server
 /// page to re-derive it.
 #[server]
 pub async fn selected_space(space_root: String) -> Result<SelectedSpaceDto, ServerFnError> {
-    core_resolve_space(Path::new(&space_root))
-        .map(SelectedSpaceDto::from)
+    let sel = core_resolve_space(Path::new(&space_root))
         .map_err(WebServerError::from)
-        .map_err(|e| ServerFnError::new(e.to_string()))
+        .map_err(|e| ServerFnError::new(e.to_string()))?;
+    crate::routes::auto_start_watch(&sel.space_root);
+    Ok(SelectedSpaceDto::from(sel))
 }
 
 #[server]
@@ -215,6 +218,7 @@ pub async fn neighbor_graph(
 
 pub async fn list_resources_impl(space_root: &Path) -> Result<Vec<ResourceRow>, String> {
     let sel = core_resolve_space(space_root).map_err(|e| e.to_string())?;
+    crate::routes::auto_start_watch(&sel.space_root);
     let db_path = sel.space_root.join(".notez/index.sqlite");
     let store = SqliteProjection::open(&db_path).map_err(|e| e.to_string())?;
     let facade = ApplicationFacade::new(store);
@@ -233,7 +237,11 @@ pub async fn get_resource_impl(
     let store = SqliteProjection::open(&db_path).map_err(|e| e.to_string())?;
     let facade = ApplicationFacade::new(store);
     let res: Option<Resource> = facade.read(&r_ref).map_err(|e| e.to_string())?;
-    Ok(res.map(ResourceRow::from))
+    Ok(res.map(|r| {
+        let mut row = ResourceRow::from(r);
+        row.body_html = render_body(&row, &sel.space_root);
+        row
+    }))
 }
 // ---- tests -----------------------------------------------------------------
 

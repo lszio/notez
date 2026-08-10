@@ -267,7 +267,16 @@ impl ProjectionStore for SqliteProjection {
         {
             let mut stmt_res = tx.prepare(
                 "INSERT INTO resources (ref, kind, title, revision, source_id, locator, properties_json, object_id, content_hash)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+                 ON CONFLICT(ref) DO UPDATE SET
+                     kind = excluded.kind,
+                     title = excluded.title,
+                     revision = excluded.revision,
+                     source_id = excluded.source_id,
+                     locator = excluded.locator,
+                     properties_json = excluded.properties_json,
+                     object_id = excluded.object_id,
+                     content_hash = excluded.content_hash",
             )?;
 
             for res in resources {

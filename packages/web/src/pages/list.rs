@@ -168,6 +168,7 @@ pub fn ListPage(encoded: String) -> Element {
                         method: "post",
                         input {
                             r#type: "hidden",
+                            name: "space_root",
                             value: "{active_path_for_forms.clone().unwrap_or_default()}",
                         }
                         button {

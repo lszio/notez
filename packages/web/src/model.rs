@@ -20,6 +20,9 @@ pub struct ResourceRow {
     pub object_id: String,
     pub revision: String,
     pub properties: BTreeMap<String, String>,
+    /// Rendered preview HTML for the resource body. Empty for
+    /// kinds that don't have inline content (attachments).
+    pub body_html: String,
 }
 
 impl ResourceRow {
@@ -33,6 +36,7 @@ impl ResourceRow {
         object_id: String,
         revision: String,
         properties: BTreeMap<String, String>,
+        body_html: String,
     ) -> Self {
         Self {
             ref_str: r_ref.to_string(),
@@ -43,6 +47,7 @@ impl ResourceRow {
             object_id,
             revision,
             properties,
+            body_html,
         }
     }
 }
@@ -58,6 +63,7 @@ impl From<Resource> for ResourceRow {
             r.object_id.to_string(),
             r.revision,
             r.properties,
+            String::new(),
         )
     }
 }
@@ -90,5 +96,6 @@ mod tests {
         assert_eq!(row.object_id, object_id.to_string());
         assert_eq!(row.revision, "r1");
         assert_eq!(row.properties.get("k").map(String::as_str), Some("v"));
+        assert_eq!(row.body_html, "");
     }
 }

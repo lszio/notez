@@ -14,6 +14,7 @@
 
 use dioxus::prelude::*;
 pub mod layout;
+pub mod body;
 pub mod model;
 pub mod pages;
 pub mod router;

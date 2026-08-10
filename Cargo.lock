@@ -7179,6 +7179,7 @@ dependencies = [
  "dioxus",
  "markdown",
  "orgmode",
+ "pulldown-cmark",
  "serde",
  "serde_json",
  "tempfile",

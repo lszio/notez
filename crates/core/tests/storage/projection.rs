@@ -73,7 +73,7 @@ fn projection_replace_get_query_clear() {
 }
 
 #[test]
-fn projection_rollback_on_duplicate_refs() {
+fn projection_upsert_on_duplicate_refs() {
     let mut store = SqliteProjection::in_memory().unwrap();
     let res1 = sample_resource(
         ResourceKind::Document,
@@ -87,12 +87,13 @@ fn projection_rollback_on_duplicate_refs() {
         "01J00000000000000000000001",
         "native",
     );
-    // Attempting to replace_source with duplicate refs in the same batch should fail and roll back
-    let result = store.replace_source("native", vec![res1.clone(), res2_dup], vec![], vec![]);
-    assert!(result.is_err());
+    // Attempting to replace_source with duplicate refs in the same batch should upsert gracefully
+    let result = store.replace_source("native", vec![res1.clone(), res2_dup.clone()], vec![], vec![]);
+    assert!(result.is_ok());
 
-    // Verify nothing was committed
-    assert!(store.get(&res1.r#ref).unwrap().is_none());
+    // Verify the latest duplicate wins
+    let fetched = store.get(&res1.r#ref).unwrap().unwrap();
+    assert_eq!(fetched.title, "Doc 2");
 }
 
 #[test]
