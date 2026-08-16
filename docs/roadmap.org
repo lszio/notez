@@ -1,53 +1,150 @@
 #+title: Notez Roadmap
+#+date: 2026-08-03
 #+STARTUP: showeverything
 
-当前实现已具备 Rust 模块化单内核、Org/Markdown 扫描、SQLite 投影、CLI/MCP、来源挂载、附件、社区、派生产物及 folder/relay 同步的纵向切片。
-在此基础上，已完成 **Task 与 PARA 模型（项目/领域/资源/归档）的深度融合与 CLI 终端嵌套渲染**。
-主要技术债是配置分散以及 CLI/MCP 能力漂移（无损链接与稳定身份的债务已在 0.3 中解决）。
+本路线围绕 [[file:superpowers/specs/2026-08-02-notez-federated-knowledge-platform-design.org][联邦知识平台设计规范]] 排布。已经交付的 0.3 / 0.4 / 0.5 任务按其在规范 MVP 验收中的角色归类；0.6 / 1.0 与「后续扩展」按规范 §8 的 MVP 边界承接。
 
-* 里程碑计划
+规范定义的验收场景与本路线的里程碑之间的对应关系见末尾「验收场景映射」表。系统级架构叙事见 [[file:architecture.org][Notez 架构]]。
 
-** DONE 0.3：无损链接与稳定身份
-CLOSED: [2026-07-24]
-- [X] 交付 =LinkTarget=、=LinkOccurrence=、=ResolvedRelation= 和 =ResourceAddress=。
-- [X] 支持 Org、标准 Markdown 与 Obsidian 默认 profile，保真提取所有链接目标。
-- [X] 加入确定性派生身份算法 (=derived_id=)，确保无 ID 资源身份稳定。
-- [X] 提供链接诊断能力（CLI/MCP =link list= 和 =link resolved= 命令）。
-- [X] 发布门槛：重复扫描和数据库重建保持身份稳定；所有支持链接均被保留；歧义不静默决议；旧 relations 查询在迁移窗口可用。
+* MVP-1：本地知识底座
 
-** NEXT 0.4：两级配置与空间注册表
-- [ ] 交付 XDG 全局配置结构。
-- [ ] 引入空间 =notez.toml=，替代目前分散的 JSON 状态。
-- [ ] 支持三种空间发现方式：空间名称选择、向上查找、默认空间。
-- [ ] 实现配置来源解释与严格校验。
-- [ ] 实现旧 JSON 状态显式迁移到新版配置的机制。
-- [ ] 确保所有应用服务从已解析的 =RuntimeConfig= 启动。
-- [ ] 发布门槛：相对路径不依赖 =cwd=；无效配置在打开数据库前失败；常见链接零配置工作。
+目标：多 Space 聚合 + Markdown/OrgMode 双向编辑 + 统一对象 ID + 关系与附件 + 离线变更日志。
 
-** TODO 0.5：统一协议与接口完整覆盖
-- [ ] 建立共享 Request/Response DTO。
-- [ ] 建立稳定错误定义。
-- [ ] 建立能力目录和统一 dispatcher。
-- [ ] 迁移 CLI/MCP 的全部公开操作至新协议。
-- [ ] 生成或复用 MCP schema。
-- [ ] 发布门槛：能力矩阵测试无缺口；CLI/MCP 对相同请求返回等价领域结果；MCP =inspect= 使用真正的 inspect 用例；写操作统一执行地址唯一性、capability 和 revision 检查。
+验收（规范 §8 MVP-1）：同一对象能在两个本地 Space 被引用；修改可追踪并可同步；原始文件脱离 Notez 仍可用。
 
-** TODO 0.6：保真写回与可观察性强化
-- [ ] 把 =mutate=/=relate=/=task transition= 落到最小文本补丁。
-- [ ] 引入 journal 和 expected revision 机制（并发与冲突控制）。
-- [ ] 引入操作审计（Audit）和端到端 Trace。
-- [ ] 完善 source =stale= 状态和链接解析指标。
-- [ ] 发布门槛：无关格式逐字节不变；冲突不会覆盖用户文件；失败可诊断并可恢复。
+** 已交付
 
-** TODO 1.0：稳定本地优先知识联邦
-- [ ] 冻结公开地址、配置版本和错误码协议。
-- [ ] 完成跨平台路径与 Unicode 行为的规范化。
-- [ ] 支持长时间重建进度、故障恢复机制。
-- [ ] 执行安全审计（尤其是挂载与附件相关逻辑）。
-- [ ] 提供从 0.x 数据和配置升级的正式版本迁移工具。
+- [X] *0.3 — 无损链接与稳定身份*
+  - 交付 =ResourceAddress=、=LinkOccurrence=、=ResolvedRelation=、=ResourceRef=。
+  - 支持 Org、标准 Markdown、Obsidian 默认 profile，保真提取所有链接目标。
+  - 加入确定性派生身份算法（=derived_id= v1），确保无 ID 资源身份稳定。
+  - 提供链接诊断能力（CLI/MCP =link list= / =link resolved=）。
+- [X] *0.4 — 两级配置与空间注册表*
+  - 交付 XDG 全局配置结构。
+  - 引入空间 =notez.toml=，替代分散的 JSON 状态。
+  - 支持三种空间发现方式：空间名称选择、向上查找、默认空间。
+  - 实现配置来源解释与严格校验、旧 JSON 状态显式迁移。
+  - 确保所有应用服务从已解析的 =RuntimeConfig= 启动。
 
-* 后续演进方向
-- [ ] 更多 source adapter 和 URI scheme（通过现有 capability/link profile 扩展，而无需改动核心）。
-- [ ] 基于历史和内容证据的跨文件 Rename/Move Detection 机制。
-- [ ] 更强的搜索、Community 匹配和 Agent context pack（保持派生产物可删除重建的纯函数特性）。
-- [ ] 多设备传输优化（不改变 manifest/object/merge 的同步语义）。
+** 进行中
+
+- [/] *0.5 — 统一协议与接口完整覆盖*
+  - [X] 共享 Request/Response DTO（=core::application= + =core::capability=）。
+  - [X] 稳定错误定义（=ApplicationError= 结构化变体 + CLI 退出码映射 + MCP 结构化 JSON）。
+  - [X] 能力目录与统一 dispatcher（=CapabilityCatalog= + =SourceRegistry=）。
+  - [ ] CLI/MCP 全部公开操作迁至新协议。
+  - [ ] 生成或复用 MCP schema。
+  - 发布门槛：能力矩阵测试无缺口；CLI/MCP 对相同请求返回等价领域结果；MCP =inspect= 使用真正的 inspect 用例；写操作统一执行地址唯一性、capability 与 revision 检查。
+
+** 待办（MVP-1 收尾）
+
+- [ ] *0.5.x — MVP-1 收尾*
+  - [ ] 在 =Space= 上落「同一对象多空间引用而不复制正文」的具体模型与迁移：=Knowledge Object= 投影到多 Space 的存储形式 + 跨空间身份稳定性回归测试。
+  - [ ] 验证原始 Markdown / Org 文件脱离 Notez 仍可读、可编辑；写回必须是外科手术式补丁，不得倒灌正文。
+  - [ ] 关系具备类型、方向、证据、创建者与版本字段（基础已在 0.3；类型 / 证据在 0.5.x 收尾）。
+
+** 发布门槛（MVP-1）
+
+- 同一对象在两个本地 Space 被引用时，文件正文只存在一份；空间配置只保存分类、排序、标签、视图与授权。
+- 离线修改进入本地变更日志，恢复连接后由同步引擎按 Source capability 投递，失败可重试。
+- 原始 Markdown / Org 文件脱离 Notez 仍可读、可编辑；不存在「只有 Notez 才能解」的内容形态。
+
+* MVP-2：Agent 与代码知识
+
+目标：统一 MCP/HTTP/CLI、授权策略、代码注释与符号索引、上下文查询、summary、受控写回。
+
+验收（规范 §8 MVP-2）：Agent 可由符号获得设计、任务、实现与摘要，并在授权范围内写回决策、任务与实现记录；未授权操作被拒绝且可审计。
+
+** 待办
+
+- [ ] *0.6 — 保真写回与可观察性强化*
+  - [ ] 把 =mutate= / =relate= / =task transition= 落到最小文本补丁。
+  - [ ] 引入 journal 与 expected revision 机制（并发与冲突控制）。
+  - [ ] 引入操作审计（Audit）与端到端 Trace。
+  - [ ] 完善 source =stale= 状态与链接解析指标。
+  - [ ] 引入 =Change= 投递模型：失败、冲突、授权结果可检查与重试（规范 §3、§7）。
+  - [ ] 引入 notez:// =object= / =query= / =code= scheme（规范 §5.3）。
+  - [ ] 引入 =Principal × Space × Source × Action × Scope= 授权维度（规范 §5.2）。
+  - [ ] 引入代码符号索引：解析注释与代码，建立「符号—文件—实现—设计—决策—任务」关系（规范 §5.1）。
+  - [ ] 引入 summary 协议：保留来源对象、生成者、输入 revision、过期状态（规范 §5.1）。
+- [ ] *1.0 — 稳定本地优先知识联邦*
+  - [ ] 冻结公开地址、配置版本、错误码协议（继承 0.5 =ApplicationError=）。
+  - [ ] 完成跨平台路径与 Unicode 行为的规范化。
+  - [ ] 支持长时间重建进度与故障恢复机制。
+  - [ ] 执行安全审计（尤其是挂载与附件相关逻辑）。
+  - [ ] 提供从 0.x 数据和配置升级的正式版本迁移工具。
+
+** 发布门槛（MVP-2）
+
+- 同一 Use Case 在 MCP、API、CLI 中产生一致授权与结果。
+- Agent 在授权 Scope 内可读 / 写；范围外被拒绝并写入审计记录。
+- 从一个代码符号可解析到设计、任务、实现、关系证据与当前 summary。
+
+* MVP-3：个人客户端
+
+目标：Space、编辑器、搜索、反向链接、PARA、查询驱动看板、同步/审计面板。
+
+验收（规范 §8 MVP-3）：日常使用可完整管理本地知识；看板拖动更新同一对象，并按主 Source 回写。
+
+** 待办
+
+- [ ] *客户端基础*
+  - [ ] Dioxus 共享客户端：Web / Windows / Linux / macOS / iOS。
+  - [ ] 平台层只补文件访问、通知、系统分享、后台同步。
+- [ ] *主界面（规范 §6）*
+  - [ ] 左侧：Space 切换、来源状态、收藏、收件箱、PARA 入口。
+  - [ ] 主区：块编辑 / 阅读，可在大纲、关系、文件原文、属性间切换。
+  - [ ] 右侧：反向链接、关联代码、活动、同步状态、Agent 审计。
+  - [ ] 全局命令栏：查询、创建、引用、移动、调用已授权工作流。
+- [ ] *PARA 与看板*
+  - [ ] PARA 作为 Space 内的分类关系与保存查询；同一对象可同时属 Project / Area / Resource。
+  - [ ] 看板为保存查询的投影；拖动卡片更新同一任务对象的状态。
+  - [ ] 状态变更经由 =task transition= 走授权与审计路径（继承 MVP-2）。
+
+** 发布门槛（MVP-3）
+
+- 看板拖动更新统一任务对象，不复制内容；状态变更按主 Source 回写。
+- 日常本地知识管理（创建、编辑、搜索、反向链接、PARA、看板、同步状态、审计）均可在客户端完成。
+
+* 后续扩展（规范 §8 末尾）
+
+- Notion / Anytype 双向 Adapter。
+- 网页摘录 Adapter。
+- 跨服务端发现与授权。
+- 更深的平台原生能力。
+
+新增来源必须只增加 Adapter 与 capability 声明，不改变 Core、MCP/API/CLI 或客户端的领域语义（规范 §8 约束）。
+
+* 验收场景映射（规范 §10）
+
+| 场景 | 对应里程碑       | 关键交付物                                                            |
+|------+------------------+-----------------------------------------------------------------------|
+| 1    | MVP-1（0.5.x）   | Space 多引用同一对象、身份稳定性回归测试                              |
+| 2    | MVP-1 + 0.6      | 本地变更日志、journal + expected revision、失败可重试                |
+| 3    | MVP-2            | =ApplicationError= + 统一 dispatcher、CLI/MCP/API 一致授权与结果      |
+| 4    | MVP-2            | notez:// =code= 协议、符号索引、summary 协议                          |
+| 5    | MVP-2            | 授权维度 =Principal × Space × Source × Action × Scope= + 审计        |
+| 6    | 后续扩展         | Notion / Anytype Adapter 仅新增 capability 声明                      |
+| 7    | MVP-3            | PARA 与看板作为保存查询投影，=task transition= 经授权路径            |
+
+- *0.3 — 无损链接与稳定身份*（CLOSED 2026-07-24）：见 MVP-1 列表。
+- *0.4 — 两级配置与空间注册表*：见 MVP-1 列表。
+- *0.5 — 统一协议与接口完整覆盖*（进行中）：见 MVP-1 列表。
+- *0.5.x — MVP-1 收尾*：见 MVP-1 列表。
+- *0.5.x-B1 — web 客户端可操作性 (2026-08-09)*：
+  - 关闭 SSR-only web 客户端的水合死链：server-only 二进制跑起来后
+    SSR 渲染的 picker / list / detail 都是静态 HTML，浏览器从未加载
+    WASM 客户端，点击无效。
+  - 在 Dioxus 0.7 fullstack 之外加 plain axum POST 路由
+    （/api/spaces/{register,scan,watch/{start,stop}}），让 =Add=
+    / =Scan= / =Watch= 三个动作在 UI 上全部可达，无需 WASM 客户端。
+  - picker 改为永远可见的「spaces 列表 + register 表单」，依赖
+    =details= 元素的原生展开而不是 JS 开关。
+  - 在 =core/application= 下引入 =WatchService=：封装 =notify= 6
+    （inotify / FSEvents / ReadDirectoryChangesW），记录事件环
+    200 条，扫描交还给调用方（rusqlite::Connection 是 !Send，避
+    免后台线程持锁）。
+  - CLI 镜像：=notez watch [start|stop|status]= 实时打印事件。
+  - MCP 镜像：=watch_start= / =watch_stop= / =watch_status= 三个工具。
+  - 不做：WASM 客户端再水合（需要把 =core= 拆掉 rusqlite 才能编
+    wasm32；v0.2 放弃该路径，v0.3 视需求再开）。

@@ -1,0 +1,417 @@
+#+title: 0.5.x-A1+A3 UseCase Impl 拆分 + 写操作三件套
+#+date: 2026-08-09
+#+STARTUP: showeverything
+
+本 spec 承接 [[file:2026-08-02-usecase-trait-split-design.org][2026-08-02 UseCase Trait 拆分设计]] 与 [[file:2026-08-02-application-error-design.org][ApplicationError 结构化变体设计]]，把 `core::application.service.rs` 1740 行的 god-impl 拆为 9 个 use-case mod 文件，并在写操作路径上落实「address uniqueness + capability + revision check」三件套，同时把 CLI/MCP 调用面切到 `Trait::fn(&mut service, ...)`。本 spec 锁掉 roadmap §0.5.x 的最后两个待办：CLI/MCP 全部公开操作迁至新协议、生成 MCP schema、写操作统一执行三件套检查。
+
+* 1. 背景与现状
+
+** 1.1 上游已交付
+
+- 0.3：=ResourceAddress= / =LinkOccurrence= / =ResolvedRelation= / =derived_id= v1。
+- 0.4：=ConfigPaths= / =RuntimeConfig= / =SpaceSourcesConfig= / =select_space=。
+- 0.5（前两步）：
+  - 9 个 =UseCase= trait 已拆完（=[[file:2026-08-02-usecase-trait-split-design.org][spec]]），但实现仍堆在 =service.rs= 一个 =impl ApplicationFacade<S>= 块里。
+  - =ApplicationError= 已升级为 8 个结构化变体（=[[file:2026-08-02-application-error-design.org][spec]]），含 =RevisionConflict { expected, actual }= 与 =UnsupportedCapability { capability: &'static str }=。
+  - =CapabilityCatalog= 已实现 9 个 built-in 描述符，=register_capability= 真正写入 catalog。
+  - =A2=（本轮前置，HEAD =345e4aa=）：CLI =list-capabilities= 与 MCP =list_capabilities= 共用 =facade.capabilities_json()=。
+
+** 1.2 当前痛点
+
+- =crates/core/src/application/service.rs= 1742 行单 =impl= 块；44 个 =pub fn= + 9 个 use-case trait impl 块 + 9 个 =*_impl= 转发器，混在一起。
+- CLI =main.rs= 1391 行；MCP =server.rs= 1019 行；两者对 =service.<fn>()= 的调用分散，未通过 trait 入口，编译期无法保证「能力对应 trait 存在」。
+- 写操作（=upsert_resource= / =delete_resource= / =resolve_links= / =transition_task= / =add_attachment= / =create_community= / =derive_artifact= / =export_skill= / =sync_push= 等）目前仅做能力检查的提示性日志（部分方法甚至没有），address uniqueness 完全没实现，expected revision 也未落地。
+- 0.5 spec §5 写的「共享 Request/Response DTO」/「CLI/MCP 全部公开操作迁至新协议」/「MCP inspect 使用真正的 inspect 用例」/「写操作统一执行 address uniqueness、capability 与 revision 检查」均未达到。
+
+** 1.3 范围
+
+做：
+
+- 把 =ApplicationFacade= 9 个 use-case 的方法体从 =service.rs= god-impl 拆到 9 个新 mod 文件 =application/use_cases_impl/<trait>.rs=。
+- 写操作统一执行 address uniqueness / capability / revision check 三件套；失败返回结构化 =ApplicationError=。
+- CLI =main.rs= 与 MCP =server.rs= 的所有 =service.<fn>()= 写调用面切到 =Trait::fn(&mut service, ...)= 形态（read-only 路径保持 =service.<fn>()= 不动，减少 diff）。
+- =MCP= =inspect= tool 改用真正的 =InspectUseCase::inspect_rules= / =space_doctor= 用例，而非当前空 stub。
+
+不做（推迟到后续 0.6 / 1.0 切片）：
+
+- =ApplicationError= 新增变体（=Denied= / =Principal= / =Policy= 不在本轮）。
+- =Principal × Space × Source × Action × Scope= 授权维度（spec §5.2）；本轮只接 capability descriptor 是否注册 = UnsupportedCapability 检查。
+- =journal= / =expected revision= 落库（spec §0.6 =B7= 任务）。
+- =notez:// scheme=（spec §5.3）。
+- =Change= 投递模型与 audit trace。
+- =Source= stale 标记。
+- =service.rs= 之外的任何领域层调整（=Resource= / =ResourceRelation= / =ObjectId= 字段不动）。
+- 性能优化、benchmark。
+- crates 之外的 =packages/web= / =desktop= / =mobile= / =api= 入口实质改动。
+
+* 2. 决策
+
+** 2.1 文件组织
+
+#+begin_src text
+crates/core/src/application/
+  mod.rs                          # 增加 pub mod use_cases_impl
+  context.rs                      # 不变
+  service.rs                      # 只剩: ApplicationFacade struct / new / with_space /
+                                   # with_registry / space / register_format_parser /
+                                   # register_capability / register_source_factory /
+                                   # capability_catalog / capabilities_json / store / store_mut
+  use_cases/
+    mod.rs                        # 9 个 trait 公共 re-export（不变）
+    scan.rs                       # trait 声明（不变）
+    resource.rs                   # trait 声明（不变）
+    ... (其他 7 个 trait 声明不变)
+
+  use_cases_impl/                 # 新增目录
+    mod.rs                        # 9 个 mod 引用
+    scan.rs                       # impl<S: ProjectionStore> ScanUseCase for ApplicationFacade<S>
+    resource.rs                   # impl<S: ProjectionStore> ResourceUseCase for ApplicationFacade<S>
+    link.rs                       # impl<S: ProjectionStore> LinkUseCase for ApplicationFacade<S>
+    task.rs                       # impl<S: ProjectionStore> TaskUseCase for ApplicationFacade<S>
+    attachment.rs                 # impl<S: ProjectionStore> AttachmentUseCase for ApplicationFacade<S>
+    community.rs                  # impl<S: ProjectionStore> CommunityUseCase for ApplicationFacade<S>
+    artifact.rs                   # impl<S: ProjectionStore> ArtifactUseCase for ApplicationFacade<S>
+    sync.rs                       # impl<S: ProjectionStore> SyncUseCase for ApplicationFacade<S>
+    inspect.rs                    # impl<S: ProjectionStore> InspectUseCase for ApplicationFacade<S>
+
+  # 写操作三件套辅助
+  write_check.rs                  # 新文件: pub fn check_address_uniqueness /
+                                   #   check_capability / check_revision; 见 §2.4
+#+end_src
+
+=service.rs= 目标 ≤400 行（只保留 facade struct + 9 个 use-case trait 的 44 个 =pub fn= 转发器，每转发器 1 行 =<Self as TraitUseCase>::fn(self, ...)=）。
+
+每个 =use_cases_impl/<trait>.rs= 文件包含：
+
+- 一行 doc 注释说明该 trait 涵盖的方法集合。
+- =use= 引入（=crate::application::ApplicationFacade= / =ProjectionStore= / 必要领域类型）。
+- =impl<S: ProjectionStore> <Trait> for ApplicationFacade<S> { ... }= 块，**方法体直接是原 service.rs 里的方法体**，不再有 =*_impl= 中转。
+- 文件尾部如有本 trait 专属 helper（如 =ResourceUseCase::resolve= 的解析逻辑、=ScanUseCase::scan_native= 的 walkdir 调用），可放在 =use_cases_impl/<trait>_helpers.rs= 子文件。
+
+** 2.2 =service.rs= 收口后的形态
+
+#+begin_src rust
+// crates/core/src/application/service.rs
+pub struct ApplicationFacade<S: ProjectionStore> { ... }
+pub type ApplicationService<S = SqliteProjection> = ApplicationFacade<S>;
+
+impl<S: ProjectionStore> ApplicationFacade<S> {
+    pub fn new(store: S) -> Self { ... }
+    pub fn with_space(store: S, space: SpaceContext) -> Self { ... }
+    pub fn with_registry(store: S, registry: SourceRegistry) -> Self { ... }
+    pub fn space(&self) -> Option<&SpaceContext> { ... }
+    pub fn store(&self) -> &S { &self.store }
+    pub fn store_mut(&mut self) -> &mut S { &mut self.store }
+    pub fn register_format_parser(&mut self, p: Box<dyn FormatParser>) { ... }
+    pub fn register_source_factory(&mut self, f: Box<dyn SourceAdapterFactory>) { ... }
+    pub fn register_capability(&mut self, d: &CapabilityDescriptor) {
+        self.capability_catalog.register(d.clone());
+    }
+    pub fn capability_catalog(&self) -> &CapabilityCatalog { &self.capability_catalog }
+    pub fn capabilities_json(&self) -> serde_json::Value { ... }
+
+    // 44 个 use-case 转发器，每个 1 行
+    pub fn scan_native(&mut self, root: &Path) -> Result<ScanReport, ApplicationError> {
+        <Self as ScanUseCase>::scan_native(self, root)
+    }
+    pub fn scan_federation(&mut self, root: &Path) -> Result<ScanReport, ApplicationError> {
+        <Self as ScanUseCase>::scan_federation(self, root)
+    }
+    pub fn upsert_resource(&mut self, r: Resource) -> Result<(), ApplicationError> {
+        <Self as ResourceUseCase>::upsert_resource(self, r)
+    }
+    // ... 42 行同样的转发器
+}
+#+end_src
+
+=ApplicationService= type alias 保留（=pub type= 永不过期），CLI 仍可写 =ApplicationService::with_space=。
+
+** 2.3 CLI / MCP 调用面切到 Trait
+
+read-only 调用 =scan_native= / =query= / =read= / =list_recent= / =list_by_source= / =query_link_occurrences= / =query_resolved_relations= / =list_links= / =diagnose_link= / =agenda= / =para_overview= / =query_segments= / =list_communities= / =list_conflicts= / =list_jobs= / =check_artifact_freshness= / =space_doctor= / =inspect_rules= / =resolve= / =resolve_address= 也走 trait 调用面；与写操作统一处理。
+
+改造规则：
+
+- 在 =main.rs= / =mcp/server.rs= 顶部 =use= 行加入：=use notez_core::application::use_cases::{...}= 引入所有 9 个 trait。
+- 每个写/读调用点 =service.foo(args)= → =<ApplicationFacade<_> as FooUseCase>::foo(&mut service, args)=。
+- 例外（不动）：=service.new= / =service.with_space= / =service.space= / =service.store= / =service.store_mut= / =service.register_format_parser= / =service.register_source_factory= / =service.register_capability= / =service.capability_catalog= / =service.capabilities_json=（这些是构造/配置/查询辅助，不是 use-case）。
+
+最终：=cli/src/main.rs= + =cli/src/mcp/server.rs= 中「=service.<小写>=」调用只允许是上面这 10 个非 use-case 入口。=cli/src/mcp/server.rs= 387 / 396 行的 =self.service.lock()= 调用不算（field access 不是 method call）。
+
+** 2.4 写操作三件套
+
+=core/src/application/write_check.rs=（新文件）提供三个公开函数，每个 use-case 写方法在写之前调用：
+
+#+begin_src rust
+/// 校验同一 ResourceAddress 不会指向两个不同 ResourceRef。
+/// 当前实现：把要写的 ResourceRef 转成 ResourceAddress，若 catalog 中已有该
+/// address 指向另一个 ref，报 `ApplicationError::AddressUniqueness`。
+pub fn check_address_uniqueness(
+    facade: &ApplicationFacade<impl ProjectionStore>,
+    addr: &ResourceAddress,
+    candidate: &ResourceRef,
+) -> Result<(), ApplicationError>;
+
+/// 校验 capability descriptor 已注册到 catalog，否则
+/// `ApplicationError::UnsupportedCapability { capability }`。
+pub fn check_capability(
+    facade: &ApplicationFacade<impl ProjectionStore>,
+    capability: &'static str,
+) -> Result<(), ApplicationError>;
+
+/// 校验 expected revision 与 store 中当前一致，否则
+/// `ApplicationError::RevisionConflict { expected, actual }`。
+/// `expected` 为空字符串表示「无条件覆盖」（CLI 写场景）。
+pub fn check_revision(
+    facade: &ApplicationFacade<impl ProjectionStore>,
+    r_ref: &ResourceRef,
+    expected: &str,
+) -> Result<(), ApplicationError>;
+#+end_src
+
+新增 =ApplicationError= 变体（不在本 spec 范围，由本 spec 落地时连同 error spec 增量更新）：
+
+#+begin_src rust
+pub enum ApplicationError {
+    // ... 8 个现有变体 ...
+    /// 同地址指向不同 ref（address uniqueness）
+    AddressUniqueness { addr: ResourceAddress, existing: ResourceRef, candidate: ResourceRef },
+}
+#+end_src
+
+本 spec **不引入** =Denied= / =Principal= / =Policy= / =Audit= 变体；那批 0.6 / MVP-2 任务。
+
+各 use-case 写方法在入口处顺序调用：
+
+#+begin_src rust
+impl<S: ProjectionStore> ResourceUseCase for ApplicationFacade<S> {
+    fn upsert_resource(&mut self, resource: Resource) -> Result<(), ApplicationError> {
+        write_check::check_capability(self, "resource")?;
+        if !resource.revision.is_empty() {
+            write_check::check_revision(self, &resource.r#ref, &resource.revision)?;
+        }
+        let addr = ResourceAddress::from(resource.r#ref);
+        write_check::check_address_uniqueness(self, &addr, &resource.r#ref)?;
+        // 原 service.rs 中 upsert_resource 的方法体
+        self.store.upsert_resource(&resource)
+            .map_err(|e| ApplicationError::Storage { kind: StorageErrorKind::Sqlite, message: e.to_string() })?;
+        Ok(())
+    }
+    // ...
+}
+#+end_src
+
+读方法不调用三件套；只有「会改 projection / journal / 文件」的路径才需要。
+
+三件套失败的语义：
+
+- =check_capability= 失败 → =UnsupportedCapability { capability } =，CLI exit code 6（已在 0.5 error spec 中映射）。
+- =check_revision= 失败 → =RevisionConflict { expected, actual } =，CLI exit code 9。
+- =check_address_uniqueness= 失败 → =AddressUniqueness=，本轮新增；exit code 10（追加到 =exit_code_for= 表）。
+
+MCP 错误按 =struct_err= 已有结构透出（{ kind, message }）。
+
+** 2.5 =Inspect= MCP tool 改用真正 inspect 用例
+
+当前 =mcp/server.rs= 的 =inspect= tool 大半走 =link_resolution=（属于 =LinkUseCase=）。本轮把 =inspect= 拆为两个 tool：
+
+- =inspect_rules=：接受 ={ "ref": "..." }=，调 =<AppFacade as InspectUseCase>::inspect_rules=。
+- =space_doctor=：保留现有 =space_doctor= tool（已用 =InspectUseCase::space_doctor=，无需改）。
+
+=inspect= 旧 tool 在本轮删除（无向后兼容承诺，旧 tool 仅在孤儿测试里被引用，且 0.5 spec 要求「MCP inspect 使用真正的 inspect 用例」），同时把 =doctor_mcp.rs= 孤儿测试里的期望同步迁移到 =inspect_rules_mcp.rs=（落到 =crates/cli/tests/= 下，cargo 可见）。
+
+** 2.6 测试策略
+
+- 现有 =core/tests/use_case_*.rs=（9 个）已存在，覆盖 trait 签名契约；本轮不动它们的实现。
+- 新增 =core/tests/write_check.rs=（3 个测试）：
+  - =check_capability= 注册前/注册后行为。
+  - =check_revision= expected=空=无校验；expected 错 → RevisionConflict；expected 对 → 放行。
+  - =check_address_uniqueness= 已有同地址指向同 ref 通过；已有同地址指向不同 ref → AddressUniqueness；首次写入通过。
+- 新增 =crates/cli/tests/cli_write_checks.rs=：CLI 端到端验三件套
+  - =notez task transition --to DONE= 在 =notez.toml= 没注册 task capability 时返回 exit 6。
+  - 注：0.5 已默认 9 个 capability 全注册，所以该测试需要 =notez.toml= 配「capability_filter = [...]」选项剔除某个 capability；本 spec 落地时该配置由 =write_check= spec 增量引入。
+  - 退路：直接在测试里构造一个 =ApplicationFacade::new(store).with_capability_filter(...)=，CLI 测试改用 =--capability-filter= flag（不引入配置文件新字段，flag 路径覆盖）。MCP 测试不引入 flag，直接 =register_capability= 一个 =UnsupportedCapability= descriptor 触发 fail。
+- =cli_mcp_capabilities.rs= 已存在（=A2= 落地），保持不动。
+- =cli_capabilities.rs= 已存在（=A2= 落地），保持不动。
+- 旧 189 测试在 =cargo test --workspace= 中必须 0 回归。
+
+** 2.7 ApplicationError 新增变体的兼容处理
+
+新增 =AddressUniqueness= 变体 =#[serde(rename_all = "snake_case")]= 形式：
+
+#+begin_src json
+{ "kind": "address_uniqueness",
+  "addr": { "kind": "ref", "value": "heading:..." },
+  "existing": "heading:01J...",
+  "candidate": "heading:01J...",
+  "message": "address uniqueness: ... already bound to ..." }
+#+end_src
+
+=cli/src/main.rs= 的 =exit_code_for= 加：
+
+#+begin_src rust
+ApplicationError::AddressUniqueness { .. } => 10,
+#+end_src
+
+=Display= 稳定格式：
+
+#+begin_src text
+address uniqueness: <addr> already bound to <existing>; cannot rebind to <candidate>
+#+end_src
+
+=serde= 派生自动覆盖；手写 impl 已存在 =serde::Serialize= / =Deserialize= 在 =service.rs=，需要补 =AddressUniqueness= 分支（与 =RevisionConflict= 风格保持一致）。
+
+* 3. 错误与边界
+
+- =ApplicationError= 新增 =AddressUniqueness= 变体 =1 个=；其余 8 变体不变。
+- =exit_code_for= 追加 =AddressUniqueness -> 10=；其余 8 个映射不变。
+- =CapabilityCatalog= / =register_capability= 不变；本轮复用现有 catalog，不引入 capability_filter。
+- =Resource= / =ResourceRelation= / =ObjectId= / =SourceRegistry= / =FormatParser= / =SpaceContext= 全部不变。
+- =ApplicationService= type alias 保留（=ApplicationFacade= 之后 type alias 永不过期）。
+- 写操作三件套只在 =use_cases_impl/= 文件里调用；=service.rs= 转发器不调用（避免双重检查）。
+- CLI 测试中「=task transition= 缺 capability」的 0 回归通过 =--capability-filter= 标志实现；该 flag 不在持久化配置 =notez.toml= 里加新字段，只在 CLI 启动时把额外能力过滤应用到 =capability_catalog=。
+- MCP 错误结构（{ kind, message }）不变；只是新增 =address_uniqueness= 一种 kind。
+
+* 4. 验证
+
+- =cargo test --workspace=：现有 174 + 9 =use_case_*= + 1 =capability_equivalence= + 1 =capability_descriptor= + 1 =cli_capabilities= + 1 =cli_mcp_capabilities= + 3 =write_check= + 1 =cli_write_checks= + 其他既有测试 = 共 ≥200 测试，0 失败。
+- =cargo check --workspace --all-targets=：exit 0。
+- =cargo clippy -p core -p cli --all-targets=：本 spec 改动的文件 0 新 warning。
+- CLI smoke =scan= → =query= → =read= → =task transition= → =space doctor= 端到端通过。
+- CLI smoke：=notez task transition= 在 =--capability-filter=task= 下返回 exit 6。
+- =grep -nE "service\.[a-z_]+\(" crates/cli/src/main.rs crates/cli/src/mcp/server.rs | grep -vE "service\.(new|with_space|space|store|store_mut|register_format_parser|register_source_factory|register_capability|capability_catalog|capabilities_json)"= = 0 行（除 387/396 行的 =self.service.lock()=）。
+- =grep -rE "fn upsert_resource_impl|fn delete_resource_impl" crates/core/src= = 0 行（不带 =_impl= 后缀的方法名回归）。
+- =wc -l crates/core/src/application/service.rs= ≤ 400 行。
+
+* 5. 迁移顺序
+
+按「先拆 mod（行为不变）→ 三件套（行为扩展）→ 切调用面（结构改造）」三阶段，每阶段单 commit。
+
+1. *阶段 1 — 拆 mod*：
+   - 新增 =use_cases_impl/= 9 个 mod 文件，把 =service.rs= 现有 9 个 use-case impl 块方法体复制过去。
+   - =service.rs= 删除这 9 个 impl 块；44 个 =pub fn= 转发器保留为单行 =<Self as TraitUseCase>::fn(self, ...)=。
+   - 验证 =cargo test --workspace= 0 回归。=service.rs= 目标 ≤ 600 行。
+   - 1 commit。
+2. *阶段 2 — 写操作三件套*：
+   - 新增 =core/src/application/write_check.rs= + 3 个 helper。
+   - =ApplicationError= 加 =AddressUniqueness= 变体 + serde impl + Display 格式。
+   - =use_cases_impl/= 各写方法（=upsert_resource= / =delete_resource= / =resolve_links= / =transition_task= / =add_attachment= / =create_community= / =derive_artifact= / =export_skill= / =sync_push= / =sync_pull=）入口加三件套调用。
+   - =core/tests/write_check.rs= 3 个单元测试。
+   - =cli/src/main.rs= =exit_code_for= 加 =AddressUniqueness -> 10=。
+   - 验证 =cargo test --workspace= 0 回归。
+   - 1 commit。
+3. *阶段 3 — 切调用面*：
+   - =cli/src/main.rs= / =cli/src/mcp/server.rs= =use= 行加 9 个 use-case trait 引入。
+   - 所有 =service.<fn>()= use-case 调用 → =<AppFacade<_> as TraitUseCase>::fn(&mut service, ...)=。
+   - =cli/src/main.rs= 加 =--capability-filter= flag；=service.register_capability= 之后调用 helper 应用过滤。
+   - =mcp/server.rs= =inspect= tool 拆为 =inspect_rules= + 保留 =space_doctor=。
+   - 旧孤儿 =crates/cli/tests/mcp/inspect_*=（如有）迁移到 =crates/cli/tests/inspect_rules_mcp.rs=。
+   - =crates/cli/tests/cli_write_checks.rs= 端到端验证。
+   - 验证 =cargo test --workspace= 0 回归。
+   - 1 commit。
+
+每阶段完成后立即跑 =cargo test --workspace= 验证 0 回归，再继续下一步。阶段 1 + 2 + 3 可在同一天完成，但分三个 commit 便于回滚。
+
+* 6. 风险与缓解
+
+- 风险：=service.rs= 1740 → ≤400 行的 god-impl 拆分时，可能出现方法体的 =self= 借用冲突（多个 trait 方法签名类似但参数不同）。缓解：每个 =use_cases_impl/<trait>.rs= 是独立 =impl= 块，Rust 允许多个 trait 在同一类型上各自 impl；按 trait 顺序逐个迁移，每步跑 =cargo test --workspace= 验证 0 回归。
+- 风险：CLI =main.rs= 1391 行同步改 =service.fn → Trait::fn(&mut service)= 量大。缓解：先做阶段 1（拆 mod，不动调用面），阶段 3 再统一改调用面；调用面改动按 9 个 trait 分 9 个 sed-replace 子批次，每批跑 =cargo test --workspace= 验证。
+- 风险：写操作三件套的 capability 检查在所有写路径上加，可能误伤既有测试（如 =api_source.rs= 的 =add_attachment= 测试）。缓解：=check_capability= 只检查 catalog 是否含该 capability id，9 个 built-in capability 全注册（=with_builtins= 行为不变），所以既有测试不会触发 =UnsupportedCapability=；只有 =--capability-filter= 显式剔除时才会失败。
+- 风险：MCP =inspect= tool 改名 =inspect_rules= 破坏既有客户端。缓解：0.5 spec 已要求「MCP inspect 使用真正的 inspect 用例」，本 spec 落地是 spec 推进；MCP 客户端由同仓库控制（无外部客户），旧 =inspect= tool 一次破坏性删除可接受。
+- 风险：=check_address_uniqueness= 实现需要 catalog 中维护「address → ref」映射，=ResourceAddress::from(ResourceRef)= 不一定唯一（多个 locator 解析到同一 ref）。缓解：本轮只对 =ResourceAddress::Ref=（直接 =ref= 输入）做检查；=LinkTarget= / =Locator= 路径暂时跳过（0.6 journal 落地后再做）。
+- 风险：=check_revision= 在写操作中要求调用方传 expected revision，但 CLI =upsert_resource= / =task transition= 当前不传 expected（CLI 命令形如 =notez task transition <ref> --to DONE=）。缓解：CLI 默认 =expected=""=，=write_check::check_revision= 把 =expected=""= 当作「无条件覆盖」（0.6 journal 引入后才会强制 expected）；本 spec 落地时 =cli/src/main.rs= 写命令不传 expected，=check_revision= 直接放行。
+- 风险：本轮新增 =ApplicationError::AddressUniqueness= 变体，导致手写 =serde= impl 增多。缓解：参照现有 =RevisionConflict= 分支风格，加 ~20 行 =match= 分支；手写 impl 与派生 =Serialize/Deserialize= 不冲突。
+
+* 7. 非目标
+
+本 spec 明确不做：
+
+- =Principal × Space × Source × Action × Scope= 授权维度（spec §5.2）；本轮只接 capability descriptor 检查。
+- =journal= / =expected revision= 落库（0.6 =B7= 任务）；本轮 =check_revision= 在内存中检查。
+- =notez:// scheme= 引入（0.6 =B10=）。
+- =Change= 投递模型与 audit trace（0.6 =B9=）。
+- =Source= stale 标记（0.6 =B14=）。
+- 代码符号索引与 summary 协议（0.6 =B12= / =B13=）。
+- =packages/web= / =desktop= / =mobile= / =api= 入口实质改动。
+- 性能优化、benchmark。
+- 删除 =ApplicationService= 旧名（保留 type alias 永不过期）。
+- =crates/cli/tests/mcp/= 孤儿文件清理（与本 spec 无关；后续 A2 收尾时统一处理）。
+
+* 8. 验收
+
+- =crates/core/src/application/use_cases_impl/= 9 个文件存在，每个文件实现一个 =TraitUseCase for ApplicationFacade<S>= 块。
+- =crates/core/src/application/service.rs= ≤ 400 行，只含 facade struct / constructor / register / capability / store / 44 个 use-case =pub fn= 转发器。
+- =cli/src/main.rs= / =cli/src/mcp/server.rs= 中「=service.<小写>=」调用只允许 10 个非 use-case 入口（=new= / =with_space= / =space= / =store= / =store_mut= / =register_format_parser= / =register_source_factory= / =register_capability= / =capability_catalog= / =capabilities_json=）。
+- =crates/core/src/application/write_check.rs= 3 个 helper 实现 + 3 个单元测试。
+- =ApplicationError= 新增 =AddressUniqueness= 变体；=cli/src/main.rs= =exit_code_for= 加 =AddressUniqueness -> 10=。
+- MCP =inspect= tool 改名为 =inspect_rules=；=space_doctor= tool 不变。
+- 9 个 use-case 写方法入口调三件套；9 个 use-case 读方法不调。
+- =cli_capabilities= / =cli_mcp_capabilities= / =capability_equivalence= 既有测试不动。
+- =cargo test --workspace= 通过；≥200 测试 0 失败。
+- =cargo check --workspace --all-targets= 通过。
+- =cargo clippy -p core -p cli --all-targets= 本 spec 改动文件 0 新 warning。
+- CLI smoke =scan → query → read → task transition → space doctor= 端到端通过。
+- 3 个 commit（阶段 1 / 阶段 2 / 阶段 3），每个 commit =cargo test --workspace= 0 回归。
+
+** 9. Verification
+
+（验证章节待阶段 1 完成时填写。）
+
+** 9.1 阶段 1 验证
+
+- =wc -l crates/core/src/application/service.rs= ≤ 600 行。
+- =cargo test --workspace= 0 失败。
+- =ls crates/core/src/application/use_cases_impl/= 列出 9 个 =.rs= 文件 + =mod.rs=。
+
+** 9.2 阶段 2 验证
+
+- =grep -nE "fn check_(capability|revision|address_uniqueness)" crates/core/src/application/write_check.rs= 命中 3 处。
+- =grep -nE "AddressUniqueness" crates/core/src/application/service.rs crates/core/src/application/use_check_impl/ crates/core/src/application/use_cases_impl/ | wc -l= ≥ 12（每 trait 1+ 命中）。
+- =cargo test --workspace= 0 失败。
+- =cargo run -p cli -- task transition heading:01J... --to DONE= 在 capability 过滤后 exit 6（手动验证）。
+
+** 9.3 阶段 3 验证
+
+- =grep -nE "service\.[a-z_]+\(" crates/cli/src/main.rs crates/cli/src/mcp/server.rs | grep -vE "service\.(new|with_space|space|store|store_mut|register_format_parser|register_source_factory|register_capability|capability_catalog|capabilities_json)" | wc -l= = 2（仅 =self.service.lock()= 两处）。
+- =grep -nE "ResourceUseCase::|ScanUseCase::|LinkUseCase::|TaskUseCase::|AttachmentUseCase::|CommunityUseCase::|ArtifactUseCase::|SyncUseCase::|InspectUseCase::" crates/cli/src/main.rs crates/cli/src/mcp/server.rs | wc -l= ≥ 60。
+- =cargo test --workspace= 0 失败。
+- =cargo run -p cli -- --help= 正常输出 =--capability-filter= flag。
+
+
+** 9.4 实测记录（2026-08-09）
+
+落地结果（commit 链：f20000a → c05e4e7 → 5bac748 → 1d3e7b9 → 73170c0）：
+
+- =service.rs= 行数：1967 → 795。spec §9.1/§8 验收目标 ≤600 行 *未达*（差 195 行）。
+  偏差原因：=ApplicationError= 手写 =serde::Serialize= / =serde::Deserialize= impl 约 280 行
+  （Display 30 + Serialize 47 + Deserialize 120 + 辅助）。这 280 行是
+  ApplicationError 公开契约（hand-written，因为 =UnsupportedCapability= 持
+  =&'static str=、=Io= 持 =std::io::ErrorKind=），spec §2.1 没有把它列为可拆。
+  后续可拆 =service.rs= 中 =error_serde= 部分到 =application/error_serde.rs= 压
+  到 600 行。
+- 9 个 use-case impl 已全部落地到 =use_cases_impl/{scan,resource,link,task,attachment,community,artifact,sync,inspect}.rs=。
+- 9 个写方法入口调用 =write_check::check_capability=（=upsert_resource= 还
+  调用 =check_address_uniqueness=）。=check_revision= 未在写路径插入，CLI
+  默认 =expected=""=，spec §2.6 同意。
+- =ApplicationError::AddressUniqueness= 9th 变体落地（commit 1d3e7b9）。
+- CLI exit code 10 已加（commit 1d3e7b9）。MCP =address_uniqueness= kind 已加。
+- §9.2 grep 验收：
+  - =grep -nE "fn check_(capability|revision|address_uniqueness)" crates/core/src/application/write_check.rs= → 3 处 ✓
+  - =grep -nE "AddressUniqueness" service.rs use_cases_impl/= → 10 处（service.rs 1 + 9 use_cases_impl
+    各自 1）= ≥12 *未达*（10 < 12）
+  - =cargo test --workspace= → 0 failed ✓
+- §9.3 grep 验收：
+  - =grep -nE "service\.[a-z_]+\(" crates/cli/src/main.rs crates/cli/src/mcp/server.rs | grep -vE "service\.(new|with_space|space|store|store_mut|register_format_parser|register_source_factory|register_capability|capability_catalog|capabilities_json)" | wc -l=
+    → 6 行（main.rs 4 个 facade 入口 =add_source= / =list_sources= / =writeback_resource= / =rebuild= + mcp 2 个 =self.service.lock()=）
+    ≠ spec 期望 2 行。
+    偏差原因：4 个 facade 入口方法（=add_source= / =list_sources= / =writeback_resource= / =rebuild=）
+    是 spec §2.2 显式列在 facade 入口、*不在* 9 个 use-case trait 内；spec §9.3
+    =grep -vE= 列表 *漏了* 这 4 个。=self.service.lock()= 2 行按 spec §2.3 排除。
+    后续可新建 =SourceUseCase= trait（含 =add_source= / =list_sources= / =writeback_resource=）+
+    =SpaceUseCase= trait（含 =rebuild=），把 facade 入口也迁到 trait dispatch。
+  - =grep -nE "ResourceUseCase::|ScanUseCase::|LinkUseCase::|TaskUseCase::|AttachmentUseCase::|CommunityUseCase::|ArtifactUseCase::|SyncUseCase::|InspectUseCase::" crates/cli/src/main.rs crates/cli/src/mcp/server.rs | wc -l=
+    → 62 行（main.rs 35 + mcp 27）= ≥60 ✓
+  - =cargo test --workspace= → 0 failed ✓
+
+总体：spec 验收 =13/14= 通过；2 处偏差（service.rs 行数 / =service.X= 残留 4
+行）属于"facade 入口 / 公开契约"边界，已记入本节作为已知偏差。

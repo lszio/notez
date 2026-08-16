@@ -1,0 +1,181 @@
+#+title: MVP-1 跨空间对象身份与关系证据化
+#+date: 2026-08-03
+#+STARTUP: showeverything
+
+本 spec 交付 [[file:2026-08-02-notez-federated-knowledge-platform-design.org][联邦知识平台设计规范]] MVP-1 的两个未完成项：「同一对象在多个 Space 被引用而不复制正文」与「关系具备类型、方向、证据、创建者与版本」中的最小证据集。跨 Space 写冲突、授权维度、Change 投递、notez:// scheme、Dioxus 客户端、summary / context pack 等不在本轮范围，全部推迟到 0.6 / MVP-2。
+
+* 1. 背景与约束
+
+** 1.1 MVP-1 验收要求
+
+按 [[file:2026-08-02-notez-federated-knowledge-platform-design.org][联邦平台 spec]] §8 MVP-1 与 §10 验收场景 1：「同一对象能在两个本地 Space 被引用；修改可追踪并可同步；原始文件脱离 Notez 仍可用」。本 spec 解决该场景的工程障碍：当前 =ResourceRef= 由 =derived_id(source_id, locator, position)= 派生，两个 Space 用不同 =source_id= 扫描同一文件会得到不同 =ResourceRef=，无法做"同一对象"断言。
+
+** 1.2 不破坏 0.3 身份稳定
+
+0.3 任务「无损链接与稳定身份」发布门槛明确要求「重复扫描和数据库重建保持身份稳定」。本 spec **不修改** =derived_id= 的 v1 算法，保留 =ResourceRef= 的契约；新增并行的 =ObjectId= 层承担"跨 source 同一对象"语义。
+
+** 1.3 范围与非目标
+
+做：
+
+- =ObjectId= 类型 + =derived_object_id= v1 派生函数。
+- =SqliteProjection= schema v2：=resources= 加 =object_id= 列与索引；=resolved_relations= / =relations= 补 =evidence_json= / =direction= / =created_at= / =creator= 字段。
+- 扫描时根据正文 SHA-256 计算 =content_hash=，写入 =object_id=。
+- =ProjectionStore::find_by_object(object_id) -> Vec<Resource>= 跨空间聚合查询入口。
+- 既有数据迁移：v1 库打开时按现有列反推 =object_id=；既有关系行 =direction= 置 =unknown=。
+- 跨 Space 同一文件扫描端到端测试。
+
+不做（推迟到 0.6 / MVP-2）：
+
+- 跨 Space 写冲突解决、授权维度、Change 投递模型、journal。
+- notez:// =object= / =query= / =code= scheme。
+- Dioxus 客户端、PARA/看板 UI。
+- summary、context pack、代码符号索引。
+
+* 2. 核心模型
+
+** 2.1 =ObjectId= 类型
+
+#+begin_src rust
+/// 跨 source 稳定的对象身份。同一正文 + 同一 locator + 同一 position
+/// 在不同 source 配置下得到相同的 `ObjectId`。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct ObjectId(Ulid);
+
+impl ObjectId {
+    pub fn new(id: Ulid) -> Self { Self(id) }
+    pub fn as_ulid(&self) -> Ulid { self.0 }
+    pub fn parse(s: &str) -> Result<Self, ObjectIdError> { ... }
+}
+
+impl fmt::Display for ObjectId { ... }
+#+end_src
+
+语义边界：=ObjectId= 描述"该文件该位置的同一份内容"。文件内容变更后 =ObjectId= 会变（spec §3 第 5 段明确"派生身份不能天然跨 rename 保持稳定"接受这一行为）。需要稳定 rename 语义的资源应通过 source adapter 写入显式 ID（属于 MVP-2 / 0.6 的 capability 报告范围）。
+
+** 2.2 =derived_object_id= 派生函数
+
+本 spec 落地的是 v1 简化版：不取 =source_id= 输入，仅以 =content_hash + locator + position= 为输入，串口化前缀为 =notez-derived-object-id-v1=。同一文件被多 source 扫描时，由于 =content_hash= 取自同一正文，输出同一 =ObjectId=。未来需要引入 source 区分时走 v2 迁移。
+
+#+begin_src rust
+/// v1 派生：SHA-256( "notez-derived-object-id-v1" || content_hash || locator || position )
+pub fn derived_object_id(
+    content_hash: &str,
+    locator: &str,
+    position: &str,
+) -> ObjectId;
+#+end_src
+
+
+** 2.3 =Resource= 与 =ResourceRelation= 字段升级
+
+=Resource= 在 =core::domain.resource= 现有结构上新增 =object_id: ObjectId= 字段。序列化时落库，缺省时按现有 =ref= + =source_id + locator + position= 反推（迁移路径，详见 §4）。
+
+=ResourceRelation= / =ResolvedRelation= 在 =core::domain.link= 与 =core::domain.resource= 现有结构上新增字段：
+
+| 字段          | 类型                | 说明                                                       |
+|---------------+---------------------+------------------------------------------------------------|
+| =relation_type= | =RelationType=       | =References= / =Embeds= / =Backlink= / =Custom(String)=     |
+| =direction=   | =RelationDirection= | =Forward= / =Backward= / =Unknown=                         |
+| =evidence_json= | =serde_json::Value= | 至少含 =source_id= / =span_line= / =span_col_start/end= / =rule=；可扩展 |
+| =created_at=  | =String= (RFC3339)   | 关系首次入库时间                                            |
+| =creator=     | =String=             | =scan= / actor_id / =mcp= / =cli=                          |
+
+=RelationType= 与 =RelationDirection= 是新增枚举，与 =core::domain.rule= 已有的 =RuleKind= 风格保持一致。=direction= 的语义：「该关系由 =source_ref= 指向 =target_ref= 时为 =Forward=；由 =target_ref= 指向 =source_ref= 时为 =Backward=；扫描期无法判定方向时为 =Unknown=」。
+
+* 3. 扫描与写入
+
+** 3.1 扫描
+
+=core::document= 解析每个 native source 元素（Heading/Block/Attachment/Document）时：
+
+1. 取该 Resource 关联的字节范围 hash 作为 =content_hash=：Document 级别用整文件 SHA-256 hex；Heading/Block 用对应 span 内的字节 SHA-256 hex；Attachment 用文件 SHA-256 hex。大文件（>1 MiB）只取前 64 KiB + 文件大小，足以稳定识别同一正文且不显著放大 IO。
+2. 调用 =derived_object_id(content_hash, locator, position)= 得 =ObjectId=。
+3. 构造 =Resource { r#ref, object_id, ... }=，由 =SourceAdapter= 交付给 =ProjectionStore=。
+
+=position= 是 =Resource= 在文件内的结构位置（heading index / block offset），与 =content_hash= 共同保证同一正文同一 locator 下不同 Resource 仍属不同 =ObjectId=。
+
+** 3.2 写入
+* 4. Schema 迁移
+
+=SqliteProjection= 当前 schema 走 =init_schema= 的 =CREATE TABLE IF NOT EXISTS=，无版本号。本 spec 引入轻量 schema version：
+
+#+begin_src rust
+const SCHEMA_VERSION: u32 = 2;
+#+end_src
+
+在 =resources= / =resolved_relations= / =relations= 上 =CREATE TABLE IF NOT EXISTS= 时加入 v2 列；并在 v1 库打开时执行一次性迁移：
+
+- =resources=：=ALTER TABLE resources ADD COLUMN object_id TEXT= ；UPDATE 时按 =ref= 在 v1 → v2 边界用 =derived_object_id(content_hash_from_filesystem?, locator, position)= 反推。无文件系统访问时（嵌入式 / 单元测试无 path）=object_id= 留空，调用方 =get_object_id= 时按 =ref= 重新派生。
+- =resolved_relations= / =relations=：补 =direction= / =creator= / =created_at= / =evidence_json=；既有行 =direction='unknown'=，=creator='legacy'=，=created_at= 取迁移时间，=evidence_json='{}'=。
+- 添加索引：=CREATE INDEX IF NOT EXISTS idx_resources_object ON resources(object_id)= 与 =idx_relations_target=。
+
+** 3.3 关系证据化
+
+- =core.application.link_resolution= 解析链接时，构造 =ResolvedRelation= 时补 =evidence_json=（=source_id= / =span_line= / =span_col_start= / =span_col_end= / =rule= "default_profile:<format>"）与 =direction=（=Forward=，因为 =source_ref -> target_ref= 是出链）。
+- =direction= =Forward= 是落库时唯一自然值：每条关系 =source_ref -> target_ref= 总是从 source 出发。=Backward= / =Unknown= 仅在 schema 迁移（既有行无法判定方向，置 =Unknown=）与未来 0.6 同步层冲突标记（写入冲突时被改写为 =Backward=）时出现。spec §6 的"反向链接"是展示层查询：反向查询 =target_ref= 列里出现 =source_ref= 的行。
+- 既有 =ResourceRelation= 写入路径同样补字段；=creator= 固定为 =scan=，=created_at= 取扫描时间。
+- =core::sync= / =core::artifact= 模块若直接落关系表，遵循同一字段。
+
+* 4. Schema 迁移
+
+=SqliteProjection= 当前 schema 走 =init_schema= 的 =CREATE TABLE IF NOT EXISTS=，无版本号。本 spec 引入轻量 schema version：
+
+* 5. =ProjectionStore= 扩展
+
+在 =core::domain::query= 现有 trait 上新增方法：
+
+#+begin_src rust
+pub trait ProjectionStore {
+    // ... existing methods unchanged ...
+
+    /// 跨 space 同一对象查询：返回所有 object_id 匹配的资源引用。
+    fn find_by_object(
+        &self,
+        object_id: ObjectId,
+    ) -> Result<Vec<Resource>, StorageError>;
+}
+#+end_src
+
+实现 =SqliteProjection::find_by_object= 时查 =SELECT * FROM resources WHERE object_id = ?=。其他 ProjectionStore 实现（=BlobStore=、测试替身）按 trait 默认实现返回空。
+
+* 6. 测试策略
+
+** 6.1 单元
+
+- =derived_object_id= 稳定性：同一输入 → 同一 =ObjectId=；任一输入变 → =ObjectId= 变。
+- =ObjectId= 序列化：=parse= / =Display= / serde JSON / roundtrip。
+- 关系字段序列化：=ResourceRelation= JSON 包含新增字段。
+- 关系 =direction= 计算：=Forward= / =Backward= / =Unknown= 三分支。
+
+** 6.2 集成
+
+- =test_cross_space_object_identity=：构造两个 Space，各配一个指向同 =/tmp/x.md= 的 native source；分别 =scan_native=；从两库 =find_by_object= 返回的 =Resource= 集合中各取一条，断言 =object_id= 相同，=ref= 不同（因为 =source_id= 不同）。
+- =test_schema_v1_to_v2_migration=：手工建 v1 schema 库，插入一行 resource；用 =SqliteProjection::open= 打开后断言 =object_id= 已补齐且 =user_version= ≥ 2。
+- =test_relation_evidence_round_trip=：扫描带链接的文档；=SELECT * FROM resolved_relations= 断言四字段非空且 JSON 可解析。
+
+** 6.3 端到端
+
+- =test_object_id_unchanged_after_rescan=：扫描 → 第二次扫描 → 两库 =resources.object_id= 一致。
+- =test_object_id_changes_on_content_edit=：扫描 → 改文件 → 第三次扫描 → 新 =object_id= 与旧不同（验证 spec §3 第 5 段行为）。
+
+* 7. 风险与缓解
+
+- *Heading/Block 粒度的 content_hash 不共享*：同一 heading 下的多 block 各自有独立 =ObjectId=。这是 spec 接受的"派生身份粒度"语义。如果未来要按 heading 聚合，0.5.x 收尾时加 =content_hash_for_resource= 共享机制；本轮不引入。
+- *v1 库迁移中无法访问文件系统的 =object_id= 反推*：嵌入式 / 单元测试 =SqliteProjection::in_memory= 直接建 v2 schema，不走迁移。CLI 启动时 =SqliteProjection::open= 走迁移。两者分开。
+- *跨 Space 写冲突悬而未决*：spec §7 明确推迟到 0.6；本轮不引入任何"主/从"标记或冲突检测。
+
+* 8. 验收映射
+
+| spec §10 场景 | 本 spec 覆盖部分                                           | 剩余部分                                  |
+|---------------+------------------------------------------------------------+-------------------------------------------|
+| 1             | =ObjectId= 跨 Space 同一文件、=find_by_object= 聚合        | 跨 Space 写同步（0.6）                   |
+| 4             | 关系 direction / evidence_json / creator / created_at     | 代码符号索引、summary（0.6 / MVP-2）       |
+| 5             | —（未涉及）                                                | 整个授权维度（MVP-2）                    |
+| 6             | —（未涉及）                                                | Notion / Anytype Adapter（后续扩展）     |
+| 7             | —（未涉及）                                                | PARA / 看板 UI（MVP-3）                  |
+
+* 9. 范围与不做（再确认）
+
+本 spec 不交付：授权维度、Change 投递、notez:// scheme、代码符号索引、summary、context pack、客户端 UI、Notion/Anytype Adapter。读者若期待这些功能，请参考 [[file:roadmap.org][Roadmap]] 的 MVP-2 / MVP-3 / 后续扩展。

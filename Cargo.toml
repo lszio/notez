@@ -1,11 +1,15 @@
 [workspace]
 resolver = "3"
 members = [
-    "core",
-    "cli",
-    "adapters/orgmode",
-    "adapters/markdown",
-    "app",
+    "crates/core",
+    "crates/cli",
+    "crates/adapters/orgmode",
+    "crates/adapters/markdown",
+    "packages/ui",
+    "packages/web",
+    "packages/desktop",
+    "packages/mobile",
+    "packages/api",
 ]
 
 [workspace.dependencies]
@@ -17,3 +21,7 @@ rusqlite = { version = "0.33", features = ["bundled"] }
 walkdir = "2"
 clap = { version = "4", features = ["derive"] }
 schemars = { version = "1.0", features = ["chrono04"] }
+dioxus = { version = "0.7.1" }
+
+ui = { path = "packages/ui" }
+api = { path = "packages/api" }
