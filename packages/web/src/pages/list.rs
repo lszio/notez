@@ -1,17 +1,10 @@
 //! Resource list page.
-//!
-//! Layout: page heading (eyebrow + h1 + lede), controls row
-//! (search / kind filter / sort), then a column-headed list of
-//! rows. Each row carries a kind badge, the ref (monospace, dim),
-//! the title (serif, primary), and the source-id + locator
-//! (monospace, dim). All filtering and sorting happens on the
-//! client; the server only delivers the full list once.
 
 use dioxus::prelude::*;
 
 use crate::model::ResourceRow;
-use crate::pages::{use_space_layout, PageHeader};
 use crate::pages::ui::KindIcon;
+use crate::pages::use_space_layout;
 use crate::router::encode_space;
 use crate::server::list_resources;
 use crate::space_ctx::{SpaceState, SpaceStatus};
@@ -37,8 +30,9 @@ impl SortKey {
 pub fn ListPage(encoded: String) -> Element {
     use_space_layout(&encoded);
     let space = use_context::<Signal<Option<SpaceState>>>();
+    let mut resource_ref_ctx = use_context::<Signal<Option<String>>>();
+    resource_ref_ctx.set(None);
 
-    // Server fetch.
     let active_path = space().map(|s| s.path.clone());
     let active_path_for_forms = active_path.clone();
     let resources = use_server_future(move || {
@@ -51,7 +45,6 @@ pub fn ListPage(encoded: String) -> Element {
         }
     })?;
 
-    // Client-side UI state.
     let mut query = use_signal(String::new);
     let mut kind_filter = use_signal(|| "all".to_string());
     let mut sort_key = use_signal(|| "title".to_string());
@@ -86,12 +79,11 @@ pub fn ListPage(encoded: String) -> Element {
 
     let current_encoded = space().map(|s| s.encoded.clone()).unwrap_or_default();
 
-    // Page heading text depends on space state.
     let (eyebrow, h1, lede) = match space() {
         Some(SpaceState { status: SpaceStatus::Ready(s), .. }) => (
             format!("space · {}", s.name),
-            format!("Index"),
-            format!("{} resources across all kinds in this space.", total),
+            "Index".to_string(),
+            format!("{total} resources across all kinds in this space."),
         ),
         Some(SpaceState { status: SpaceStatus::Resolving, path, .. }) => (
             "resolving".to_string(),
@@ -106,12 +98,11 @@ pub fn ListPage(encoded: String) -> Element {
         None => (
             "no space".to_string(),
             "Index".to_string(),
-            "pick a space from the picker above to begin.".to_string(),
+            "pick a space from the sidebar to begin.".to_string(),
         ),
     };
 
     rsx! {
-        PageHeader {}
         div { class: "page",
             div { class: "page-h",
                 p { class: "eyebrow", "{eyebrow}" }
@@ -119,7 +110,6 @@ pub fn ListPage(encoded: String) -> Element {
                 p { class: "lede", "{lede}" }
             }
 
-            // ----- Controls row -----
             div { class: "controls-wrapper", style: "display:flex; gap:1rem; align-items:center; width:100%; flex-wrap:wrap;",
                 form {
                     class: "controls",
@@ -210,7 +200,6 @@ pub fn ListPage(encoded: String) -> Element {
                 }
             }
 
-            // ----- Results -----
             div { class: "results-head",
                 span { class: "col-ref", "ref" }
                 span { class: "col-title", "title" }
@@ -244,7 +233,6 @@ pub fn ListPage(encoded: String) -> Element {
                 }
             }
 
-            // ----- Watch panel -----
             WatchPanel { active_path: active_path_for_forms.clone() }
 
             div { class: "footer-rule",
@@ -255,6 +243,7 @@ pub fn ListPage(encoded: String) -> Element {
         }
     }
 }
+
 #[component]
 fn WatchPanel(active_path: Option<String>) -> Element {
     if active_path.is_none() {
@@ -273,7 +262,7 @@ fn WatchPanel(active_path: Option<String>) -> Element {
                 }
             }
             p { class: "watch-hint",
-                "Visit /api/spaces/watch/state?path=" 
+                "Visit /api/spaces/watch/state?path="
                 code { "{path_str}" }
                 " for the live event log."
             }
@@ -286,7 +275,7 @@ fn ResultRow(row: ResourceRow, current: String) -> Element {
     let ref_link = format!(
         "/space/{}/resource/{}",
         current,
-        crate::router::encode_space(&row.ref_str)
+        encode_space(&row.ref_str)
     );
     rsx! {
         div { class: "result",

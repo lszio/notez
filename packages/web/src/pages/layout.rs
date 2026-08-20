@@ -1,21 +1,13 @@
-//! `use_space_layout` — hook each per-space page calls to validate
-//! the active space and populate the `space_ctx` signal.
+//! `use_space_layout` — per-page layout hook.
 //!
-//! The Dioxus 0.7 router does not support a router-level layout for
-//! dynamic-segment routes without `#[nest]` (which has its own
-//! macro-grammar quirks), so each per-space page calls this hook as
-//! its first line. The hook:
+//! Each per-space page calls this hook as its first line. The hook:
 //! 1. Decodes the `encoded` path segment into a filesystem path.
 //! 2. Calls `selected_space` server fn to validate and fetch the DTO.
-//! 3. Populates the `space_ctx` context the layout reads for the
+//! 3. Populates the `space_ctx` signal the layout reads for the
 //!    picker and the error banner.
 //!
-//! We use `use_server_future` (not `use_future`) so the SSR pass
-//! actually waits for `selected_space` to resolve. With `use_future`
-//! the SSR rendered before the future returned, leaving the layout
-//! in `Resolving` state, which in turn left every downstream
-//! `use_server_future` in the page seeing `space().active_path` as
-//! `None` and returning an empty list.
+//! v0.2 also seeds the per-resource ref signal that the right-rail
+//! properties + graph panels read.
 
 use dioxus::prelude::*;
 
