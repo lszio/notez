@@ -35,7 +35,15 @@
       --w-page:  78rem;
       --w-side:  18rem;
       --w-read:  44rem;
-    }
+
+      /* PR6: three-column grid layout. Side panels stay at a fixed
+       * pixel width so the centre column doesn't have to reflow as
+       * the viewport grows. Centre content is capped at --col-main-max
+       * and centred within the middle grid track so the prose never
+       * gets wider than a comfortable reading measure. */
+      --col-left-w:  320px;
+      --col-right-w: 320px;
+      --col-main-max: 960px;
 
     *, *::before, *::after { box-sizing: border-box; }
     html, body { margin: 0; padding: 0; }
@@ -59,7 +67,7 @@
     .div-dots {
       letter-spacing: 0.5em; color: var(--ink-3); user-select: none;
     }
-    .page { padding: 1.5rem 2rem 3rem; min-width: 0; }
+    .page { padding: 1.5rem 2.25rem 3rem; min-width: 0; }
     .row.between { justify-content: space-between; }
     .col  { display: flex; flex-direction: column; }
     .muted { color: var(--ink-2); }
@@ -112,8 +120,8 @@
     .spine-action:hover { color: var(--ink); border-color: var(--ink); }
     .spine-action.accent { color: var(--accent); border-color: var(--accent-soft); }
     .spine-action.accent:hover { color: var(--accent); border-color: var(--accent); }
-    .spine-form { display: inline; margin: 0; padding: 0; }
-    .spine { display: none; }
+    .dashboard-actions { display: flex; gap: 0.4rem; align-items: center; flex-wrap: wrap; margin-top: 0.5rem; }
+    .dashboard-form { display: inline; margin: 0; padding: 0; }
 
     /* Old sidebar fallback (shown only on home). */
     .side {
@@ -883,11 +891,16 @@
       letter-spacing: 0.05em;
     }
 
-    /* 3-column body */
+    /* 3-column body — PR6. Side tracks are fixed at --col-left-w /
+     * --col-right-w. The centre track is `minmax(0, 1fr)` so it
+     * shrinks when the viewport is narrow; page-level content
+     * centres itself inside that track via .col-main > .page {
+     * max-width: var(--col-main-max); margin: 0 auto; }.
+     */
     .shell-body {
       flex: 1;
       display: grid;
-      grid-template-columns: 18rem minmax(0, 1fr) 18rem;
+      grid-template-columns: var(--col-left-w) minmax(0, 1fr) var(--col-right-w);
       min-height: 0;
     }
     .col-left, .col-right {
@@ -900,20 +913,39 @@
     }
     .col-right { border-right: 0; border-left: 1px solid var(--ink-rule); }
     .col-main { min-width: 0; }
+    .col-main > .page { max-width: var(--col-main-max); margin: 0 auto; }
     .left-divider, .right-divider {
       border-top: 1px solid var(--ink-rule);
       margin: 0;
     }
 
-    @media (max-width: 80rem) {
-      .shell-body { grid-template-columns: 15rem minmax(0, 1fr) 15rem; }
-    }
-    @media (max-width: 60rem) {
-      .shell-body { grid-template-columns: 13rem minmax(0, 1fr); }
+    /* PR8 responsive tiers.
+     *
+     * Wide (default) : three columns, fixed 320px side rails.
+     * ≤1100px (68.75rem) : hide the right rail (graph + props).
+     *   The centre track + left rail remain. Two-column mode.
+     * ≤900px (56.25rem) : tighten the left rail to 240px so the
+     *   centre column doesn't get pinched below ~660px on iPad
+     *   portrait. Files pill row still fits.
+     * ≤720px (45rem) : single column. Hide both rails. Phone-only.
+     */
+    @media (max-width: 68.75rem) {
+      .shell-body {
+        grid-template-columns: var(--col-left-w) minmax(0, 1fr);
+      }
       .col-right { display: none; }
     }
-    @media (max-width: 44rem) {
-      .shell-body { grid-template-columns: minmax(0, 1fr); }
+    @media (max-width: 56.25rem) {
+      .shell-body {
+        grid-template-columns: 15rem minmax(0, 1fr);
+      }
+      .files-pill-label { font-size: 0.62rem; }
+      .files-pill-count { font-size: 0.6rem; }
+    }
+    @media (max-width: 45rem) {
+      .shell-body {
+        grid-template-columns: minmax(0, 1fr);
+      }
       .col-left { display: none; }
     }
 
@@ -1020,7 +1052,40 @@
       font-size: 0.85rem;
       padding: 0.5rem 0.2rem;
     }
-    .files-list { list-style: none; padding: 0; margin: 0; }
+    .files-pills {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.3rem;
+      padding: 0 1rem 0.6rem;
+      border-bottom: 1px dotted var(--ink-rule);
+      margin-bottom: 0.4rem;
+    }
+    .files-pill {
+      display: inline-flex;
+      align-items: baseline;
+      gap: 0.3rem;
+      padding: 0.15rem 0.45rem;
+      font-family: var(--mono);
+      font-size: 0.66rem;
+      color: var(--ink-2);
+      border: 1px solid var(--ink-rule);
+      border-radius: 2px;
+      background: var(--paper-2);
+    }
+    .files-pill:hover { color: var(--ink); border-color: var(--ink); }
+    .files-pill-count { color: var(--ink-3); }
+    .files-pill-all { color: var(--ink); }
+    .files-pill-md, .files-pill-org { border-color: var(--ink-2); }
+    .files-pill-pdf, .files-pill-docx, .files-pill-pptx, .files-pill-xlsx { color: var(--accent); border-color: var(--accent-soft); }
+    .files-pill-csv, .files-pill-tsv { color: var(--warn); border-color: var(--warn); }
+    .files-list {
+      list-style: none;
+      padding: 0;
+      margin: 0;
+      /* PR8: long paths scroll horizontally inside the 320px
+       * rail rather than overflowing the panel. */
+      overflow-x: auto;
+    }
     .files-row { padding: 0.05rem 0; }
     .files-link {
       display: flex;
@@ -1321,7 +1386,18 @@
       letter-spacing: 0.18em;
     }
     .welcome-files-link { color: var(--ink-2); border-bottom: 0; }
-    .welcome-files-link:hover { color: var(--ink); border-bottom: 1px solid var(--ink); }
+    .welcome-empty {
+      padding: 1rem 1.2rem;
+      border: 1px dashed var(--ink-rule);
+      margin-bottom: 1.5rem;
+      background: var(--paper-2);
+    }
+    .welcome-empty h2 { margin: 0 0 0.5rem; font-size: 1.1rem; }
+    .welcome-empty-hints {
+      margin: 0.6rem 0 0;
+      padding-left: 1.1rem;
+      color: var(--ink-2);
+    }
     .welcome-files-empty {
       font-family: var(--serif);
       font-style: italic;

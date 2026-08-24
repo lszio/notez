@@ -47,6 +47,8 @@ pub enum PreviewModel {
     Xlsx      { sheets: Vec<Sheet> },
     Pptx      { slides: Vec<Slide> },
     Zip       { entries: Vec<ZipEntry> },
+    Docx      { paragraphs: Vec<DocxParagraph> },
+    Table     { table: Table },
     Image     { src: String, width: u32, height: u32, mime: String },
     Mermaid   { source: String },
     D2        { source: String },
@@ -91,6 +93,31 @@ pub struct ZipEntry {
     pub is_dir: bool,
 }
 
+/// Generic tabular data extracted from CSV/TSV attachments.
+///
+/// `headers` is the first non-empty record when present; when the file
+/// has no header row `headers` is empty and `rows` carries every
+/// record. Both lists preserve original string content (no quoting /
+/// type coercion) so the caller decides how to render the table.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Table {
+    pub headers: Vec<String>,
+    pub rows: Vec<Vec<String>>,
+}
+
+/// One paragraph extracted from a DOCX attachment.
+///
+/// `level` is 0 for a body paragraph and 1..=6 for a heading (`<w:pStyle
+/// w:val="HeadingN"/>`). `text` is the concatenation of every `<w:t>`
+/// run inside the paragraph; `<w:tab/>` becomes a single space and
+/// `<w:br/>` becomes a newline. `text` is always plain (no markup);
+/// rendering is the caller's responsibility.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DocxParagraph {
+    pub level: u8,
+    pub text: String,
+}
+
 pub struct PreviewerCatalog {
     inner: Vec<Box<dyn Previewer>>,
 }
@@ -118,7 +145,7 @@ impl Default for PreviewerCatalog {
     fn default() -> Self { Self::new() }
 }
 
-/// Build the canonical `PreviewerCatalog` containing all 14 built-in
+/// Build the canonical `PreviewerCatalog` containing all 16 built-in
 /// previewers.
 ///
 /// The registration order is deliberate and matters: each entry is
@@ -135,10 +162,12 @@ impl Default for PreviewerCatalog {
 /// 8. Xlsx                                                          (matches: `.xlsx` / xlsx MIME)
 /// 9. Pptx                                                          (matches: `.pptx` / pptx MIME)
 /// 10. Zip                                                          (matches: `.zip` / zip MIME)
-/// 11. Image                                                        (matches: `image/*`)
-/// 12. Org                                                          (matches: Document / Heading / Block)
-/// 13. LinkEmbed                                                    (override-only — `matches` always false)
-/// 14. Fallback                                                     (matches: always)
+/// 11. Docx                                                         (matches: `.docx` / docx MIME)
+/// 12. CsvTsv                                                       (matches: `.csv` / `.tsv` / CSV+TSV MIMEs)
+/// 13. Image                                                        (matches: `image/*`)
+/// 14. Org                                                          (matches: Document / Heading / Block)
+/// 15. LinkEmbed                                                    (override-only — `matches` always false)
+/// 16. Fallback                                                     (matches: always)
 ///
 /// Notes:
 /// - The abstract previewers (Mermaid/D2/Iframe/BlockEmbed/QueryEmbed) are
@@ -151,7 +180,9 @@ impl Default for PreviewerCatalog {
 pub fn default_catalog() -> PreviewerCatalog {
     use builders::{
         block_embed::BlockEmbedPreviewer,
+        csv_tsv::CsvTsvPreviewer,
         d2::D2Previewer,
+        docx::DocxPreviewer,
         fallback::FallbackPreviewer,
         iframe::IframePreviewer,
         image::ImagePreviewer,
@@ -177,6 +208,8 @@ pub fn default_catalog() -> PreviewerCatalog {
     c.register(XlsxPreviewer);
     c.register(PptxPreviewer);
     c.register(ZipPreviewer);
+    c.register(DocxPreviewer);
+    c.register(CsvTsvPreviewer);
     c.register(ImagePreviewer);
     c.register(OrgPreviewer);
     c.register(LinkEmbedPreviewer);

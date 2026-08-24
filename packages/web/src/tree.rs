@@ -52,6 +52,12 @@ pub struct SourceFileRow {
     pub display_path: String,
     pub ext: String,
     pub size: u64,
+    /// Last-modified time as Unix epoch milliseconds. `0` when the
+    /// filesystem does not report a timestamp (rare — most Unix
+    /// filesystems always report one). The UI uses this to sort the
+    /// files panel and the per-space dashboard "recently modified"
+    /// list in descending order.
+    pub mtime_ms: u64,
 }
 
 /// One hit for the command-palette search.
@@ -164,7 +170,14 @@ pub fn build_filesystem_listing(space_root: &Path) -> Vec<SourceFileRow> {
     const MAX_FILES: usize = 2000;
     let mut out: Vec<SourceFileRow> = Vec::new();
     walk_dir(space_root, space_root, &mut out);
-    out.sort_by(|a, b| a.display_path.to_lowercase().cmp(&b.display_path.to_lowercase()));
+    // Sort by mtime desc when available; fall back to alphabetical
+    // when the filesystem doesn't report timestamps. The UI panel
+    // is most useful as a "what changed" view.
+    out.sort_by(|a, b| {
+        b.mtime_ms
+            .cmp(&a.mtime_ms)
+            .then_with(|| a.display_path.to_lowercase().cmp(&b.display_path.to_lowercase()))
+    });
     if out.len() > MAX_FILES {
         out.truncate(MAX_FILES);
     }
@@ -204,6 +217,13 @@ fn walk_dir(root: &Path, dir: &Path, out: &mut Vec<SourceFileRow>) {
             .unwrap_or("")
             .to_ascii_lowercase();
         let size = entry.metadata().map(|m| m.len()).unwrap_or(0);
+        let mtime_ms = entry
+            .metadata()
+            .and_then(|m| m.modified())
+            .ok()
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0);
         out.push(SourceFileRow {
             ref_str: String::new(),
             kind: "attachment".to_string(),
@@ -211,11 +231,12 @@ fn walk_dir(root: &Path, dir: &Path, out: &mut Vec<SourceFileRow>) {
             display_path: rel,
             ext,
             size,
+            mtime_ms,
         });
     }
 }
-
 // ---- pure projections from Resource slices ----
+
 
 /// Same as `build_tree_from` but also adds the loose files on
 /// disk (from `build_filesystem_listing`) as leaves, deduplicating
@@ -485,7 +506,15 @@ pub fn build_source_files_from(resources: &[Resource], space_root: &Path) -> Vec
                 .and_then(|e| e.to_str())
                 .unwrap_or("")
                 .to_ascii_lowercase();
-            let size = space_root.join(&r.locator).metadata().map(|m| m.len()).unwrap_or(0);
+            let path = space_root.join(&r.locator);
+            let metadata = path.metadata().ok();
+            let size = metadata.as_ref().map(|m| m.len()).unwrap_or(0);
+            let mtime_ms = metadata
+                .as_ref()
+                .and_then(|m| m.modified().ok())
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|d| d.as_millis() as u64)
+                .unwrap_or(0);
             SourceFileRow {
                 ref_str: r.r#ref.to_string(),
                 kind: r.kind.as_str().to_string(),
@@ -493,10 +522,15 @@ pub fn build_source_files_from(resources: &[Resource], space_root: &Path) -> Vec
                 display_path: r.locator.clone(),
                 ext,
                 size,
+                mtime_ms,
             }
         })
         .collect();
-    out.sort_by(|a, b| a.display_path.to_lowercase().cmp(&b.display_path.to_lowercase()));
+    out.sort_by(|a, b| {
+        b.mtime_ms
+            .cmp(&a.mtime_ms)
+            .then_with(|| a.display_path.to_lowercase().cmp(&b.display_path.to_lowercase()))
+    });
     out
 }
 
@@ -725,6 +759,86 @@ mod tests {
         ];
         let tree = build_tree_from(&resources);
         assert_eq!(tree.count, 2);
+    }
+
+    #[test]
+    fn attachments_in_subdirs_render_under_their_folder() {
+        // Regression: prior to the PR2 attachment.rs fix, attachments
+        // were indexed with the absolute path as `locator`, so the
+        // tree builder stacked every attachment under `(root)`. After
+        // the fix, attachments carry a POSIX-relative locator and
+        // the tree builder places them under the matching folder.
+        let resources = vec![
+            make_doc("docs/notes.md", "Notes"),
+            make_doc("contracts/lease.pdf", "Lease"),
+            make_doc("reports/q3.pptx", "Q3"),
+        ];
+        let tree = build_tree_from(&resources);
+        assert_eq!(tree.count, 3);
+        let folders: Vec<_> = tree
+            .children
+            .iter()
+            .filter_map(|c| match c {
+                TreeChild::Folder(f) => Some(f.name.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(folders, vec!["contracts", "docs", "reports"]);
+    }
+
+    #[test]
+    fn loose_files_group_into_existing_folders() {
+        // When `build_filesystem_listing` reports a nested path
+        // that the projection has not yet indexed, the tree builder
+        // must inject a leaf under the matching folder rather than
+        // dropping it at the root.
+        let loose = vec![SourceFileRow {
+            ref_str: String::new(),
+            kind: "attachment".into(),
+            title: "spec.pdf".into(),
+            display_path: "data/spec.pdf".into(),
+            ext: "pdf".into(),
+            size: 1,
+            mtime_ms: 0,
+        }];
+        let tree = build_tree_from_with_disk(&[], &loose);
+        let root = &tree;
+        let data_folder = root
+            .children
+            .iter()
+            .find_map(|c| match c {
+                TreeChild::Folder(f) if f.name == "data" => Some(f),
+                _ => None,
+            })
+            .expect("data folder");
+        assert_eq!(data_folder.count, 1);
+    }
+
+    #[test]
+    fn build_filesystem_listing_populates_mtime_from_disk() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("a.md");
+        std::fs::write(&file, b"hello").unwrap();
+        let rows = build_filesystem_listing(dir.path());
+        assert_eq!(rows.len(), 1);
+        assert!(rows[0].mtime_ms > 0, "expected non-zero mtime for fresh file");
+        // Loose files get an empty ref_str + attachment kind.
+        assert_eq!(rows[0].ref_str, "");
+        assert_eq!(rows[0].kind, "attachment");
+        assert_eq!(rows[0].ext, "md");
+    }
+
+    #[test]
+    fn build_filesystem_listing_handles_subdirs() {
+        let dir = tempfile::tempdir().unwrap();
+        let sub = dir.path().join("docs");
+        std::fs::create_dir(&sub).unwrap();
+        std::fs::write(sub.join("a.md"), b"a").unwrap();
+        std::fs::write(sub.join("b.md"), b"b").unwrap();
+        let rows = build_filesystem_listing(dir.path());
+        let paths: Vec<_> = rows.iter().map(|r| r.display_path.clone()).collect();
+        assert!(paths.contains(&"docs/a.md".to_string()), "paths: {paths:?}");
+        assert!(paths.contains(&"docs/b.md".to_string()), "paths: {paths:?}");
     }
 
     #[test]

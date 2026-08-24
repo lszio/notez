@@ -7,19 +7,85 @@ use crate::pages::{
 };
 use crate::space_ctx::{SpaceState, SpaceStatus};
 
+/// PR9:
+/// layer for the command palette. Lives in inline `<script>` (not
+/// in `use_effect`) because Dioxus fullstack is SSR-only — effects
+/// never run client-side. The script also wires the trigger /
+/// close / backdrop click handlers because the same constraint
+/// leaves the `<button onclick="…">` markup inert.
+const PALETTE_KEY_LISTENER_JS: &str = r#"
+    <script>
+    (function () {
+        if (window.__notezPaletteKeybound) { return; }
+        window.__notezPaletteKeybound = true;
+        var overlay = null;
+        function getOverlay() {
+            if (overlay && document.body.contains(overlay)) return overlay;
+            overlay = document.querySelector('.palette-overlay');
+            return overlay;
+        }
+        function openPalette() {
+            var ov = getOverlay();
+            if (!ov) return;
+            ov.classList.add('is-open');
+            var input = ov.querySelector('.palette-input');
+            if (input) { setTimeout(function () { input.focus(); input.select && input.select(); }, 0); }
+        }
+        function closePalette() {
+            var ov = getOverlay();
+            if (!ov) return;
+            ov.classList.remove('is-open');
+        }
+        function togglePalette() {
+            var ov = getOverlay();
+            if (!ov) return;
+            if (ov.classList.contains('is-open')) { closePalette(); }
+            else { openPalette(); }
+        }
+        document.addEventListener('click', function (e) {
+            var trigger = e.target && e.target.closest && e.target.closest('.search-trigger');
+            if (trigger) { e.preventDefault(); togglePalette(); return; }
+            var closeBtn = e.target && e.target.closest && e.target.closest('.palette-close');
+            if (closeBtn) { e.preventDefault(); closePalette(); return; }
+            // Backdrop click: target === overlay div itself.
+            var ov = getOverlay();
+            if (ov && e.target === ov) { e.preventDefault(); closePalette(); }
+        });
+        document.addEventListener('keydown', function (e) {
+            var meta = e.metaKey || e.ctrlKey;
+            if (meta && (e.key === 'k' || e.key === 'K')) {
+                e.preventDefault();
+                togglePalette();
+                return;
+            }
+            if (e.key === 'Escape') {
+                var ov = getOverlay();
+                if (ov && ov.classList.contains('is-open')) {
+                    e.preventDefault();
+                    closePalette();
+                }
+            }
+        });
+    })();
+    </script>
+"#;
 #[component]
 pub fn Layout(children: Element) -> Element {
     use_context_provider(|| Signal::new(None::<SpaceState>));
     use_context_provider(|| Signal::new(None::<String>));
+    // Palette open/closed flag — toggled by the search trigger and
+    // read by the modal component. Kept here so any descendant
+    // component (not just header siblings) can toggle it.
+    use_context_provider(|| Signal::new(false));
     let space_ctx = use_context::<Signal<Option<SpaceState>>>();
-
     let active_path = space_ctx().map(|s| s.path.clone());
     let active_path_for_side = active_path.clone();
     let active_encoded = space_ctx().map(|s| s.encoded.clone());
-
     rsx! {
+        // PR9: install the ⌘K / Esc listener as an inline script so
+        // it runs at page load (no hydration dependency).
+        div { dangerous_inner_html: "{PALETTE_KEY_LISTENER_JS}" }
         div { class: "shell",
-            // ----- Global error banner (above the spine) -----
             {
                 let s = space_ctx();
                 if let Some(SpaceState { status: SpaceStatus::Error(e), path, .. }) = s.clone() {
@@ -82,8 +148,9 @@ pub fn Layout(children: Element) -> Element {
                     }
                 }
             }
-
-            // ----- Command palette overlay -----
+            // ----- Command palette overlay (⌘K / Esc handled by the
+            // PR9 inline script at the top of the page; the overlay
+            // renders here when PALETTE_OPEN is true).
             CommandPalette {}
         }
     }
@@ -140,3 +207,5 @@ fn TopNavActions(active_path: Option<String>, active_encoded: Option<String>) ->
         }
     }
 }
+
+

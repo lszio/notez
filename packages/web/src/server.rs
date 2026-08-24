@@ -267,9 +267,46 @@ pub async fn list_kind_counts(space_root: String) -> Result<KindCounts, ServerFn
     tree::build_kind_counts(&facade).map_err(|e| ServerFnError::new(e.to_string()))
 }
 
+
+/// Resolve the index.org-style landing entry together with the
+/// matching document. Returns both as a single payload so the SSR
+/// dashboard can render without the race that arises when two
+/// independent `use_server_future`s fire (the document future runs
+/// before the entry future resolves, so the body never appears).
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct IndexDocumentDto {
+    pub entry: Option<IndexEntryDto>,
+    pub document: Option<ResourceRow>,
+}
+
+#[server]
+pub async fn load_index_document(space_root: String) -> Result<IndexDocumentDto, ServerFnError> {
+    let sel = core_resolve_space(Path::new(&space_root))
+        .map_err(WebServerError::from)
+        .map_err(|e| ServerFnError::new(e.to_string()))?;
+    crate::routes::auto_start_watch(&sel.space_root);
+    let facade = open_facade(&sel.space_root).map_err(|e| ServerFnError::new(e.to_string()))?;
+    let mut facade = facade.lock().map_err(|e| ServerFnError::new(format!("facade lock: {e}")))?;
+    let entry = tree::build_index_entry(&facade).map_err(|e| ServerFnError::new(e.to_string()))?;
+    let document = entry
+        .as_ref()
+        .and_then(|e| notez_core::domain::ResourceRef::parse(&e.ref_str).ok())
+        .and_then(|r_ref| match facade.read(&r_ref) {
+            Ok(Some(resource)) => {
+                let mut row = ResourceRow::from(resource);
+                row.body_html = crate::body::render_body(&row, &sel.space_root);
+                Some(row)
+            }
+            _ => None,
+        });
+    Ok(IndexDocumentDto { entry, document })
+}
+
 /// Find the `index.org`/`index.md`/`README.*` document the home page
 /// falls back to. `None` means the space has no index document and the
-/// welcome page should fall through to a directory listing.
+/// welcome page should fall through to a directory listing. Returns
+/// only the entry; callers that need the rendered body should use
+/// `load_index_document` instead.
 #[server]
 pub async fn resolve_index(space_root: String) -> Result<Option<IndexEntryDto>, ServerFnError> {
     let sel = core_resolve_space(Path::new(&space_root))
