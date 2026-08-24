@@ -1,22 +1,4 @@
 //! Custom HTTP routes for the v0.1+ web client.
-//!
-//! The Dioxus fullstack runtime ships with an SSR router and a set
-//! of `#[server]` functions. The full client (with hydration) needs
-//! a WASM bundle that we are not building in this repo. Without
-//! hydration, the runtime still serves server functions over plain
-//! HTTP, but the SSR pages render form-action targets as in-page
-//! anchor and form buttons. To keep the click-to-action loop
-//! working without JavaScript, we mount a small set of plain axum
-//! routes that:
-//!
-//! - Accept `<form>` POST submissions (`application/x-www-form-urlencoded`).
-//! - Mutate state in the server (register a space, scan a space,
-//!   start / stop a watch).
-//! - Issue an `HTTP 303 See Other` redirect back to the appropriate
-//!   page so the browser follows the next SSR render.
-//!
-//! The custom routes live in the same `axum::Router` as the Dioxus
-//! application; see `main.rs` for the merge.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -39,18 +21,19 @@ use serde::Deserialize;
 
 use crate::router::{decode_space, route_for_space_list};
 
-/// Shared state for the custom POST routes. The `WatchService` is
-/// process-global (a `notez` web server typically watches one or two
-/// spaces at a time); the per-space `ApplicationFacade` cache is
-/// keyed by canonical path so a follow-up `scan` reuses the open
-/// `SqliteProjection` instead of re-opening the SQLite file.
-///
-/// This state is captured by closure into each handler so the
-/// resulting router is `Router<()>` — required so the Dioxus app
-/// router (also `Router<()>` after its `with_state(FullstackState)`
-/// call) can `merge` with it.
+/// Process-global watch service.
 pub static GLOBAL_WATCH: std::sync::LazyLock<Arc<WatchService>> =
     std::sync::LazyLock::new(|| WatchService::new());
+
+/// Process-global `WebState` used by the server functions.
+pub static GLOBAL_STATE: std::sync::LazyLock<WebState> =
+    std::sync::LazyLock::new(WebState::new);
+
+/// Convenience accessor the server functions use to reach the global state.
+pub fn state_snapshot() -> WebState {
+    GLOBAL_STATE.clone()
+}
+
 pub fn auto_start_watch(space_root: &std::path::Path) {
     let canonical = std::fs::canonicalize(space_root).unwrap_or_else(|_| space_root.to_path_buf());
     let _ = GLOBAL_WATCH.start(&canonical);
@@ -108,35 +91,32 @@ impl WebState {
     }
 }
 
-/// Error variants the POST handlers translate into HTTP responses.
 #[derive(Debug)]
 pub enum WebRouteError {
     Invalid(String),
-    Web(WebSpaceError),
-    Watch(WatchError),
     Internal(String),
+    Status(StatusCode, String),
 }
 
 impl std::fmt::Display for WebRouteError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Invalid(s) => write!(f, "{s}"),
-            Self::Web(e) => write!(f, "{e}"),
-            Self::Watch(e) => write!(f, "{e}"),
-            Self::Internal(s) => write!(f, "{s}"),
+            Self::Invalid(m) => write!(f, "invalid: {m}"),
+            Self::Internal(m) => write!(f, "internal: {m}"),
+            Self::Status(c, m) => write!(f, "{c}: {m}"),
         }
     }
 }
 
 impl From<WebSpaceError> for WebRouteError {
     fn from(e: WebSpaceError) -> Self {
-        Self::Web(e)
+        Self::Invalid(e.to_string())
     }
 }
 
 impl From<WatchError> for WebRouteError {
     fn from(e: WatchError) -> Self {
-        Self::Watch(e)
+        Self::Internal(e.to_string())
     }
 }
 
@@ -148,8 +128,12 @@ impl From<ApplicationError> for WebRouteError {
 
 impl IntoResponse for WebRouteError {
     fn into_response(self) -> Response {
-        let body = format!("error: {self}");
-        (StatusCode::BAD_REQUEST, body).into_response()
+        let (status, msg) = match &self {
+            Self::Invalid(m) => (StatusCode::BAD_REQUEST, m.clone()),
+            Self::Internal(m) => (StatusCode::INTERNAL_SERVER_ERROR, m.clone()),
+            Self::Status(c, m) => (*c, m.clone()),
+        };
+        (status, msg).into_response()
     }
 }
 
@@ -212,22 +196,30 @@ pub struct SpaceForm {
 fn resolve_form_space(form: &SpaceForm) -> Result<PathBuf, WebRouteError> {
     if let Some(p) = &form.space_root {
         if !p.is_empty() {
-            return Ok(PathBuf::from(p));
+            let pb = PathBuf::from(p);
+            if !pb.exists() {
+                return Err(WebRouteError::Invalid(format!("path does not exist: {pb:?}")));
+            }
+            return Ok(pb);
         }
     }
     if let Some(enc) = &form.encoded {
-        let decoded = decode_space(enc);
-        if !decoded.is_empty() {
-            return Ok(PathBuf::from(decoded));
+        if !enc.is_empty() {
+            let decoded = decode_space(enc);
+            let pb = PathBuf::from(&decoded);
+            if pb.exists() {
+                return Ok(pb);
+            }
         }
     }
-    Err(WebRouteError::Invalid("missing space_root or encoded".into()))
+    Err(WebRouteError::Invalid("space_root or encoded is required".into()))
 }
+
 fn do_scan(state: &WebState, form: SpaceForm) -> Result<Redirect, WebRouteError> {
     let space_root = resolve_form_space(&form)?;
     let facade = state.facade_for(&space_root)?;
     let report = {
-        let mut guard = facade.lock().expect("facade poisoned");
+        let mut guard = facade.lock().map_err(|e| WebRouteError::Internal(format!("facade lock: {e}")))?;
         ApplicationService::scan_native(&mut *guard, &space_root)?
     };
     let _ = report;
@@ -279,6 +271,7 @@ async fn raw_attachment_get(
     );
     Ok((headers, bytes))
 }
+
 pub async fn auto_watch_middleware(
     req: axum::extract::Request,
     next: axum::middleware::Next,
@@ -298,10 +291,7 @@ pub async fn auto_watch_middleware(
     next.run(req).await
 }
 
-/// Build the sub-router with all custom POST endpoints. Each
-/// handler is a closure that captures `state`, so the resulting
-/// router is `Router<()>` and can be `merge`d with the Dioxus
-/// app router.
+/// Build the sub-router with all custom POST endpoints.
 pub fn build_router(state: WebState) -> axum::Router {
     let state_r = state.clone();
     let state_s = state.clone();
@@ -358,15 +348,15 @@ async fn watch_state_get(
     let path = params
         .get("path")
         .ok_or_else(|| WebRouteError::Invalid("missing path".into()))?;
-    let status = state.watch.status(std::path::Path::new(path));
-    let events = state.watch.events(std::path::Path::new(path), 50);
+    let canonical = std::fs::canonicalize(path).unwrap_or_else(|_| PathBuf::from(path));
+    let watching = state.watch.status(&canonical).is_some();
     Ok(axum::Json(serde_json::json!({
-        "status": status,
-        "events": events,
+        "watching": watching,
+        "path": canonical.to_string_lossy(),
     })))
 }
-/// Re-export the encoded-space helper for callers that need to
-/// build URLs from a server-side path.
+
+/// Re-export the encoded-space helper.
 pub fn encoded_for(space_root: &str) -> String {
     crate::router::encode_space(space_root)
 }

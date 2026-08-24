@@ -50,13 +50,24 @@ impl<S: ProjectionStore> AttachmentUseCase for ApplicationFacade<S> {
             .to_string_lossy()
             .to_string();
 
+        // Locator must be a POSIX-relative path so the tree builder
+        // can reconstruct the directory hierarchy and so the raw
+        // attachment endpoint serves the file under the space root.
+        // When `file_path` is not under `space_root` (rare: user
+        // dragged an external file in), fall back to the absolute
+        // path so we never silently lose the file.
+        let locator = file_path
+            .strip_prefix(space_root)
+            .map(|p| p.to_string_lossy().replace('\\', "/"))
+            .unwrap_or_else(|_| file_path.to_string_lossy().to_string());
+
         let resource = Resource {
             r#ref: att_ref,
             kind: crate::domain::ResourceKind::Attachment,
             title,
-            revision: meta.hash,
+            revision: meta.hash.clone(),
             source_id: "native".to_string(),
-            locator: file_path.to_string_lossy().to_string(),
+            locator,
             properties,
             object_id: crate::domain::derived_object_id("", "", ""),
         };

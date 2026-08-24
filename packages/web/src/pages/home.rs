@@ -1,17 +1,14 @@
-//! Landing page at `/`.
+//! Landing page at `/` — global onboarding.
 //!
-//! Three short, content-led steps. The real interactive surface
-//! is the left sidebar (`SpaceSidebar`); the home page just tells
-//! the user what to do.
+//! The new shell's left column renders the per-space sidebar here
+//! (the home page has no active space). The center shows a short
+//! overview; the search palette is reachable from the top nav.
 
 use dioxus::prelude::*;
-
-use crate::pages::PageHeader;
 
 #[component]
 pub fn HomePage() -> Element {
     rsx! {
-        PageHeader {}
         div { class: "page",
             section { class: "onboard",
                 h1 { "Notez" }
@@ -20,25 +17,19 @@ pub fn HomePage() -> Element {
                 }
                 ol { class: "steps",
                     li {
-                        "Click any space link in the left sidebar to open its resource list. The sidebar is the index; pick from there to switch spaces."
+                        "Pick a space from the dropdown in the top-left, or register one with the form below."
                     }
                     li {
-                        "To add a new space, expand "
-                        span { class: "mono", "register a space" }
-                        " at the bottom of the sidebar and submit the form."
+                        "Inside a space, the left column shows the directory tree and the source-file list; the right column shows properties and the resource graph."
                     }
                     li {
-                        "On a list page, the header holds "
-                        span { class: "mono", "scan" }
-                        " / "
-                        span { class: "mono", "watch" }
-                        " / "
-                        span { class: "mono", "graph" }
-                        " actions. The watcher records filesystem events; combine it with a manual scan to keep the index fresh."
+                        "Hit "
+                        span { class: "mono", "⌘K" }
+                        " (or click the search bar) to open the command palette and jump anywhere."
                     }
                 }
                 p { class: "lede dim",
-                    "A space is a directory on disk — it is the single source of truth. The web client covers register / scan / watch / graph; mutation is still terminal-only."
+                    "Files on disk are authoritative: every doc, heading, attachment and block lives in the original .org / .md files; the SQLite projection is rebuilt with `notez scan`."
                 }
             }
         }
