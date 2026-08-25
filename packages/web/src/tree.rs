@@ -110,25 +110,25 @@ where
 /// renders them via the preview route.
 pub fn build_tree_with_disk<S>(
     facade: &ApplicationFacade<S>,
-    space_root: &Path,
+    source_root: &Path,
 ) -> Result<TreeNode, notez_core::application::ApplicationError>
 where
     S: notez_core::domain::ProjectionStore,
 {
     let page = facade.query(&Selector::new())?;
-    let loose = build_filesystem_listing(space_root);
+    let loose = build_filesystem_listing(source_root);
     Ok(build_tree_from_with_disk(&page.items, &loose))
 }
 
 pub fn build_source_files<S>(
     facade: &ApplicationFacade<S>,
-    space_root: &Path,
+    source_root: &Path,
 ) -> Result<Vec<SourceFileRow>, notez_core::application::ApplicationError>
 where
     S: notez_core::domain::ProjectionStore,
 {
     let page = facade.query(&Selector::new())?;
-    Ok(build_source_files_from(&page.items, space_root))
+    Ok(build_source_files_from(&page.items, source_root))
 }
 
 pub fn build_kind_counts<S>(
@@ -153,23 +153,23 @@ where
 
 pub fn build_search<S>(
     facade: &ApplicationFacade<S>,
-    space_root: &Path,
+    source_root: &Path,
     q: &str,
 ) -> Result<Vec<SearchHit>, notez_core::application::ApplicationError>
 where
     S: notez_core::domain::ProjectionStore,
 {
     let page = facade.query(&Selector::new())?;
-    Ok(build_search_from(&page.items, space_root, q))
+    Ok(build_search_from(&page.items, source_root, q))
 }
-/// Walk `space_root` on disk and return every non-hidden file as
+/// Walk `source_root` on disk and return every non-hidden file as
 /// a `SourceFileRow`. This is the "everything on disk" view the
 /// files panel and the per-space home page show; it surfaces
 /// loose attachments the projection has not indexed yet.
-pub fn build_filesystem_listing(space_root: &Path) -> Vec<SourceFileRow> {
+pub fn build_filesystem_listing(source_root: &Path) -> Vec<SourceFileRow> {
     const MAX_FILES: usize = 2000;
     let mut out: Vec<SourceFileRow> = Vec::new();
-    walk_dir(space_root, space_root, &mut out);
+    walk_dir(source_root, source_root, &mut out);
     // Sort by mtime desc when available; fall back to alphabetical
     // when the filesystem doesn't report timestamps. The UI panel
     // is most useful as a "what changed" view.
@@ -496,7 +496,7 @@ struct LeafRaw {
     ref_str: String,
 }
 
-pub fn build_source_files_from(resources: &[Resource], space_root: &Path) -> Vec<SourceFileRow> {
+pub fn build_source_files_from(resources: &[Resource], source_root: &Path) -> Vec<SourceFileRow> {
     let mut out: Vec<SourceFileRow> = resources
         .iter()
         .filter(|r| r.kind != ResourceKind::Heading && r.kind != ResourceKind::Block)
@@ -506,7 +506,7 @@ pub fn build_source_files_from(resources: &[Resource], space_root: &Path) -> Vec
                 .and_then(|e| e.to_str())
                 .unwrap_or("")
                 .to_ascii_lowercase();
-            let path = space_root.join(&r.locator);
+            let path = source_root.join(&r.locator);
             let metadata = path.metadata().ok();
             let size = metadata.as_ref().map(|m| m.len()).unwrap_or(0);
             let mtime_ms = metadata
@@ -582,7 +582,7 @@ pub fn build_index_entry_from(resources: &[Resource]) -> Option<IndexEntryDto> {
     None
 }
 
-pub fn build_search_from(resources: &[Resource], space_root: &Path, q: &str) -> Vec<SearchHit> {
+pub fn build_search_from(resources: &[Resource], source_root: &Path, q: &str) -> Vec<SearchHit> {
     const MAX_FILE_BYTES: u64 = 256 * 1024;
     const MAX_HITS: usize = 80;
     const SNIPPET_CHARS: usize = 80;
@@ -617,7 +617,7 @@ pub fn build_search_from(resources: &[Resource], space_root: &Path, q: &str) -> 
             continue;
         }
         // Body search: only for files we can read.
-        let file_path = space_root.join(&r.locator);
+        let file_path = source_root.join(&r.locator);
         let meta = match std::fs::metadata(&file_path) {
             Ok(m) => m,
             Err(_) => continue,
@@ -721,7 +721,7 @@ fn depth_of(path: &str) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use notez_core::domain::{ObjectId, Resource, ResourceRef};
+    use notez_core::domain::{ObjectIdentity, Resource, ResourceRef};
     use ulid::Ulid;
 
     fn make_doc(locator: &str, title: &str) -> Resource {
@@ -733,7 +733,8 @@ mod tests {
             source_id: "native".into(),
             locator: locator.into(),
             properties: BTreeMap::new(),
-            object_id: ObjectId::new(Ulid::new()),
+            object_id: ObjectIdentity::new("local", Ulid::new().to_string()),
+            primary_source_id: String::new(),
         }
     }
 

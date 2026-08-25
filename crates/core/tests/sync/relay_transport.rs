@@ -8,7 +8,7 @@ fn relay_transport_exchange_manifests_and_objects() {
     let mut relay = RelayTransport::new(temp.path());
 
     let manifest = Manifest {
-        space_id: "space_relay".to_string(),
+        source_id: "space_relay".to_string(),
         actor_id: "actor_relay".to_string(),
         parent_snapshots: vec![],
         logical_path: "relay_note.org".to_string(),

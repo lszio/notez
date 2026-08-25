@@ -13,7 +13,9 @@ pub enum RelationType {
 }
 
 impl Default for RelationType {
-    fn default() -> Self { Self::References }
+    fn default() -> Self {
+        Self::References
+    }
 }
 
 impl fmt::Display for RelationType {
@@ -37,7 +39,9 @@ pub enum RelationDirection {
 }
 
 impl Default for RelationDirection {
-    fn default() -> Self { Self::Unknown }
+    fn default() -> Self {
+        Self::Unknown
+    }
 }
 
 impl fmt::Display for RelationDirection {
@@ -50,9 +54,15 @@ impl fmt::Display for RelationDirection {
     }
 }
 
-fn default_evidence_json() -> serde_json::Value { serde_json::json!({}) }
-fn default_created_at() -> String { String::new() }
-fn default_creator() -> String { "legacy".to_string() }
+fn default_evidence_json() -> serde_json::Value {
+    serde_json::json!({})
+}
+fn default_created_at() -> String {
+    String::new()
+}
+fn default_creator() -> String {
+    "legacy".to_string()
+}
 
 /// Raw link target as found in source text, before resolution.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -77,9 +87,7 @@ pub enum LinkTarget {
         fragment: Option<String>,
     },
     /// An external URL: `https://...`
-    Url {
-        url: String,
-    },
+    Url { url: String },
     /// An unknown or custom scheme: `zotero:...`, `denote:...`
     Custom {
         scheme: String,
@@ -265,8 +273,6 @@ impl ResourceAddress {
         Self::Locator { target }
     }
 
-
-
     /// Parse a textual address into either a [`ResourceRef`] or a
     /// [`LinkTarget`] locator. Recognized forms:
     /// - `kind:ulid` → `Ref`
@@ -282,7 +288,10 @@ impl ResourceAddress {
             return Err(ResourceRefError::InvalidFormat);
         }
         // WikiLink form
-        if let Some(rest) = trimmed.strip_prefix("[[").and_then(|t| t.strip_suffix("]]")) {
+        if let Some(rest) = trimmed
+            .strip_prefix("[[")
+            .and_then(|t| t.strip_suffix("]]"))
+        {
             let (title, fragment) = match rest.split_once('#') {
                 Some((t, f)) => (t, Some(f.to_string())),
                 None => (rest, None),
@@ -382,10 +391,14 @@ mod relation_evidence_tests {
     use crate::domain::resource::ResourceRef;
 
     #[test]
-    fn relation_type_default_is_references() { assert_eq!(RelationType::default(), RelationType::References); }
+    fn relation_type_default_is_references() {
+        assert_eq!(RelationType::default(), RelationType::References);
+    }
 
     #[test]
-    fn direction_default_is_unknown() { assert_eq!(RelationDirection::default(), RelationDirection::Unknown); }
+    fn direction_default_is_unknown() {
+        assert_eq!(RelationDirection::default(), RelationDirection::Unknown);
+    }
 
     #[test]
     fn resource_relation_serializes_with_evidence_fields() {

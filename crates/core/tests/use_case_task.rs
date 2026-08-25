@@ -1,7 +1,7 @@
 //! Contract tests for `TaskUseCase`.
 
-use notez_core::application::use_cases::TaskUseCase;
 use notez_core::application::ApplicationFacade;
+use notez_core::application::use_cases::TaskUseCase;
 use notez_core::domain::ResourceRef;
 use notez_core::storage::SqliteProjection;
 
@@ -33,7 +33,15 @@ fn para_overview_on_empty_projection_has_four_empty_buckets() {
 fn transition_task_on_missing_resource_returns_not_found() {
     let (_dir, mut facade) = make_facade();
     let r_ref = ResourceRef::parse("heading:01J000000000000000000000F1").unwrap();
-    let err = <ApplicationFacade<_> as TaskUseCase>::transition_task(&mut facade, &r_ref, "DONE", "2026-08-02")
-        .expect_err("transition on missing resource must fail");
-    assert!(err.to_string().contains("not found") || err.to_string().contains("01J000000000000000000000F1"));
+    let err = <ApplicationFacade<_> as TaskUseCase>::transition_task(
+        &mut facade,
+        &r_ref,
+        "DONE",
+        "2026-08-02",
+    )
+    .expect_err("transition on missing resource must fail");
+    assert!(
+        err.to_string().contains("not found")
+            || err.to_string().contains("01J000000000000000000000F1")
+    );
 }

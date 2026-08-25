@@ -59,7 +59,9 @@ pub trait SourceTransport: Send + Sync {
     /// Optional mutation capability.
     fn mutate(&self, locator: &str, payload: &str) -> Result<(), TransportError> {
         let _ = (locator, payload);
-        Err(TransportError::Other("Mutation not supported by this transport".into()))
+        Err(TransportError::Other(
+            "Mutation not supported by this transport".into(),
+        ))
     }
 }
 

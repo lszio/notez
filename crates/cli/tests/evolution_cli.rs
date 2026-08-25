@@ -1,8 +1,8 @@
 //! Contract tests for `notez source` commands.
 //!
 //! As of the format-adapter refactor:
-//! - `source add` writes through the canonical `SpaceContext.runtime`.
-//! - `source writeback` requires an explicit `SpaceContext` and a
+//! - `source add` writes through the canonical `SourceContext.runtime`.
+//! - `source writeback` requires an explicit `SourceContext` and a
 //!   registered, non-read-only source. The legacy behaviour that
 //!   silently reported `committed: true` for unknown sources is gone.
 //! - `sync relay` reports the relay capability as `Unsupported` until

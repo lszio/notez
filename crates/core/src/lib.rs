@@ -19,26 +19,26 @@
 //! `orgmode` / `markdown` cargo features.
 // `core` is intentionally a thin name over the standard `core` crate.
 
-pub mod capability;
-pub mod domain;
-pub mod storage;
-pub mod document;
-pub mod source;
-pub mod config;
 pub mod application;
-pub mod sync;
 pub mod artifact;
-pub mod preview;
+pub mod capability;
+pub mod config;
+pub mod document;
+pub mod domain;
 mod error_serde;
+pub mod preview;
+pub mod source;
+pub mod storage;
+pub mod sync;
 
 // Re-export the most common surface so application crates can write
 // `use core::{Resource, ResourceRef, ApplicationService, ...}`.
+pub use application::{ApplicationError, ApplicationService, ResolveResult, ScanReport};
 pub use domain::{
     Community, CommunityCandidate, CommunitySelector, InspectResult, LinkDiagnostic,
-    LinkOccurrence, LinkTarget, Projection, ProjectionStore, QueryPage, Resource, ResourceKind,
-    ResourceRef, ResourceRefError, ResourceRelation, ResolutionStatus, ResolvedRelation,
-    RelationDirection, RelationType, Rule, RuleEngine, RuleKind, RuleTrace, Selector, TextSpan,
-    derived_id, derived_object_id, ObjectId, ObjectIdError,
+    LinkOccurrence, LinkTarget, ObjectIdentity, ObjectIdentityError, Projection, ProjectionStore,
+    QueryPage, RelationDirection, RelationType, ResolutionStatus, ResolvedRelation, Resource,
+    ResourceKind, ResourceRef, ResourceRefError, ResourceRelation, Rule, RuleEngine, RuleKind,
+    RuleTrace, Selector, TextSpan, derived_id, derived_object_id,
 };
 pub use storage::{BlobMeta, BlobStore, SegmentRecord, SqliteProjection, StorageError};
-pub use application::{ApplicationError, ApplicationService, ResolveResult, ScanReport};

@@ -146,18 +146,26 @@ fn reject_if_empty(bytes: &[u8], label: &str) -> Result<(), ExtractionError> {
 pub struct PdfExtractor;
 
 impl PdfExtractor {
-    pub fn target_extension(&self) -> Option<&'static str> { Some("pdf") }
+    pub fn target_extension(&self) -> Option<&'static str> {
+        Some("pdf")
+    }
 }
 
 impl Extractor for PdfExtractor {
     fn extract(&self, bytes: &[u8], mime_type: &str) -> Result<ExtractedContent, ExtractionError> {
-        if !mime_matches(mime_type, PDF_MIMES) { return Err(ExtractionError::UnsupportedMime(mime_type.to_string())); }
+        if !mime_matches(mime_type, PDF_MIMES) {
+            return Err(ExtractionError::UnsupportedMime(mime_type.to_string()));
+        }
         reject_if_empty(bytes, "pdf")?;
-        let doc = lopdf::Document::load_mem(bytes).map_err(|e| ExtractionError::Failed(e.to_string()))?;
+        let doc =
+            lopdf::Document::load_mem(bytes).map_err(|e| ExtractionError::Failed(e.to_string()))?;
         let pages = doc.get_pages();
         let mut text = String::new();
         for (i, _) in pages.iter().enumerate() {
-            if let Ok(t) = doc.extract_text(&[(i + 1) as u32]) { text.push_str(&t); text.push('\n'); }
+            if let Ok(t) = doc.extract_text(&[(i + 1) as u32]) {
+                text.push_str(&t);
+                text.push('\n');
+            }
         }
         let mut metadata = BTreeMap::new();
         metadata.insert("page_count".into(), pages.len().to_string());
@@ -168,28 +176,41 @@ impl Extractor for PdfExtractor {
 pub struct XlsxExtractor;
 
 impl XlsxExtractor {
-    pub fn target_extension(&self) -> Option<&'static str> { Some("xlsx") }
+    pub fn target_extension(&self) -> Option<&'static str> {
+        Some("xlsx")
+    }
 }
 
 impl Extractor for XlsxExtractor {
     fn extract(&self, bytes: &[u8], mime_type: &str) -> Result<ExtractedContent, ExtractionError> {
-        if !mime_matches(mime_type, XLSX_MIMES) { return Err(ExtractionError::UnsupportedMime(mime_type.to_string())); }
+        if !mime_matches(mime_type, XLSX_MIMES) {
+            return Err(ExtractionError::UnsupportedMime(mime_type.to_string()));
+        }
         reject_if_empty(bytes, "xlsx")?;
         let mut file = NamedTempFile::new().map_err(|e| ExtractionError::Failed(e.to_string()))?;
-        file.write_all(bytes).map_err(|e| ExtractionError::Failed(e.to_string()))?;
+        file.write_all(bytes)
+            .map_err(|e| ExtractionError::Failed(e.to_string()))?;
         use calamine::Reader;
-        let mut workbook = calamine::open_workbook_auto(file.path()).map_err(|e| ExtractionError::Failed(e.to_string()))?;
+        let mut workbook = calamine::open_workbook_auto(file.path())
+            .map_err(|e| ExtractionError::Failed(e.to_string()))?;
         let mut sheets = Vec::new();
         let mut text = String::new();
         for name in workbook.sheet_names().to_owned() {
             if let Ok(range) = workbook.worksheet_range(&name) {
-                let rows: Vec<Vec<String>> = range.rows().map(|r| r.iter().map(|c| c.to_string()).collect()).collect();
-                text.push_str(&rows.iter().flatten().cloned().collect::<Vec<_>>().join(" ")); text.push('\n');
+                let rows: Vec<Vec<String>> = range
+                    .rows()
+                    .map(|r| r.iter().map(|c| c.to_string()).collect())
+                    .collect();
+                text.push_str(&rows.iter().flatten().cloned().collect::<Vec<_>>().join(" "));
+                text.push('\n');
                 sheets.push(serde_json::json!({"name": name, "rows": rows}));
             }
         }
         let mut metadata = BTreeMap::new();
-        metadata.insert("sheets_json".into(), serde_json::to_string(&sheets).map_err(|e| ExtractionError::Failed(e.to_string()))?);
+        metadata.insert(
+            "sheets_json".into(),
+            serde_json::to_string(&sheets).map_err(|e| ExtractionError::Failed(e.to_string()))?,
+        );
         Ok(ExtractedContent { text, metadata })
     }
 }
@@ -197,27 +218,67 @@ impl Extractor for XlsxExtractor {
 pub struct PptxExtractor;
 
 impl PptxExtractor {
-    pub fn target_extension(&self) -> Option<&'static str> { Some("pptx") }
+    pub fn target_extension(&self) -> Option<&'static str> {
+        Some("pptx")
+    }
 }
 
 impl Extractor for PptxExtractor {
     fn extract(&self, bytes: &[u8], mime_type: &str) -> Result<ExtractedContent, ExtractionError> {
-        if !mime_matches(mime_type, PPTX_MIMES) { return Err(ExtractionError::UnsupportedMime(mime_type.to_string())); }
+        if !mime_matches(mime_type, PPTX_MIMES) {
+            return Err(ExtractionError::UnsupportedMime(mime_type.to_string()));
+        }
         reject_if_empty(bytes, "pptx")?;
-        let mut archive = zip::ZipArchive::new(Cursor::new(bytes)).map_err(|e| ExtractionError::Failed(e.to_string()))?;
+        let mut archive = zip::ZipArchive::new(Cursor::new(bytes))
+            .map_err(|e| ExtractionError::Failed(e.to_string()))?;
         let mut slides = Vec::new();
         for i in 0..archive.len() {
-            let mut entry = archive.by_index(i).map_err(|e| ExtractionError::Failed(e.to_string()))?;
+            let mut entry = archive
+                .by_index(i)
+                .map_err(|e| ExtractionError::Failed(e.to_string()))?;
             let name = entry.name().to_string();
             if name.starts_with("ppt/slides/slide") && name.ends_with(".xml") {
-                let mut xml = String::new(); entry.read_to_string(&mut xml).map_err(|e| ExtractionError::Failed(e.to_string()))?;
-                let mut reader = quick_xml::Reader::from_str(&xml); reader.config_mut().trim_text(true); let mut buf = Vec::new(); let mut vals = Vec::new();
-                loop { match reader.read_event_into(&mut buf) { Ok(quick_xml::events::Event::Start(e)) if e.name().as_ref() == b"a:t" => { if let Ok(quick_xml::events::Event::Text(t)) = reader.read_event_into(&mut buf) { vals.push(t.unescape().map_err(|e| ExtractionError::Failed(e.to_string()))?.into_owned()); } }, Ok(quick_xml::events::Event::Eof) => break, Err(e) => return Err(ExtractionError::Failed(e.to_string())), _ => {} } buf.clear(); }
+                let mut xml = String::new();
+                entry
+                    .read_to_string(&mut xml)
+                    .map_err(|e| ExtractionError::Failed(e.to_string()))?;
+                let mut reader = quick_xml::Reader::from_str(&xml);
+                reader.config_mut().trim_text(true);
+                let mut buf = Vec::new();
+                let mut vals = Vec::new();
+                loop {
+                    match reader.read_event_into(&mut buf) {
+                        Ok(quick_xml::events::Event::Start(e)) if e.name().as_ref() == b"a:t" => {
+                            if let Ok(quick_xml::events::Event::Text(t)) =
+                                reader.read_event_into(&mut buf)
+                            {
+                                vals.push(
+                                    t.unescape()
+                                        .map_err(|e| ExtractionError::Failed(e.to_string()))?
+                                        .into_owned(),
+                                );
+                            }
+                        }
+                        Ok(quick_xml::events::Event::Eof) => break,
+                        Err(e) => return Err(ExtractionError::Failed(e.to_string())),
+                        _ => {}
+                    }
+                    buf.clear();
+                }
                 slides.push(vals);
             }
         }
-        let text = slides.iter().flatten().cloned().collect::<Vec<_>>().join(" ");
-        let mut metadata = BTreeMap::new(); metadata.insert("slides_json".into(), serde_json::to_string(&slides).map_err(|e| ExtractionError::Failed(e.to_string()))?);
+        let text = slides
+            .iter()
+            .flatten()
+            .cloned()
+            .collect::<Vec<_>>()
+            .join(" ");
+        let mut metadata = BTreeMap::new();
+        metadata.insert(
+            "slides_json".into(),
+            serde_json::to_string(&slides).map_err(|e| ExtractionError::Failed(e.to_string()))?,
+        );
         Ok(ExtractedContent { text, metadata })
     }
 }
@@ -225,17 +286,36 @@ impl Extractor for PptxExtractor {
 pub struct ZipExtractor;
 
 impl ZipExtractor {
-    pub fn target_extension(&self) -> Option<&'static str> { Some("zip") }
+    pub fn target_extension(&self) -> Option<&'static str> {
+        Some("zip")
+    }
 }
 
 impl Extractor for ZipExtractor {
     fn extract(&self, bytes: &[u8], mime_type: &str) -> Result<ExtractedContent, ExtractionError> {
-        if !mime_matches(mime_type, ZIP_MIMES) { return Err(ExtractionError::UnsupportedMime(mime_type.to_string())); }
+        if !mime_matches(mime_type, ZIP_MIMES) {
+            return Err(ExtractionError::UnsupportedMime(mime_type.to_string()));
+        }
         reject_if_empty(bytes, "zip")?;
-        let mut archive = zip::ZipArchive::new(Cursor::new(bytes)).map_err(|e| ExtractionError::Failed(e.to_string()))?;
-        let mut entries = Vec::new(); let mut names = Vec::new();
-        for i in 0..archive.len() { let entry = archive.by_index(i).map_err(|e| ExtractionError::Failed(e.to_string()))?; names.push(entry.name().to_string()); entries.push((entry.name().to_string(), entry.size(), entry.is_dir())); }
-        let mut metadata = BTreeMap::new(); metadata.insert("entries_json".into(), serde_json::to_string(&entries).map_err(|e| ExtractionError::Failed(e.to_string()))?);
-        Ok(ExtractedContent { text: names.join("\n"), metadata })
+        let mut archive = zip::ZipArchive::new(Cursor::new(bytes))
+            .map_err(|e| ExtractionError::Failed(e.to_string()))?;
+        let mut entries = Vec::new();
+        let mut names = Vec::new();
+        for i in 0..archive.len() {
+            let entry = archive
+                .by_index(i)
+                .map_err(|e| ExtractionError::Failed(e.to_string()))?;
+            names.push(entry.name().to_string());
+            entries.push((entry.name().to_string(), entry.size(), entry.is_dir()));
+        }
+        let mut metadata = BTreeMap::new();
+        metadata.insert(
+            "entries_json".into(),
+            serde_json::to_string(&entries).map_err(|e| ExtractionError::Failed(e.to_string()))?,
+        );
+        Ok(ExtractedContent {
+            text: names.join("\n"),
+            metadata,
+        })
     }
 }

@@ -2,10 +2,10 @@
 //!
 //! Five routes:
 //! - `/`                                       — picker home (onboarding card)
-//! - `/space/:encoded`                         — per-space welcome (renders `index.org` when present)
-//! - `/space/:encoded/list`                    — resource list inside a space
-//! - `/space/:encoded/resource/:encoded_ref`   — resource detail inside a space
-//! - `/space/:encoded/graph`                   — full-space force-directed graph
+//! - `/source/:encoded`                         — per-space welcome (renders `index.org` when present)
+//! - `/source/:encoded/list`                    — resource list inside a space
+//! - `/source/:encoded/resource/:encoded_ref`   — resource detail inside a space
+//! - `/source/:encoded/graph`                   — full-space force-directed graph
 //!
 //! Spaces are picked at runtime through the picker in the header; the
 //! `space` path segment is the base64-urlsafe-encoded absolute path

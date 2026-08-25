@@ -111,7 +111,7 @@ pub fn PropertiesPanel(active_encoded: Option<String>) -> Element {
                         match space_status {
                             Some(SpaceStatus::Resolving) => rsx! { p { class: "props-empty", "loading…" } },
                             Some(SpaceStatus::Error(e)) => rsx! { p { class: "props-empty err-text", "error: {e}" } },
-                            _ => rsx! { p { class: "props-empty", "no space selected." } },
+                            _ => rsx! { p { class: "props-empty", "no source selected." } },
                         }
                     }
                 }

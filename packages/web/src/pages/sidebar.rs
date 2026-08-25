@@ -19,7 +19,7 @@ pub fn SpaceSidebar(active_path: Option<String>) -> Element {
     let spaces_resource = use_server_future(|| async {
         list_registered_spaces().await.unwrap_or_default()
     })?;
-    let spaces: Vec<RegisteredSpaceDto> = spaces_resource.cloned().unwrap_or_default();
+    let sources: Vec<RegisteredSpaceDto> = spaces_resource.cloned().unwrap_or_default();
 
     let current_normalized = active_path
         .as_deref()
@@ -29,19 +29,19 @@ pub fn SpaceSidebar(active_path: Option<String>) -> Element {
         .or(active_path.clone());
 
     rsx! {
-        nav { class: "side", aria_label: "spaces",
+        nav { class: "side", aria_label: "sources",
             details { class: "side-add space-picker-dropdown", open: true,
                 summary { class: "side-label",
                     if let Some(ref p) = active_path {
                         span { class: "accent", "{p}" }
                     } else {
-                        span { "spaces" }
+                        span { "sources" }
                     }
                 }
 
                 div { class: "side-head", style: "margin-top:0.5rem;",
                     span { class: "side-label", "registered" }
-                    span { class: "side-count", "({spaces.len()})" }
+                    span { class: "side-count", "({sources.len()})" }
                 }
 
                 a {
@@ -50,13 +50,13 @@ pub fn SpaceSidebar(active_path: Option<String>) -> Element {
                     "all notes"
                 }
 
-                if spaces.is_empty() {
+                if sources.is_empty() {
                     p { class: "side-empty",
-                        "No spaces yet. Use the form below."
+                        "No sources yet. Use the form below."
                     }
                 } else {
                     ul { class: "side-list",
-                        for s in spaces.iter() {
+                        for s in sources.iter() {
                             {
                                 let is_current = current_normalized
                                     .as_deref()
@@ -91,7 +91,7 @@ pub fn SpaceSidebar(active_path: Option<String>) -> Element {
                     summary { "+ register a space" }
                     form {
                         class: "side-add-form",
-                        action: "/api/spaces/register",
+                        action: "/api/sources/register",
                         method: "post",
                         label {
                             r#for: "side-add-name",
@@ -133,7 +133,7 @@ pub fn SpaceDropdown(active_path: Option<String>, active_encoded: Option<String>
     let spaces_resource = use_server_future(|| async {
         list_registered_spaces().await.unwrap_or_default()
     })?;
-    let spaces: Vec<RegisteredSpaceDto> = spaces_resource.cloned().unwrap_or_default();
+    let sources: Vec<RegisteredSpaceDto> = spaces_resource.cloned().unwrap_or_default();
 
     let current_normalized = active_path
         .as_deref()
@@ -148,44 +148,44 @@ pub fn SpaceDropdown(active_path: Option<String>, active_encoded: Option<String>
         .unwrap_or_else(|| "(select space)".to_string());
 
     rsx! {
-        details { class: "nav-space",
-            summary { class: "nav-space-summary",
-                span { class: "nav-space-mark", "◐" }
-                span { class: "nav-space-name", "{leaf}" }
+        details { class: "nav-source",
+            summary { class: "nav-source-summary",
+                span { class: "nav-source-mark", "◐" }
+                span { class: "nav-source-name", "{leaf}" }
                 if let Some(ref p) = active_path {
-                    span { class: "nav-space-path", "{p}" }
+                    span { class: "nav-source-path", "{p}" }
                 }
-                span { class: "nav-space-caret", "▾" }
+                span { class: "nav-source-caret", "▾" }
             }
-            div { class: "nav-space-panel",
-                div { class: "nav-space-head",
-                    span { class: "nav-space-label", "spaces" }
-                    span { class: "nav-space-count", "({spaces.len()})" }
+            div { class: "nav-source-panel",
+                div { class: "nav-source-head",
+                    span { class: "nav-source-label", "sources" }
+                    span { class: "nav-source-count", "({sources.len()})" }
                 }
                 a {
-                    class: if current_normalized.is_none() { "nav-space-link is-current" } else { "nav-space-link" },
+                    class: if current_normalized.is_none() { "nav-source-link is-current" } else { "nav-source-link" },
                     href: "/",
                     "all notes"
                 }
                 if let Some(enc) = active_encoded.as_ref() {
                     a {
-                        class: "nav-space-link",
-                        href: "/space/{enc}/list",
+                        class: "nav-source-link",
+                        href: "/source/{enc}/list",
                         "this space · all resources"
                     }
                     a {
-                        class: "nav-space-link",
-                        href: "/space/{enc}/graph",
+                        class: "nav-source-link",
+                        href: "/source/{enc}/graph",
                         "this space · graph"
                     }
                 }
-                if spaces.is_empty() {
+                if sources.is_empty() {
                     p { class: "side-empty",
-                        "No spaces yet. Use the form below."
+                        "No sources yet. Use the form below."
                     }
                 } else {
                     ul { class: "side-list",
-                        for s in spaces.iter() {
+                        for s in sources.iter() {
                             {
                                 let is_current = current_normalized
                                     .as_deref()
@@ -219,7 +219,7 @@ pub fn SpaceDropdown(active_path: Option<String>, active_encoded: Option<String>
                     summary { "+ register a space" }
                     form {
                         class: "side-add-form",
-                        action: "/api/spaces/register",
+                        action: "/api/sources/register",
                         method: "post",
                         label {
                             r#for: "nav-add-name",

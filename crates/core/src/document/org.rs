@@ -139,10 +139,15 @@ impl OrgScanner {
                     });
                     heading_count += 1;
                 }
-            } else if trimmed.starts_with("SCHEDULED:") || trimmed.starts_with("DEADLINE:") || trimmed.starts_with("CLOSED:") {
+            } else if trimmed.starts_with("SCHEDULED:")
+                || trimmed.starts_with("DEADLINE:")
+                || trimmed.starts_with("CLOSED:")
+            {
                 if let Some(cur_heading) = headings.last_mut() {
                     if let Some((key, val)) = trimmed.split_once(':') {
-                        cur_heading.properties.insert(key.trim().to_uppercase(), val.trim().to_string());
+                        cur_heading
+                            .properties
+                            .insert(key.trim().to_uppercase(), val.trim().to_string());
                     }
                 }
             } else if trimmed.eq_ignore_ascii_case(":PROPERTIES:") {
@@ -214,6 +219,7 @@ impl OrgScanner {
             locator: locator.clone(),
             properties: doc_properties,
             object_id: doc_object_id,
+            primary_source_id: String::new(),
         };
 
         let mut resources = vec![doc_resource];
@@ -251,6 +257,7 @@ impl OrgScanner {
 
             let heading_hash = content_hash_of_bytes(h.title.as_bytes());
             resources.push(Resource {
+                primary_source_id: String::new(),
                 r#ref: h_ref,
                 kind: h_ref.kind(),
                 title: h.title.clone(),
@@ -522,8 +529,7 @@ mod tests {
 
     #[test]
     fn extract_multiple_links() {
-        let ref_id =
-            ResourceRef::parse("document:01J00000000000000000000001").unwrap();
+        let ref_id = ResourceRef::parse("document:01J00000000000000000000001").unwrap();
         let line = "See [[id:01J00000000000000000000002][target]] and [[file:notes.org]].";
         let occs = extract_org_links(line, 1, ref_id);
         assert_eq!(occs.len(), 2);

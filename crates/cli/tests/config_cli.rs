@@ -6,21 +6,22 @@ fn notez() -> Command {
 }
 
 #[test]
-fn config_cli_loads_registered_space() {
+fn config_cli_loads_registered_source() {
     let tmp = tempfile::tempdir().unwrap();
     let xdg = tmp.path().join("config");
     let space = tmp.path().join("notes");
-    
+
     fs::create_dir_all(&space).unwrap();
     fs::create_dir_all(xdg.join("notez")).unwrap();
     fs::write(
         xdg.join("notez/config.toml"),
         format!(
-            "version = 1\ndefault_space = \"test\"\n[spaces.test]\npath = \"{}\"\n",
+            "version = 2\ndefault_source = \"test\"\n[sources.test]\npath = \"{}\"\n",
             space.display()
-        )
-    ).unwrap();
-    
+        ),
+    )
+    .unwrap();
+
     // Explicit name resolution.
     notez()
         .env("XDG_CONFIG_HOME", xdg.as_os_str())
@@ -30,17 +31,21 @@ fn config_cli_loads_registered_space() {
         .arg("--json")
         .assert()
         .success();
-        
-    // Default space resolution.
+
+    // Default source resolution.
     notez()
         .env("XDG_CONFIG_HOME", xdg.as_os_str())
         .arg("query")
         .arg("--json")
         .assert()
         .success();
-        
+
     // Upward resolution.
-    fs::write(space.join("notez.toml"), "version = 1\n[space]\nname = \"local\"\n").unwrap();
+    fs::write(
+        space.join("notez.toml"),
+        "version = 2\n[source]\nname = \"local\"\n",
+    )
+    .unwrap();
     fs::create_dir_all(space.join("deep/dir")).unwrap();
     notez()
         .env("XDG_CONFIG_HOME", xdg.as_os_str())
@@ -56,14 +61,15 @@ fn config_cli_rejects_invalid_config_before_db_open() {
     let tmp = tempfile::tempdir().unwrap();
     let xdg = tmp.path().join("config");
     let space = tmp.path().join("notes");
-    
+
     fs::create_dir_all(&space).unwrap();
     fs::create_dir_all(xdg.join("notez")).unwrap();
     fs::write(
         xdg.join("notez/config.toml"),
-        "version = 1\n[spaces.x]\npath = \"/nonexistent\"\nunknown = 1\n"
-    ).unwrap();
-    
+        "version = 1\n[sources.x]\npath = \"/nonexistent\"\nunknown = 1\n",
+    )
+    .unwrap();
+
     notez()
         .env("XDG_CONFIG_HOME", xdg.as_os_str())
         .arg("--space")
@@ -72,7 +78,7 @@ fn config_cli_rejects_invalid_config_before_db_open() {
         .assert()
         .failure()
         .code(2);
-        
+
     // Assert no .notez was created locally
     assert!(!space.join(".notez").exists());
 }

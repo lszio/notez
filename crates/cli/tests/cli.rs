@@ -93,7 +93,7 @@ fn cli_scan_query_resolve_read_rebuild() {
     cmd_reb
         .arg("--space")
         .arg(space)
-        .arg("space")
+        .arg("workspace")
         .arg("rebuild")
         .assert()
         .success();

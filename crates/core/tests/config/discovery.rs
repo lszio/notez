@@ -1,4 +1,4 @@
-use crate::config::{ConfigPaths, SpaceSelector, select_space};
+use crate::config::{ConfigPaths, SourceSelector, select_source};
 use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::path::PathBuf;
@@ -29,7 +29,7 @@ fn explicit_registered_name_is_preferred() {
     std::fs::write(
         global_dir.join("config.toml"),
         format!(
-            "version = 1\ndefault_space = \"personal\"\n\n[spaces.personal]\npath = \"{}\"\n",
+            "version = 2\ndefault_source = \"personal\"\n\n[sources.personal]\npath = \"{}\"\n",
             root.join("notes/personal").display()
         ),
     )
@@ -37,10 +37,10 @@ fn explicit_registered_name_is_preferred() {
 
     let paths = ConfigPaths::discover(&env_with(root.to_str().unwrap()), root.join("anywhere"))
         .unwrap();
-    let space = select_space(&paths, SpaceSelector::Name("personal")).unwrap();
-    assert_eq!(space.space_name, "personal");
+    let space = select_source(&paths, SourceSelector::Name("personal")).unwrap();
+    assert_eq!(space.source_name, "personal");
     assert_eq!(
-        space.space_root.canonicalize().unwrap(),
+        space.root.canonicalize().unwrap(),
         root.join("notes/personal").canonicalize().unwrap()
     );
 }
@@ -55,7 +55,7 @@ fn upward_search_finds_nearest_notez_toml() {
     let target = root.join("a/b/c/d/e");
     std::fs::write(
         nested.join("notez.toml"),
-        "version = 1\n[space]\nname = \"nested\"\n",
+        "version = 2\n[source]\nname = \"nested\"\n",
     )
     .unwrap();
     std::fs::create_dir_all(&target).unwrap();
@@ -65,9 +65,9 @@ fn upward_search_finds_nearest_notez_toml() {
         nested.join("d/e"),
     )
     .unwrap();
-    let space = select_space(&paths, SpaceSelector::Upward).unwrap();
-    assert_eq!(space.space_root, nested);
-    assert_eq!(space.space_name, "nested");
+    let space = select_source(&paths, SourceSelector::Upward).unwrap();
+    assert_eq!(space.root, nested);
+    assert_eq!(space.source_name, "nested");
 }
 
 #[test]
@@ -79,7 +79,7 @@ fn missing_space_returns_clear_error() {
         root.join("anywhere"),
     )
     .unwrap();
-    let err = select_space(&paths, SpaceSelector::Default).unwrap_err();
+    let err = select_source(&paths, SourceSelector::Default).unwrap_err();
     let msg = err.to_string();
-    assert!(msg.contains("no space selected"), "msg = {msg}");
+    assert!(msg.contains("no source selected"), "msg = {msg}");
 }

@@ -1,6 +1,6 @@
 //! `PreviewPage` — in-app preview of any file on disk under a space.
 //!
-//! Route: `/space/:encoded/preview/:encoded_locator`. The locator
+//! Route: `/source/:encoded/preview/:encoded_locator`. The locator
 //! is base64url-encoded into the path segment so paths containing
 //! `/` (which would otherwise break the Dioxus router's single
 //! `:param` match) survive intact. The page delegates to
@@ -75,7 +75,7 @@ pub fn PreviewPage(encoded: String, encoded_locator: String) -> Element {
                     a { class: "control-action", href: "{list_href}", "← back to index" }
                     a {
                         class: "control-action",
-                        href: "/api/spaces/attachment/raw?space_root={urlencoding::encode(&decoded_space)}&locator={urlencoding::encode(&p.display_path)}",
+                        href: "/api/sources/attachment/raw?source_root={urlencoding::encode(&decoded_space)}&locator={urlencoding::encode(&p.display_path)}",
                         target: "_blank",
                         "open raw ↗"
                     }

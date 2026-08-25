@@ -79,22 +79,22 @@ fn url_decode(s: &str) -> String {
 pub enum Route {
     #[route("/", HomePage)]
     Home {},
-    #[route("/space/:encoded", SpaceHome)]
+    #[route("/source/:encoded", SpaceHome)]
     Space { encoded: String },
-    #[route("/space/:encoded/list?:..query", ListPage)]
+    #[route("/source/:encoded/list?:..query", ListPage)]
     List { encoded: String, query: ListQuery },
-    #[route("/space/:encoded/resource/:encoded_ref", DetailPage)]
+    #[route("/source/:encoded/resource/:encoded_ref", DetailPage)]
     Resource { encoded: String, encoded_ref: String },
-    #[route("/space/:encoded/graph", GraphPage)]
+    #[route("/source/:encoded/graph", GraphPage)]
     Graph { encoded: String },
-    #[route("/space/:encoded/preview/:encoded_locator", PreviewPage)]
+    #[route("/source/:encoded/preview/:encoded_locator", PreviewPage)]
     Preview { encoded: String, encoded_locator: String },
 }
 
 pub use dioxus_router::Router as AppRouter;
 
-pub fn encode_space(space_root: &str) -> String {
-    base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(space_root.as_bytes())
+pub fn encode_space(source_root: &str) -> String {
+    base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(source_root.as_bytes())
 }
 
 pub fn decode_space(encoded: &str) -> String {
@@ -117,30 +117,30 @@ pub fn decode_locator(encoded: &str) -> String {
         .unwrap_or_default();
     String::from_utf8(bytes).unwrap_or_default()
 }
-pub fn route_for_space_home(space_root: &str) -> String {
-    format!("/space/{}", encode_space(space_root))
+pub fn route_for_space_home(source_root: &str) -> String {
+    format!("/source/{}", encode_space(source_root))
 }
 
-pub fn route_for_space_list(space_root: &str) -> String {
-    format!("/space/{}/list", encode_space(space_root))
+pub fn route_for_space_list(source_root: &str) -> String {
+    format!("/source/{}/list", encode_space(source_root))
 }
 
-pub fn route_for_space_graph(space_root: &str) -> String {
-    format!("/space/{}/graph", encode_space(space_root))
+pub fn route_for_space_graph(source_root: &str) -> String {
+    format!("/source/{}/graph", encode_space(source_root))
 }
 
-pub fn route_for_space_resource(space_root: &str, ref_str: &str) -> String {
+pub fn route_for_space_resource(source_root: &str, ref_str: &str) -> String {
     format!(
-        "/space/{}/resource/{}",
-        encode_space(space_root),
+        "/source/{}/resource/{}",
+        encode_space(source_root),
         encode_space(ref_str)
     )
 }
 
-pub fn route_for_space_preview(space_root: &str, locator: &str) -> String {
+pub fn route_for_space_preview(source_root: &str, locator: &str) -> String {
     format!(
-        "/space/{}/preview/{}",
-        encode_space(space_root),
+        "/source/{}/preview/{}",
+        encode_space(source_root),
         encode_locator(locator)
     )
 }
@@ -148,8 +148,8 @@ pub fn route_for_space_preview(space_root: &str, locator: &str) -> String {
 /// Build the list URL with the supplied query string. When `query`
 /// is empty / default, the result is identical to
 /// `route_for_space_list`.
-pub fn route_for_space_list_with_query(space_root: &str, query: &ListQuery) -> String {
-    let base = format!("/space/{}/list", encode_space(space_root));
+pub fn route_for_space_list_with_query(source_root: &str, query: &ListQuery) -> String {
+    let base = format!("/source/{}/list", encode_space(source_root));
     let qs = query.to_string();
     if qs.is_empty() {
         base

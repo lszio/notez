@@ -10,9 +10,9 @@ use notez_core::storage::SqliteProjection;
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn mcp_rules_agenda_and_task_transition() {
     let temp_dir = tempfile::tempdir().unwrap();
-    let space_root = temp_dir.path();
+    let source_root = temp_dir.path();
 
-    let file = space_root.join("tasks.org");
+    let file = source_root.join("tasks.org");
     fs::write(
         &file,
         "#+title: MCP Rules\n#+ID: 01J00000000000000000000800\n* TODO MCP Task\n:PROPERTIES:\n:ID: 01J00000000000000000000801\n:SCHEDULED: <2026-07-22 Wed>\n:TYPE: project\n:END:\n",
@@ -20,7 +20,7 @@ async fn mcp_rules_agenda_and_task_transition() {
 
     let store = SqliteProjection::in_memory().unwrap();
     let mut service = ApplicationService::new(store);
-    service.scan_native(space_root).unwrap();
+    service.scan_native(source_root).unwrap();
 
     let requests = vec![
         initialize_request(1).to_string(),

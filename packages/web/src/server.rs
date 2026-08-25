@@ -1,11 +1,11 @@
 //! Web server functions for the v0.2 reader.
 //!
-//! Each `#[server]` function takes the per-request `space_root` (an
+//! Each `#[server]` function takes the per-request `source_root` (an
 //! absolute path the user picked in the UI) and a `ResourceRef` when
-//! relevant. The `space_root` is opened into a `SqliteProjection`
-//! lazily per call so a single server can serve many spaces.
+//! relevant. The `source_root` is opened into a `SqliteProjection`
+//! lazily per call so a single server can serve many sources.
 //!
-//! There is no `NOTEZ_SPACE_ROOT` env var anymore: spaces are chosen
+//! There is no `NOTEZ_SPACE_ROOT` env var anymore: sources are chosen
 //! dynamically by the user, so the only thing the server process needs
 //! at startup is the bind address (`PORT` / `IP`, handled by the
 //! Dioxus fullstack runtime).
@@ -19,14 +19,11 @@ use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
 use dioxus::prelude::*;
-use notez_core::application::{ApplicationFacade, Graph, GraphEdge, GraphNode};
-use notez_core::config::{
-    web_space::{
-        list_spaces as core_list_spaces, resolve_space as core_resolve_space,
-        RegisteredSpace, SpaceSource, WebSpaceError,
-    },
-    SelectedSpace,
+use notez_core::config::web_space::{
+    list_sources, resolve_source as core_resolve_space, ListedSource, SourceOrigin,
+    WebSourceError,
 };
+use notez_core::config::SelectedSource;
 use serde::{Deserialize, Serialize};
 
 use crate::body::render_body;
@@ -35,13 +32,14 @@ use crate::router::Route;
 use crate::tree::{
     self, IndexEntryDto, KindCounts, SearchHit, SourceFileRow, TreeNode,
 };
+use notez_core::application::{ApplicationFacade, Graph};
 use notez_core::domain::{Resource, ResourceRef, ResourceKind, Selector};
 use notez_core::storage::SqliteProjection;
 
 // ---- DTO surface -----------------------------------------------------------
 
 /// Lightweight snapshot of a registered space, returned to the UI for
-/// the picker's dropdown. Mirrors `RegisteredSpace` but with
+/// the picker's dropdown. Mirrors `RegisteredSource` but with
 /// `String` paths so the wire shape stays simple.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RegisteredSpaceDto {
@@ -54,22 +52,20 @@ pub struct RegisteredSpaceDto {
     pub source: String,
 }
 
-impl From<RegisteredSpace> for RegisteredSpaceDto {
-    fn from(r: RegisteredSpace) -> Self {
-        let source = match r.source {
-            SpaceSource::Registered => "registered",
-            SpaceSource::Discovered => "discovered",
+impl From<ListedSource> for RegisteredSpaceDto {
+    fn from(r: ListedSource) -> Self {
+        let source = match r.origin {
+            SourceOrigin::Registered(_) => "registered",
+            SourceOrigin::Discovered => "discovered",
+            SourceOrigin::Ephemeral => "ephemeral",
         };
         Self {
             name: r.name,
-            path: r.path.to_string_lossy().into_owned(),
+            path: r.root.to_string_lossy().into_owned(),
             source: source.to_string(),
         }
     }
 }
-
-/// Snapshot of a resolved space, returned alongside successful calls.
-/// The web client uses this to display the friendly space name in the
 /// header.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SelectedSpaceDto {
@@ -78,17 +74,17 @@ pub struct SelectedSpaceDto {
     pub db_path: String,
 }
 
-impl From<SelectedSpace> for SelectedSpaceDto {
-    fn from(s: SelectedSpace) -> Self {
+impl From<SelectedSource> for SelectedSpaceDto {
+    fn from(s: SelectedSource) -> Self {
         let db_path = s
-            .space_config
-            .space
+            .source_config
+            .source
             .database
             .to_string_lossy()
             .into_owned();
         Self {
-            name: s.space_name,
-            path: s.space_root.to_string_lossy().into_owned(),
+            name: s.source_name,
+            path: s.root.to_string_lossy().into_owned(),
             db_path,
         }
     }
@@ -137,18 +133,22 @@ impl std::fmt::Display for WebServerError {
     }
 }
 
-impl From<WebSpaceError> for WebServerError {
-    fn from(err: WebSpaceError) -> Self {
+impl From<WebSourceError> for WebServerError {
+    fn from(err: WebSourceError) -> Self {
         let msg = err.to_string();
         match err {
-            WebSpaceError::NotFound(p) => Self::NotFound { path: p, message: msg },
-            WebSpaceError::NotASpace(p) => Self::NotASpace { path: p, message: msg },
+            WebSourceError::NotFound(p) => Self::NotFound { path: p, message: msg },
+            WebSourceError::NotASource(p) => Self::NotASpace { path: p, message: msg },
+            WebSourceError::Source(s) | WebSourceError::InvalidPath(s) | WebSourceError::GlobalConfig(s) => {
+                Self::Internal { message: format!("{s}: {msg}") }
+            }
             other => Self::Internal {
                 message: format!("{other:?}: {msg}"),
             },
         }
     }
 }
+
 
 // ---- server functions ------------------------------------------------------
 
@@ -158,17 +158,17 @@ impl From<WebSpaceError> for WebServerError {
 /// the picker is allowed to be empty, never crashes the server.
 #[server]
 pub async fn list_registered_spaces() -> Result<Vec<RegisteredSpaceDto>, ServerFnError> {
-    let env: BTreeMap<String, OsString> = std::env::vars_os()
-        .map(|(k, v)| (k.to_string_lossy().into_owned(), v))
-        .collect();
+    let env: std::collections::BTreeMap<String, std::ffi::OsString> =
+        std::env::vars_os().map(|(k, v)| (k.to_string_lossy().into_owned(), v)).collect();
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    Ok(core_list_spaces(&env, &cwd)
+    Ok(list_sources(&env, &cwd)
+        .unwrap_or_default()
         .into_iter()
         .map(RegisteredSpaceDto::from)
         .collect())
 }
 
-/// Validate a user-typed path and resolve it to a `SelectedSpace`.
+/// Validate a user-typed path and resolve it to a `SelectedSource`.
 ///
 /// The UI calls this when the user types a path in the manual input,
 /// before navigating to `/space/<encoded>/list`. The encoded path
@@ -178,7 +178,7 @@ pub async fn resolve_space_path(path: String) -> Result<SelectedSpaceDto, Server
     let sel = core_resolve_space(Path::new(&path))
         .map_err(WebServerError::from)
         .map_err(|e| ServerFnError::new(e.to_string()))?;
-    crate::routes::auto_start_watch(&sel.space_root);
+    crate::routes::auto_start_watch(&sel.root);
     Ok(SelectedSpaceDto::from(sel))
 }
 
@@ -186,44 +186,44 @@ pub async fn resolve_space_path(path: String) -> Result<SelectedSpaceDto, Server
 /// to render the current space name in the header without forcing the
 /// page to re-derive it.
 #[server]
-pub async fn selected_space(space_root: String) -> Result<SelectedSpaceDto, ServerFnError> {
-    let sel = core_resolve_space(Path::new(&space_root))
+pub async fn selected_space(source_root: String) -> Result<SelectedSpaceDto, ServerFnError> {
+    let sel = core_resolve_space(Path::new(&source_root))
         .map_err(WebServerError::from)
         .map_err(|e| ServerFnError::new(e.to_string()))?;
-    crate::routes::auto_start_watch(&sel.space_root);
+    crate::routes::auto_start_watch(&sel.root);
     Ok(SelectedSpaceDto::from(sel))
 }
 
 #[server]
-pub async fn list_resources(space_root: String) -> Result<Vec<ResourceRow>, ServerFnError> {
-    list_resources_impl(Path::new(&space_root))
+pub async fn list_resources(source_root: String) -> Result<Vec<ResourceRow>, ServerFnError> {
+    list_resources_impl(Path::new(&source_root))
         .await
         .map_err(|e| ServerFnError::new(e.to_string()))
 }
 
 #[server]
 pub async fn get_resource(
-    space_root: String,
+    source_root: String,
     ref_str: String,
 ) -> Result<Option<ResourceRow>, ServerFnError> {
-    get_resource_impl(Path::new(&space_root), &ref_str)
+    get_resource_impl(Path::new(&source_root), &ref_str)
         .await
         .map_err(|e| ServerFnError::new(e.to_string()))
 }
 
 #[server]
-pub async fn list_graph(space_root: String) -> Result<Graph, ServerFnError> {
-    list_graph_impl(Path::new(&space_root))
+pub async fn list_graph(source_root: String) -> Result<Graph, ServerFnError> {
+    list_graph_impl(Path::new(&source_root))
         .await
         .map_err(|e| ServerFnError::new(e.to_string()))
 }
 
 #[server]
 pub async fn neighbor_graph(
-    space_root: String,
+    source_root: String,
     ref_str: String,
 ) -> Result<Graph, ServerFnError> {
-    neighbor_graph_impl(Path::new(&space_root), &ref_str)
+    neighbor_graph_impl(Path::new(&source_root), &ref_str)
         .await
         .map_err(|e| ServerFnError::new(e.to_string()))
 }
@@ -232,37 +232,37 @@ pub async fn neighbor_graph(
 
 /// Folder hierarchy derived from every resource's `locator`.
 #[server]
-pub async fn list_space_tree(space_root: String) -> Result<TreeNode, ServerFnError> {
-    let sel = core_resolve_space(Path::new(&space_root))
+pub async fn list_space_tree(source_root: String) -> Result<TreeNode, ServerFnError> {
+    let sel = core_resolve_space(Path::new(&source_root))
         .map_err(WebServerError::from)
         .map_err(|e| ServerFnError::new(e.to_string()))?;
-    crate::routes::auto_start_watch(&sel.space_root);
-    let facade = open_facade(&sel.space_root).map_err(|e| ServerFnError::new(e.to_string()))?;
+    crate::routes::auto_start_watch(&sel.root);
+    let facade = open_facade(&sel.root).map_err(|e| ServerFnError::new(e.to_string()))?;
     let facade = facade.lock().map_err(|e| ServerFnError::new(format!("facade lock: {e}")))?;
-    tree::build_tree_with_disk(&facade, &sel.space_root).map_err(|e| ServerFnError::new(e.to_string()))
+    tree::build_tree_with_disk(&facade, &sel.root).map_err(|e| ServerFnError::new(e.to_string()))
 }
 
 /// Flat list of every org/md/attachment file in the space.
 #[server]
-pub async fn list_source_files(space_root: String) -> Result<Vec<SourceFileRow>, ServerFnError> {
-    let sel = core_resolve_space(Path::new(&space_root))
+pub async fn list_source_files(source_root: String) -> Result<Vec<SourceFileRow>, ServerFnError> {
+    let sel = core_resolve_space(Path::new(&source_root))
         .map_err(WebServerError::from)
         .map_err(|e| ServerFnError::new(e.to_string()))?;
-    crate::routes::auto_start_watch(&sel.space_root);
-    let facade = open_facade(&sel.space_root).map_err(|e| ServerFnError::new(e.to_string()))?;
+    crate::routes::auto_start_watch(&sel.root);
+    let facade = open_facade(&sel.root).map_err(|e| ServerFnError::new(e.to_string()))?;
     let facade = facade.lock().map_err(|e| ServerFnError::new(format!("facade lock: {e}")))?;
-    tree::build_source_files(&facade, &sel.space_root)
+    tree::build_source_files(&facade, &sel.root)
         .map_err(|e| ServerFnError::new(e.to_string()))
 }
 
 /// Aggregate counts of every resource kind in the space.
 #[server]
-pub async fn list_kind_counts(space_root: String) -> Result<KindCounts, ServerFnError> {
-    let sel = core_resolve_space(Path::new(&space_root))
+pub async fn list_kind_counts(source_root: String) -> Result<KindCounts, ServerFnError> {
+    let sel = core_resolve_space(Path::new(&source_root))
         .map_err(WebServerError::from)
         .map_err(|e| ServerFnError::new(e.to_string()))?;
-    crate::routes::auto_start_watch(&sel.space_root);
-    let facade = open_facade(&sel.space_root).map_err(|e| ServerFnError::new(e.to_string()))?;
+    crate::routes::auto_start_watch(&sel.root);
+    let facade = open_facade(&sel.root).map_err(|e| ServerFnError::new(e.to_string()))?;
     let facade = facade.lock().map_err(|e| ServerFnError::new(format!("facade lock: {e}")))?;
     tree::build_kind_counts(&facade).map_err(|e| ServerFnError::new(e.to_string()))
 }
@@ -280,12 +280,12 @@ pub struct IndexDocumentDto {
 }
 
 #[server]
-pub async fn load_index_document(space_root: String) -> Result<IndexDocumentDto, ServerFnError> {
-    let sel = core_resolve_space(Path::new(&space_root))
+pub async fn load_index_document(source_root: String) -> Result<IndexDocumentDto, ServerFnError> {
+    let sel = core_resolve_space(Path::new(&source_root))
         .map_err(WebServerError::from)
         .map_err(|e| ServerFnError::new(e.to_string()))?;
-    crate::routes::auto_start_watch(&sel.space_root);
-    let facade = open_facade(&sel.space_root).map_err(|e| ServerFnError::new(e.to_string()))?;
+    crate::routes::auto_start_watch(&sel.root);
+    let facade = open_facade(&sel.root).map_err(|e| ServerFnError::new(e.to_string()))?;
     let mut facade = facade.lock().map_err(|e| ServerFnError::new(format!("facade lock: {e}")))?;
     let entry = tree::build_index_entry(&facade).map_err(|e| ServerFnError::new(e.to_string()))?;
     let document = entry
@@ -294,7 +294,7 @@ pub async fn load_index_document(space_root: String) -> Result<IndexDocumentDto,
         .and_then(|r_ref| match facade.read(&r_ref) {
             Ok(Some(resource)) => {
                 let mut row = ResourceRow::from(resource);
-                row.body_html = crate::body::render_body(&row, &sel.space_root);
+                row.body_html = crate::body::render_body(&row, &sel.root);
                 Some(row)
             }
             _ => None,
@@ -308,12 +308,12 @@ pub async fn load_index_document(space_root: String) -> Result<IndexDocumentDto,
 /// only the entry; callers that need the rendered body should use
 /// `load_index_document` instead.
 #[server]
-pub async fn resolve_index(space_root: String) -> Result<Option<IndexEntryDto>, ServerFnError> {
-    let sel = core_resolve_space(Path::new(&space_root))
+pub async fn resolve_index(source_root: String) -> Result<Option<IndexEntryDto>, ServerFnError> {
+    let sel = core_resolve_space(Path::new(&source_root))
         .map_err(WebServerError::from)
         .map_err(|e| ServerFnError::new(e.to_string()))?;
-    crate::routes::auto_start_watch(&sel.space_root);
-    let facade = open_facade(&sel.space_root).map_err(|e| ServerFnError::new(e.to_string()))?;
+    crate::routes::auto_start_watch(&sel.root);
+    let facade = open_facade(&sel.root).map_err(|e| ServerFnError::new(e.to_string()))?;
     let facade = facade.lock().map_err(|e| ServerFnError::new(format!("facade lock: {e}")))?;
     tree::build_index_entry(&facade).map_err(|e| ServerFnError::new(e.to_string()))
 }
@@ -332,14 +332,14 @@ pub struct Preview {
 
 #[server]
 pub async fn render_preview(
-    space_root: String,
+    source_root: String,
     locator: String,
 ) -> Result<Option<Preview>, ServerFnError> {
-    let sel = core_resolve_space(Path::new(&space_root))
+    let sel = core_resolve_space(Path::new(&source_root))
         .map_err(WebServerError::from)
         .map_err(|e| ServerFnError::new(e.to_string()))?;
-    crate::routes::auto_start_watch(&sel.space_root);
-    let facade = open_facade(&sel.space_root).map_err(|e| ServerFnError::new(e.to_string()))?;
+    crate::routes::auto_start_watch(&sel.root);
+    let facade = open_facade(&sel.root).map_err(|e| ServerFnError::new(e.to_string()))?;
     let row_opt = {
         let facade = facade.lock().map_err(|e| ServerFnError::new(format!("facade lock: {e}")))?;
         if let Ok(r_ref) = notez_core::domain::ResourceRef::parse(&locator) {
@@ -350,8 +350,8 @@ pub async fn render_preview(
     };
     if let Some(r) = row_opt {
         let mut row = ResourceRow::from(r);
-        row.body_html = crate::body::render_body(&row, &sel.space_root);
-        let size = sel.space_root.join(&row.locator).metadata().map(|m| m.len()).unwrap_or(0);
+        row.body_html = crate::body::render_body(&row, &sel.root);
+        let size = sel.root.join(&row.locator).metadata().map(|m| m.len()).unwrap_or(0);
         return Ok(Some(Preview {
             title: row.title,
             display_path: row.locator.clone(),
@@ -360,7 +360,7 @@ pub async fn render_preview(
             body_html: row.body_html,
         }));
     }
-    let file_path = sel.space_root.join(&locator);
+    let file_path = sel.root.join(&locator);
     if !file_path.exists() {
         return Ok(None);
     }
@@ -370,7 +370,7 @@ pub async fn render_preview(
         .unwrap_or(&locator)
         .to_string();
     let size = file_path.metadata().map(|m| m.len()).unwrap_or(0);
-    let body_html = crate::body::render_path(&file_path, &title, &sel.space_root);
+    let body_html = crate::body::render_path(&file_path, &title, &sel.root);
     Ok(Some(Preview {
         title,
         display_path: locator,
@@ -384,16 +384,16 @@ pub async fn render_preview(
 /// Returns at most 80 hits, ordered as the projection returns them.
 #[server]
 pub async fn search_palette(
-    space_root: String,
+    source_root: String,
     q: String,
 ) -> Result<Vec<SearchHit>, ServerFnError> {
-    let sel = core_resolve_space(Path::new(&space_root))
+    let sel = core_resolve_space(Path::new(&source_root))
         .map_err(WebServerError::from)
         .map_err(|e| ServerFnError::new(e.to_string()))?;
-    crate::routes::auto_start_watch(&sel.space_root);
-    let facade = open_facade(&sel.space_root).map_err(|e| ServerFnError::new(e.to_string()))?;
+    crate::routes::auto_start_watch(&sel.root);
+    let facade = open_facade(&sel.root).map_err(|e| ServerFnError::new(e.to_string()))?;
     let facade = facade.lock().map_err(|e| ServerFnError::new(format!("facade lock: {e}")))?;
-    tree::build_search(&facade, &sel.space_root, &q)
+    tree::build_search(&facade, &sel.root, &q)
         .map_err(|e| ServerFnError::new(e.to_string()))
 }
 
@@ -403,26 +403,26 @@ pub async fn search_palette(
 // the moment they drop them in, even before the projection has
 // indexed them.
 #[server]
-pub async fn list_filesystem(space_root: String) -> Result<Vec<SourceFileRow>, ServerFnError> {
-    let sel = core_resolve_space(Path::new(&space_root))
+pub async fn list_filesystem(source_root: String) -> Result<Vec<SourceFileRow>, ServerFnError> {
+    let sel = core_resolve_space(Path::new(&source_root))
         .map_err(WebServerError::from)
         .map_err(|e| ServerFnError::new(e.to_string()))?;
-    Ok(tree::build_filesystem_listing(&sel.space_root))
+    Ok(tree::build_filesystem_listing(&sel.root))
 }
 // ---- _impl helpers (unit-testable) -----------------------------------------
 
-/// Open the projection store + facade for `space_root`, going through
+/// Open the projection store + facade for `source_root`, going through
 /// the `WebState` cache so repeat calls reuse the same SQLite handle.
-fn open_facade(space_root: &Path) -> Result<std::sync::Arc<std::sync::Mutex<ApplicationFacade<SqliteProjection>>>, String> {
+fn open_facade(source_root: &Path) -> Result<std::sync::Arc<std::sync::Mutex<ApplicationFacade<SqliteProjection>>>, String> {
     let state = crate::routes::state_snapshot();
-    state.facade_for(&space_root.to_path_buf()).map_err(|e| e.to_string())
+    state.facade_for(&source_root.to_path_buf()).map_err(|e| e.to_string())
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-pub async fn list_resources_impl(space_root: &Path) -> Result<Vec<ResourceRow>, String> {
-    let sel = core_resolve_space(space_root).map_err(|e| e.to_string())?;
-    crate::routes::auto_start_watch(&sel.space_root);
-    let db_path = sel.space_root.join(".notez/index.sqlite");
+pub async fn list_resources_impl(source_root: &Path) -> Result<Vec<ResourceRow>, String> {
+    let sel = core_resolve_space(source_root).map_err(|e| e.to_string())?;
+    crate::routes::auto_start_watch(&sel.root);
+    let db_path = sel.root.join(".notez/index.sqlite");
     let store = SqliteProjection::open(&db_path).map_err(|e| e.to_string())?;
     let facade = ApplicationFacade::new(store);
     let page = facade.query(&Selector::new()).map_err(|e| e.to_string())?;
@@ -436,19 +436,19 @@ pub async fn list_resources_impl(_space_root: &Path) -> Result<Vec<ResourceRow>,
 
 #[cfg(not(target_arch = "wasm32"))]
 pub async fn get_resource_impl(
-    space_root: &Path,
+    source_root: &Path,
     ref_str: &str,
 ) -> Result<Option<ResourceRow>, String> {
     let r_ref = ResourceRef::parse(ref_str)
         .map_err(|e| WebServerError::InvalidRef { raw: ref_str.to_string(), message: e.to_string() }.to_string())?;
-    let sel = core_resolve_space(space_root).map_err(|e| e.to_string())?;
-    let db_path = sel.space_root.join(".notez/index.sqlite");
+    let sel = core_resolve_space(source_root).map_err(|e| e.to_string())?;
+    let db_path = sel.root.join(".notez/index.sqlite");
     let store = SqliteProjection::open(&db_path).map_err(|e| e.to_string())?;
     let facade = ApplicationFacade::new(store);
     let res: Option<notez_core::domain::Resource> = facade.read(&r_ref).map_err(|e| e.to_string())?;
     Ok(res.map(|r| {
         let mut row = ResourceRow::from(r);
-        row.body_html = render_body(&row, &sel.space_root);
+        row.body_html = render_body(&row, &sel.root);
         row
     }))
 }
@@ -459,9 +459,9 @@ pub async fn get_resource_impl(_space_root: &Path, _ref_str: &str) -> Result<Opt
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-pub async fn list_graph_impl(space_root: &Path) -> Result<Graph, String> {
-    let sel = core_resolve_space(space_root).map_err(|e| e.to_string())?;
-    let db_path = sel.space_root.join(".notez/index.sqlite");
+pub async fn list_graph_impl(source_root: &Path) -> Result<Graph, String> {
+    let sel = core_resolve_space(source_root).map_err(|e| e.to_string())?;
+    let db_path = sel.root.join(".notez/index.sqlite");
     let store = SqliteProjection::open(&db_path).map_err(|e| e.to_string())?;
     let facade = ApplicationFacade::new(store);
     Graph::from_facade(&facade).map_err(|e| e.to_string())
@@ -473,9 +473,9 @@ pub async fn list_graph_impl(_space_root: &Path) -> Result<Graph, String> {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-pub async fn neighbor_graph_impl(space_root: &Path, focus_ref: &str) -> Result<Graph, String> {
-    let sel = core_resolve_space(space_root).map_err(|e| e.to_string())?;
-    let db_path = sel.space_root.join(".notez/index.sqlite");
+pub async fn neighbor_graph_impl(source_root: &Path, focus_ref: &str) -> Result<Graph, String> {
+    let sel = core_resolve_space(source_root).map_err(|e| e.to_string())?;
+    let db_path = sel.root.join(".notez/index.sqlite");
     let store = SqliteProjection::open(&db_path).map_err(|e| e.to_string())?;
     let facade = ApplicationFacade::new(store);
     Graph::neighborhood(&facade, focus_ref).map_err(|e| e.to_string())
@@ -499,7 +499,7 @@ mod tests {
         fs::write(
             root.join("notez.toml"),
             format!(
-                "version = 1\n\n[space]\nname = \"{}\"\ndatabase = \".notez/index.sqlite\"\n",
+                "version = 2\n\n[source]\nname = \"{}\"\ndatabase = \".notez/index.sqlite\"\n",
                 root.file_name().unwrap().to_string_lossy()
             ),
         )
@@ -513,7 +513,7 @@ mod tests {
             .await
             .expect_err("missing path must fail");
         assert!(
-            err.contains("does not exist") || err.contains("not a notez space"),
+            err.contains("does not exist") || err.contains("source not found"),
             "got: {err}"
         );
     }
@@ -524,7 +524,11 @@ mod tests {
         let plain = tmp.path().join("plain");
         fs::create_dir_all(&plain).unwrap();
         let err = list_resources_impl(&plain).await.expect_err("plain dir must fail");
-        assert!(err.contains("not a notez space"), "got: {err}");
+        assert!(
+            err.contains("not a notez source")
+                || err.contains("unable to open database"),
+            "got: {err}"
+        );
     }
 
     #[tokio::test]
@@ -551,13 +555,13 @@ mod tests {
     #[test]
     fn web_server_error_from_web_space_error_preserves_variants() {
         let path = "/nope".to_string();
-        let e: WebServerError = WebSpaceError::NotFound(path.clone()).into();
+        let e: WebServerError = WebSourceError::NotFound(path.clone()).into();
         assert!(matches!(e, WebServerError::NotFound { .. }));
 
-        let e: WebServerError = WebSpaceError::NotASpace(path.clone()).into();
+        let e: WebServerError = WebSourceError::NotASource(path.clone()).into();
         assert!(matches!(e, WebServerError::NotASpace { .. }));
 
-        let e: WebServerError = WebSpaceError::Other("oops".into()).into();
+        let e: WebServerError = WebSourceError::Source("oops".into()).into();
         assert!(matches!(e, WebServerError::Internal { .. }));
     }
 }

@@ -1,6 +1,6 @@
-use std::path::{Path, PathBuf};
 use serde_json::Value as JsonValue;
 use serde_json::json;
+use std::path::{Path, PathBuf};
 
 pub fn merge_link_overrides(base: &JsonValue, override_val: &JsonValue) -> JsonValue {
     if override_val.is_null() {
@@ -10,10 +10,7 @@ pub fn merge_link_overrides(base: &JsonValue, override_val: &JsonValue) -> JsonV
         (JsonValue::Object(map_base), JsonValue::Object(map_override)) => {
             let mut result = map_base.clone();
             for (k, v) in map_override {
-                let merged = merge_link_overrides(
-                    map_base.get(k).unwrap_or(&JsonValue::Null),
-                    v,
-                );
+                let merged = merge_link_overrides(map_base.get(k).unwrap_or(&JsonValue::Null), v);
                 result.insert(k.clone(), merged);
             }
             JsonValue::Object(result)

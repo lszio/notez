@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Manifest {
-    pub space_id: String,
+    pub source_id: String,
     pub actor_id: String,
     pub parent_snapshots: Vec<String>,
     pub logical_path: String,

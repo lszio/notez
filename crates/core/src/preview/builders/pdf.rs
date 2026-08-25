@@ -1,4 +1,6 @@
-use crate::preview::{PdfPage, PreviewContext, PreviewError, PreviewModel, Previewer, PreviewerCatalog};
+use crate::preview::{
+    PdfPage, PreviewContext, PreviewError, PreviewModel, Previewer, PreviewerCatalog,
+};
 use bytes::Bytes;
 use lopdf::Document;
 
@@ -48,6 +50,9 @@ impl Previewer for PdfPreviewer {
             .map(|p| p.text.as_str())
             .collect::<Vec<_>>()
             .join("\n");
-        Ok(PreviewModel::Pdf { pages, text: full_text })
+        Ok(PreviewModel::Pdf {
+            pages,
+            text: full_text,
+        })
     }
 }

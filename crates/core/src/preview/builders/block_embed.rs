@@ -1,5 +1,5 @@
-use crate::preview::{PreviewContext, PreviewError, PreviewModel, Previewer};
 use crate::domain::{ResourceKind, ResourceRef};
+use crate::preview::{PreviewContext, PreviewError, PreviewModel, Previewer};
 use std::hash::{DefaultHasher, Hash, Hasher};
 
 /// Previewer for `[[block:<ref-id>]]` embed references within a document body.
@@ -65,9 +65,6 @@ impl Previewer for BlockEmbedPreviewer {
             )
         });
 
-        Ok(PreviewModel::BlockEmbed {
-            source,
-            html: body,
-        })
+        Ok(PreviewModel::BlockEmbed { source, html: body })
     }
 }

@@ -1,7 +1,7 @@
 use crate::preview::{PreviewContext, PreviewError, PreviewModel, Previewer, Slide};
 use bytes::Bytes;
-use quick_xml::events::Event;
 use quick_xml::Reader;
+use quick_xml::events::Event;
 use std::io::{Cursor, Read};
 use zip::ZipArchive;
 
@@ -23,9 +23,8 @@ impl Previewer for PptxPreviewer {
 
     fn matches(&self, ctx: &PreviewContext) -> bool {
         ctx.locator.to_string_lossy().ends_with(".pptx")
-            || ctx.mime.as_deref() == Some(
-                "application/vnd.openxmlformats-officedocument.presentationml.presentation",
-            )
+            || ctx.mime.as_deref()
+                == Some("application/vnd.openxmlformats-officedocument.presentationml.presentation")
     }
 
     fn render(&self, ctx: &PreviewContext) -> Result<PreviewModel, PreviewError> {
@@ -45,9 +44,7 @@ impl Previewer for PptxPreviewer {
                 break;
             };
             let mut xml = String::new();
-            entry
-                .read_to_string(&mut xml)
-                .map_err(PreviewError::Io)?;
+            entry.read_to_string(&mut xml).map_err(PreviewError::Io)?;
             let body = extract_text_runs(&xml)?;
             let title = body.first().cloned();
             slides.push(Slide {

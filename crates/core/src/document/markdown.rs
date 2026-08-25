@@ -102,8 +102,8 @@ impl MarkdownScanner {
             }
         }
 
-        let doc_ref =
-            doc_id_opt.unwrap_or_else(|| derived_id(ResourceKind::Document, source_id, &path_str, ""));
+        let doc_ref = doc_id_opt
+            .unwrap_or_else(|| derived_id(ResourceKind::Document, source_id, &path_str, ""));
 
         // Document content_hash covers the full file body (truncated to
         // 64 KiB + size mix by content_hash_of_bytes — see spec §3.1).
@@ -122,6 +122,7 @@ impl MarkdownScanner {
             locator: path_str.clone(),
             properties: doc_properties,
             object_id: doc_object_id,
+            primary_source_id: String::new(),
         };
 
         let mut resources = vec![doc_resource];
@@ -189,6 +190,7 @@ impl MarkdownScanner {
                             &path_str,
                             &format!("h:{heading_count}"),
                         ),
+                        primary_source_id: String::new(),
                     });
                 }
             }
@@ -222,6 +224,7 @@ impl MarkdownScanner {
                                 &path_str,
                                 &format!("b:{}", b_ref.id()),
                             ),
+                            primary_source_id: String::new(),
                         });
                         current_source_ref = b_ref;
                     }
@@ -448,7 +451,10 @@ fn parse_markdown_link_target(target: &str) -> LinkTarget {
         LinkTarget::url(trimmed)
     } else if let Some((scheme, value)) = trimmed.split_once(':') {
         // Check if it's a known scheme
-        if scheme.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-') && !scheme.is_empty()
+        if scheme
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+            && !scheme.is_empty()
         {
             LinkTarget::custom(scheme, value, None)
         } else {
@@ -473,9 +479,12 @@ fn parse_inline_link_target(url: &str) -> LinkTarget {
     } else if trimmed.starts_with("mailto:") {
         LinkTarget::url(trimmed)
     } else if let Some((scheme, value)) = trimmed.split_once(':') {
-        if scheme.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+        if scheme
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
             && !scheme.is_empty()
-            && scheme != "C"  // Avoid matching Windows paths like C:\...
+            && scheme != "C"
+        // Avoid matching Windows paths like C:\...
         {
             LinkTarget::custom(scheme, value, None)
         } else {
@@ -536,8 +545,7 @@ mod tests {
     #[test]
     fn extract_mixed_links() {
         let ref_id = ResourceRef::parse("document:01J00000000000000000000001").unwrap();
-        let line =
-            "See [[Obsidian Vault]] and [docs](https://example.com) and [[id:01J00000000000000000000002][target]].";
+        let line = "See [[Obsidian Vault]] and [docs](https://example.com) and [[id:01J00000000000000000000002][target]].";
         let occs = extract_markdown_links(line, 1, ref_id);
         assert_eq!(occs.len(), 3);
         assert!(matches!(occs[0].target, LinkTarget::Title { .. }));

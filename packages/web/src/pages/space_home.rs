@@ -1,15 +1,15 @@
-//! `SpaceHome` — the per-space welcome at `/space/:encoded`.
+//! `SpaceHome` — the per-space welcome at `/source/:encoded`.
 //!
 //! The page is a single round-trip dashboard:
 //!
-//! - **`load_index_document(space_root)`** returns both the index
+//! - **`load_index_document(source_root)`** returns both the index
 //!   entry (`index.org` / `index.md` / `README.*`) and the rendered
 //!   document body in one server call. Earlier code fired two
 //!   independent `use_server_future`s, and the document future ran
 //!   before the entry future had resolved — so the body never
 //!   appeared when an index existed. The single-call API eliminates
 //!   that race.
-//! - **`list_filesystem(space_root)`** returns the loose-files
+//! - **`list_filesystem(source_root)`** returns the loose-files
 //!   listing for the dashboard "recently modified" section.
 //!
 //! Both round trips suspend on SSR; the page renders only after both
@@ -66,7 +66,7 @@ pub fn SpaceHome(encoded: String) -> Element {
     let files = files_resource.cloned().and_then(|r| r.ok()).unwrap_or_default();
 
     let space_snapshot = space().clone();
-    let space_name = match &space_snapshot {
+    let source_name = match &space_snapshot {
         Some(SpaceState { status: SpaceStatus::Ready(s), .. }) => s.name.clone(),
         _ => "space".to_string(),
     };
@@ -115,7 +115,7 @@ pub fn SpaceHome(encoded: String) -> Element {
         )
     } else if let Some(entry) = index_entry.as_ref() {
         (
-            format!("space · {space_name}"),
+            format!("space · {source_name}"),
             entry.title.clone(),
             format!(
                 "{count} file{s} on disk · rendered from {loc}.",
@@ -126,7 +126,7 @@ pub fn SpaceHome(encoded: String) -> Element {
         )
     } else {
         (
-            format!("space · {space_name}"),
+            format!("space · {source_name}"),
             "No index document".to_string(),
             format!(
                 "{count} file{s} on disk · create `index.org` or `README.md` to set a landing page.",
@@ -154,15 +154,15 @@ pub fn SpaceHome(encoded: String) -> Element {
                     form {
                         class: "dashboard-form",
                         method: "post",
-                        action: "/api/spaces/scan",
-                        input { type: "hidden", name: "space_root", value: "{active_path_for_scan}" }
+                        action: "/api/sources/scan",
+                        input { type: "hidden", name: "source_root", value: "{active_path_for_scan}" }
                         button { class: "spine-action", r#type: "submit", "force rescan" }
                     }
                     form {
                         class: "dashboard-form",
                         method: "post",
-                        action: "/api/spaces/watch/start",
-                        input { type: "hidden", name: "space_root", value: "{active_path_for_watch}" }
+                        action: "/api/sources/watch/start",
+                        input { type: "hidden", name: "source_root", value: "{active_path_for_watch}" }
                         button { class: "spine-action", r#type: "submit", "watch this space" }
                     }
                 }

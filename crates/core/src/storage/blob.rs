@@ -15,9 +15,9 @@ pub struct BlobStore {
 }
 
 impl BlobStore {
-    pub fn new(space_root: &Path) -> Self {
+    pub fn new(source_root: &Path) -> Self {
         Self {
-            root: space_root.join(".notez/blobs"),
+            root: source_root.join(".notez/blobs"),
         }
     }
 

@@ -24,7 +24,11 @@ pub fn render_org_html(src: &str) -> (String, Vec<Heading>) {
                     continue;
                 }
                 let anchor = slugify(&title);
-                outline.push(Heading { level, title: title.clone(), anchor: anchor.clone() });
+                outline.push(Heading {
+                    level,
+                    title: title.clone(),
+                    anchor: anchor.clone(),
+                });
                 out.push_str(&format!(
                     "<h{level} id=\"{anchor}\">{title}</h{level}>",
                     level = level,
@@ -86,7 +90,10 @@ mod tests {
     fn heading_anchor_is_slugified() {
         let (html, outline) = render_org_html("#+TITLE: X\n\n* Hello World\n");
         assert!(html.contains("<h1"), "expected <h1 in html: {html}");
-        assert!(html.contains("id=\"hello-world\""), "expected slugified id in html: {html}");
+        assert!(
+            html.contains("id=\"hello-world\""),
+            "expected slugified id in html: {html}"
+        );
         assert_eq!(outline.len(), 1);
         assert_eq!(outline[0].title, "Hello World");
         assert_eq!(outline[0].anchor, "hello-world");

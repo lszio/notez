@@ -41,7 +41,9 @@ impl RecipeEvaluator {
         let content = match recipe.kind {
             RecipeKind::Summary => crate::artifact::generators::generate_summary(resources),
             RecipeKind::LlmsTxt => crate::artifact::generators::generate_llms_txt(resources),
-            RecipeKind::ContextPack => crate::artifact::generators::generate_context_pack(resources),
+            RecipeKind::ContextPack => {
+                crate::artifact::generators::generate_context_pack(resources)
+            }
             RecipeKind::SkillIr => crate::artifact::generators::generate_skill_ir_json(resources),
         };
 

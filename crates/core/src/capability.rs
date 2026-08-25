@@ -36,12 +36,12 @@ pub struct CapabilityDescriptor {
 }
 
 impl CapabilityDescriptor {
-    pub fn new(
-        id: &'static str,
-        description: &'static str,
-        mutability: Mutability,
-    ) -> Self {
-        Self { id, description, mutability }
+    pub fn new(id: &'static str, description: &'static str, mutability: Mutability) -> Self {
+        Self {
+            id,
+            description,
+            mutability,
+        }
     }
 }
 
@@ -72,12 +72,14 @@ impl Default for CapabilityCatalog {
 impl CapabilityCatalog {
     /// Construct an empty catalog.
     pub fn new() -> Self {
-        Self { descriptors: HashMap::new() }
+        Self {
+            descriptors: HashMap::new(),
+        }
     }
 
     /// Construct a catalog pre-populated with the nine built-in
     /// capabilities. This is the default state used by
-/// `ApplicationFacade::new` and `ApplicationFacade::with_space`.
+    /// `ApplicationFacade::new` and `ApplicationFacade::with_source`.
     pub fn with_builtins() -> Self {
         let mut c = Self::new();
         c.register(CapabilityDescriptor::new(

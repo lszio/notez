@@ -1,8 +1,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
-use crate::source::{SourceConfig, SourceKind};
 use std::collections::BTreeMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use thiserror::Error;
 
 #[derive(Error, Debug)]
@@ -11,7 +10,7 @@ pub enum ConfigError {
     Toml(toml::de::Error),
     #[error("TOML parse error: {message}")]
     TomlField { message: String },
-    #[error("Unsupported configuration version: {0}; this build understands version 1")]
+    #[error("Unsupported configuration version: {0}; this build understands version 2")]
     UnsupportedVersion(u32),
     #[error("Configuration required field `{0}` is missing")]
     MissingField(&'static str),
@@ -21,24 +20,27 @@ pub enum ConfigError {
 
 impl From<toml::de::Error> for ConfigError {
     fn from(err: toml::de::Error) -> Self {
-        // `toml::de::Error::span` is empty for "unknown field" errors. Fall
-        // back to the full Display string so callers see a useful field path.
-        ConfigError::TomlField { message: err.message().to_string() }
+        ConfigError::TomlField {
+            message: err.message().to_string(),
+        }
     }
-
 }
 
-const SUPPORTED_VERSION: u32 = 1;
+/// Supported on-disk schema version. v1 was the `Space`/`[space]` schema;
+/// v2 collapses every `Source` (a named, persisted configuration) into one
+/// concept. See `migrate.rs` for the v1 → v2 upgrade path.
+pub const CURRENT_VERSION: u32 = 2;
 
-/// Top-level XDG-global configuration: $XDG_CONFIG_HOME/notez/config.toml
+/// Top-level XDG-global configuration: `$XDG_CONFIG_HOME/notez/config.toml`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct GlobalConfig {
     pub version: u32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub default_space: Option<String>,
+    pub default_source: Option<String>,
+    /// Named sources registered globally (cross-machine aliases).
     #[serde(default)]
-    pub spaces: BTreeMap<String, SpaceRegistration>,
+    pub sources: BTreeMap<String, SourceRegistration>,
     #[serde(default)]
     pub preferences: Preferences,
 }
@@ -46,16 +48,20 @@ pub struct GlobalConfig {
 impl GlobalConfig {
     pub fn parse(text: &str) -> Result<Self, ConfigError> {
         let cfg: GlobalConfig = toml::from_str(text)?;
-        if cfg.version != SUPPORTED_VERSION {
+        if cfg.version != CURRENT_VERSION {
             return Err(ConfigError::UnsupportedVersion(cfg.version));
         }
         Ok(cfg)
     }
 }
 
+/// A named entry in the global registry. A `Source` is anything you can
+/// open: a local folder of Org/Markdown files, a remote Notion workspace,
+/// a Jira project. The `path` points at a local notez.toml root; remote
+/// endpoints will be added once the URL/credential model lands.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct SpaceRegistration {
+pub struct SourceRegistration {
     pub path: PathBuf,
     #[serde(default)]
     pub config: Option<PathBuf>,
@@ -77,18 +83,39 @@ fn default_log_level() -> String {
     "warn".to_string()
 }
 
-/// Per-space configuration: <space>/notez.toml
+/// On-disk per-source configuration: `<source>/notez.toml`.
+///
+/// `SourceConfig` is the **only** structural concept: a named source
+/// owns a root directory, an optional endpoint binding, a set of
+/// capabilities, and an overlay (tags/views/PARA/communities). No
+/// separate `Space` type exists. See docs/architecture.org §3.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct SpaceConfig {
+pub struct SourceConfig {
     pub version: u32,
-    pub space: SpaceIdentity,
+    pub source: SourceIdentity,
     #[serde(default)]
     pub workflow: WorkflowConfig,
+    /// Sub-sources this `Source` aggregates (e.g. local `docs/` plus a
+    /// remote Notion workspace). An empty list is allowed: the Source
+    /// itself acts as a single "root" source.
     #[serde(default)]
-    pub sources: Vec<SpaceSourceConfig>,
-    #[serde(default, skip_serializing_if = "serde_json::Value::is_null")]
+    pub sources: Vec<SourceInstanceConfig>,
+    #[serde(default, skip_serializing_if = "JsonValue::is_null")]
     pub link_overrides: JsonValue,
+}
+
+impl SourceConfig {
+    pub fn parse(text: &str) -> Result<Self, ConfigError> {
+        let cfg: SourceConfig = toml::from_str(text)?;
+        if cfg.version != CURRENT_VERSION {
+            return Err(ConfigError::UnsupportedVersion(cfg.version));
+        }
+        if cfg.source.name.is_empty() {
+            return Err(ConfigError::MissingField("source.name"));
+        }
+        Ok(cfg)
+    }
 }
 
 pub fn default_database() -> PathBuf {
@@ -102,18 +129,6 @@ pub fn default_todo() -> Vec<String> {
 pub fn default_done() -> Vec<String> {
     vec!["DONE".into(), "QUIT".into()]
 }
-impl SpaceConfig {
-    pub fn parse(text: &str) -> Result<Self, ConfigError> {
-        let cfg: SpaceConfig = toml::from_str(text)?;
-        if cfg.version != SUPPORTED_VERSION {
-            return Err(ConfigError::UnsupportedVersion(cfg.version));
-        }
-        if cfg.space.name.is_empty() {
-            return Err(ConfigError::MissingField("space.name"));
-        }
-        Ok(cfg)
-    }
-}
 
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -126,21 +141,21 @@ pub struct WorkflowConfig {
 
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct SpaceIdentity {
+pub struct SourceIdentity {
     #[serde(default)]
     pub name: String,
     #[serde(default = "default_database")]
     pub database: PathBuf,
 }
 
-/// Source entry inside `[[sources]]`. Mirrors [`crate::source::SourceConfig`] but
-/// keeps an `id` separate from the on-disk name so future migration can
-/// re-key without breaking the project identity.
+/// Sub-source instance declared inside a `SourceConfig`. Mirrors the
+/// adapter-side `crate::source::SourceConfig` (kept distinct to allow the
+/// on-disk schema to evolve without entangling the adapter type).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct SpaceSourceConfig {
+pub struct SourceInstanceConfig {
     pub id: String,
-    pub kind: SourceKind,
+    pub kind: crate::source::SourceKind,
     pub path: PathBuf,
     #[serde(default)]
     pub read_only: bool,
@@ -150,9 +165,22 @@ pub struct SpaceSourceConfig {
     pub exclude_paths: Vec<PathBuf>,
 }
 
-impl SpaceSourceConfig {
-    pub fn into_source_config(self) -> SourceConfig {
-        SourceConfig {
+impl From<crate::source::SourceConfig> for SourceInstanceConfig {
+    fn from(s: crate::source::SourceConfig) -> Self {
+        Self {
+            id: s.id,
+            kind: s.kind,
+            path: s.path,
+            read_only: s.read_only,
+            include_paths: s.include_paths,
+            exclude_paths: s.exclude_paths,
+        }
+    }
+}
+
+impl SourceInstanceConfig {
+    pub fn into_source_config(self) -> crate::source::SourceConfig {
+        crate::source::SourceConfig {
             id: self.id,
             kind: self.kind,
             path: self.path,
@@ -161,17 +189,4 @@ impl SpaceSourceConfig {
             exclude_paths: self.exclude_paths,
         }
     }
-}
-
-/// Resolved runtime configuration assembled from global + space + CLI.
-/// Lives in `config` so CLI can compute it without taking a dependency on
-/// `application`.
-#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
-pub struct RuntimeConfig {
-    pub space_root: PathBuf,
-    pub space_name: String,
-    pub database: PathBuf,
-    pub workflow: WorkflowConfig,
-    pub sources: Vec<SourceConfig>,
-    pub preferences: Preferences,
 }

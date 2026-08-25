@@ -1,15 +1,23 @@
-use crate::config::discovery::{ConfigPaths, SelectedSpace};
 use crate::config::defaults::resolve_path;
-use crate::config::model::{ConfigError, RuntimeConfig};
+use crate::config::discovery::{ConfigPaths, SelectedSource};
+use crate::config::model::{ConfigError, Preferences, SourceConfig};
 use std::collections::BTreeMap;
 use std::ffi::OsString;
 
-pub fn load_runtime_config(
+/// Resolved runtime binding for a source: the on-disk `SourceConfig` plus
+/// the merged `Preferences` (global + env + CLI). Lives here so the CLI can
+/// compute it without depending on `application`.
+pub struct ResolvedSourceRuntime {
+    pub config: SourceConfig,
+    pub preferences: Preferences,
+}
+
+pub fn resolve_source_runtime(
     paths: &ConfigPaths,
-    sel: &SelectedSpace,
+    sel: &SelectedSource,
     env: &BTreeMap<String, OsString>,
     cli_output: Option<String>,
-) -> Result<RuntimeConfig, ConfigError> {
+) -> Result<ResolvedSourceRuntime, ConfigError> {
     let mut prefs = paths
         .global_config
         .as_ref()
@@ -25,26 +33,28 @@ pub fn load_runtime_config(
         prefs.output = out;
     }
 
-    let space_config = sel.space_config.clone();
+    let mut source_config = sel.source_config.clone();
 
-    let database = resolve_path(&sel.space_root, &space_config.space.database);
-
-    let mut sources = Vec::new();
-    for s in space_config.sources {
-        let mut source_config = s.into_source_config();
-        source_config.path = resolve_path(&sel.space_root, &source_config.path);
-        // Include/exclude paths are also resolved relative to space root.
-        source_config.include_paths = source_config.include_paths.into_iter().map(|p| resolve_path(&sel.space_root, &p)).collect();
-        source_config.exclude_paths = source_config.exclude_paths.into_iter().map(|p| resolve_path(&sel.space_root, &p)).collect();
-        sources.push(source_config);
+    if source_config.source.database.is_relative() {
+        source_config.source.database = resolve_path(&sel.root, &source_config.source.database);
     }
 
-    Ok(RuntimeConfig {
-        space_root: sel.space_root.clone(),
-        space_name: sel.space_name.clone(),
-        database,
-        workflow: space_config.workflow,
-        sources,
+    for s in source_config.sources.iter_mut() {
+        if s.path.is_relative() {
+            s.path = resolve_path(&sel.root, &s.path);
+        }
+        s.include_paths = std::mem::take(&mut s.include_paths)
+            .into_iter()
+            .map(|p| resolve_path(&sel.root, &p))
+            .collect();
+        s.exclude_paths = std::mem::take(&mut s.exclude_paths)
+            .into_iter()
+            .map(|p| resolve_path(&sel.root, &p))
+            .collect();
+    }
+
+    Ok(ResolvedSourceRuntime {
+        config: source_config,
         preferences: prefs,
     })
 }

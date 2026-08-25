@@ -2,8 +2,8 @@ pub mod context;
 pub mod link_resolution;
 
 pub mod attachment;
-pub mod writeback;
 pub mod write_check;
+pub mod writeback;
 pub use write_check::{check_address_uniqueness, check_capability, check_revision};
 pub use writeback::{RelaySyncReport, WritebackReport};
 pub mod job_manager;
@@ -27,7 +27,7 @@ pub use watch::{WatchError, WatchEvent, WatchKind, WatchService, WatchStatus};
 #[cfg(target_arch = "wasm32")]
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct WatchStatus {
-    pub space_root: std::path::PathBuf,
+    pub root: std::path::PathBuf,
     pub started_at: std::time::SystemTime,
     pub event_count: usize,
 }
@@ -42,17 +42,27 @@ pub enum WatchError {
 pub struct WatchService;
 #[cfg(target_arch = "wasm32")]
 impl WatchService {
-    pub fn new() -> std::sync::Arc<Self> { std::sync::Arc::new(Self) }
-    pub fn start(&self, _path: &std::path::Path) -> Result<std::time::SystemTime, WatchError> { Err(WatchError::WasmUnavailable) }
-    pub fn stop(&self, _path: &std::path::Path) -> bool { false }
-    pub fn status(&self, _path: &std::path::Path) -> Option<WatchStatus> { None }
-    pub fn events(&self, _path: &std::path::Path, _limit: usize) -> Vec<()> { vec![] }
+    pub fn new() -> std::sync::Arc<Self> {
+        std::sync::Arc::new(Self)
+    }
+    pub fn start(&self, _path: &std::path::Path) -> Result<std::time::SystemTime, WatchError> {
+        Err(WatchError::WasmUnavailable)
+    }
+    pub fn stop(&self, _path: &std::path::Path) -> bool {
+        false
+    }
+    pub fn status(&self, _path: &std::path::Path) -> Option<WatchStatus> {
+        None
+    }
+    pub fn events(&self, _path: &std::path::Path, _limit: usize) -> Vec<()> {
+        vec![]
+    }
 }
 pub mod graph;
-pub use graph::{layout_force, Graph, GraphEdge, GraphNode, MAX_NODES};
- pub mod task_para;
+pub use graph::{Graph, GraphEdge, GraphNode, MAX_NODES, layout_force};
+pub mod task_para;
+pub use context::SourceContext;
 pub use link_resolution::{LinkReindexReport, LinkResolver};
-pub use context::SpaceContext;
 pub use service::{
     ApplicationError, ApplicationFacade, ApplicationService, DocumentErrorKind, ResolveResult,
     ScanReport, StorageErrorKind,

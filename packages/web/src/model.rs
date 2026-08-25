@@ -67,11 +67,14 @@ impl ResourceRow {
             source_id: self.source_id.clone(),
             locator: self.locator.clone(),
             properties: self.properties.clone(),
-            object_id: notez_core::domain::ObjectId::new(ulid::Ulid::new()),
+            object_id: notez_core::domain::ObjectIdentity::new(
+                "local",
+                ulid::Ulid::new().to_string(),
+            ),
+            primary_source_id: String::new(),
         }
     }
 }
-
 impl From<Resource> for ResourceRow {
     fn from(r: Resource) -> Self {
         Self::new(
@@ -105,7 +108,8 @@ mod tests {
             source_id: "src".to_string(),
             locator: "loc".to_string(),
             properties: BTreeMap::from([("k".to_string(), "v".to_string())]),
-            object_id,
+            object_id: object_id.clone(),
+            primary_source_id: String::new(),
         };
         let row = ResourceRow::from(res);
         assert_eq!(row.ref_str, "heading:01ARZ3NDEKTSV4RRFFQ69G5FAV");

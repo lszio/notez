@@ -22,7 +22,8 @@ fn test_attachment_resource_and_segments_schema() {
         source_id: "native".to_string(),
         locator: "/space/document.pdf".to_string(),
         properties: props,
-        object_id: notez_core::domain::ObjectId::default(),
+        object_id: notez_core::domain::ObjectIdentity::default(),
+        primary_source_id: String::new(),
     };
 
     store

@@ -1,6 +1,6 @@
 use notez_core::domain::{
-    derived_object_id, LinkTarget, ProjectionStore, RelationDirection, RelationType,
-    ResolutionStatus, ResolvedRelation, Resource, ResourceKind, ResourceRef, ResourceRelation,
+    LinkTarget, ProjectionStore, RelationDirection, RelationType, ResolutionStatus,
+    ResolvedRelation, Resource, ResourceKind, ResourceRef, ResourceRelation, derived_object_id,
 };
 use notez_core::storage::SqliteProjection;
 use rusqlite::Connection;
@@ -22,11 +22,12 @@ fn find_by_object_returns_matching_resources() {
         source_id: "src_a".to_string(),
         locator: "notes/x.md".to_string(),
         properties: Default::default(),
-        object_id,
+        object_id: object_id.clone(),
+        primary_source_id: String::new(),
     };
     store.upsert_resource(&res_a).unwrap();
 
-    let found = store.find_by_object(object_id).unwrap();
+    let found = store.find_by_object(&object_id).unwrap();
     assert_eq!(found.len(), 1);
     assert_eq!(found[0].r#ref, ref_a);
     assert_eq!(found[0].object_id, object_id);
@@ -85,7 +86,13 @@ fn schema_v1_to_v2_migration_backfills_object_id_and_relation_fields() {
     let user_version: i64 = conn
         .query_row("PRAGMA user_version", [], |r| r.get(0))
         .unwrap();
-    assert_eq!(user_version, 2, "user_version should be 2 after migration");
+    // Migrations advance to v3 (added primary_source_id) and onwards, so the
+    // user_version after open reflects the latest applied migration rather
+    // than the v1→v2 milestone this test was originally written for.
+    assert!(
+        user_version >= 3,
+        "user_version should be at least 3 (>=v3 with primary_source_id), got {user_version}",
+    );
 
     let col_present: i64 = conn
         .query_row(
@@ -94,9 +101,30 @@ fn schema_v1_to_v2_migration_backfills_object_id_and_relation_fields() {
             |r| r.get(0),
         )
         .unwrap();
-    assert_eq!(col_present, 1, "object_id column should be added by migration");
+    assert_eq!(
+        col_present, 1,
+        "object_id column should be added by migration"
+    );
+    // The v3 migration also adds the `primary_source_id` column on resources.
+    let primary_col: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('resources') WHERE name = 'primary_source_id'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        primary_col, 1,
+        "primary_source_id column should be added by v3 migration"
+    );
 
-    for col in ["direction", "creator", "created_at", "evidence_json", "relation_type"] {
+    for col in [
+        "direction",
+        "creator",
+        "created_at",
+        "evidence_json",
+        "relation_type",
+    ] {
         let n: i64 = conn
             .query_row(
                 &format!(

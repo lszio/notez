@@ -6,8 +6,8 @@ use crate::storage::SqliteProjection;
 #[test]
 fn agenda_views_task_transitions_and_para_overview() {
     let temp_dir = tempfile::tempdir().unwrap();
-    let space_root = temp_dir.path();
-    let file = space_root.join("tasks.org");
+    let source_root = temp_dir.path();
+    let file = source_root.join("tasks.org");
     let content = r#"#+title: Tasks Space
 #+ID: 01J00000000000000000000600
 
@@ -28,7 +28,7 @@ fn agenda_views_task_transitions_and_para_overview() {
 
     let store = SqliteProjection::in_memory().unwrap();
     let mut service = ApplicationService::new(store);
-    service.scan_native(space_root).unwrap();
+    service.scan_native(source_root).unwrap();
 
     let agenda = service.agenda().unwrap();
     assert_eq!(agenda.items.len(), 2);

@@ -30,7 +30,7 @@ pub fn DetailPage(encoded: String, encoded_ref: String) -> Element {
         .as_ref()
         .map(|s| s.encoded.clone())
         .unwrap_or_default();
-    let space_name = match space_snapshot.as_ref() {
+    let source_name = match space_snapshot.as_ref() {
         Some(SpaceState { status: SpaceStatus::Ready(s), .. }) => s.name.clone(),
         _ => "?".to_string(),
     };
@@ -72,7 +72,7 @@ pub fn DetailPage(encoded: String, encoded_ref: String) -> Element {
                 segments: vec![
                     BreadcrumbSegment::link("notez", "/"),
                     BreadcrumbSegment::link(home_href.clone(), home_href.clone()),
-                    BreadcrumbSegment::link(space_name.clone(), list_href.clone()),
+                    BreadcrumbSegment::link(source_name.clone(), list_href.clone()),
                     BreadcrumbSegment::link(crumb_kind.clone(), list_href.clone()),
                     BreadcrumbSegment::here(ref_tail_short.clone()),
                 ],
@@ -84,7 +84,7 @@ pub fn DetailPage(encoded: String, encoded_ref: String) -> Element {
                         p { class: "eyebrow", "space" }
                         h1 { "{decoded_ref}" }
                         p { class: "lede",
-                            "Space status: "
+                            "Source status: "
                             {match &s.status {
                                 SpaceStatus::Resolving => "resolving…".to_string(),
                                 SpaceStatus::Ready(_) => "ready".to_string(),

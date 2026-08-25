@@ -112,7 +112,7 @@ pub fn Layout(children: Element) -> Element {
                         active_encoded: active_encoded.clone(),
                     }
                     SearchTrigger {}
-                    div { class: "topnav-spacer" }
+                    div { class: "topnav-sourcer" }
                     TopNavActions {
                         active_path: active_path_for_side.clone(),
                         active_encoded: active_encoded.clone(),
@@ -175,11 +175,11 @@ fn TopNavActions(active_path: Option<String>, active_encoded: Option<String>) ->
             if let (Some(p), Some(enc)) = (active_path.clone(), active_encoded.clone()) {
                 form {
                     class: "topnav-form",
-                    action: "/api/spaces/scan",
+                    action: "/api/sources/scan",
                     method: "post",
                     input {
                         r#type: "hidden",
-                        name: "space_root",
+                        name: "source_root",
                         value: "{p}",
                     }
                     button {

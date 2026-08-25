@@ -2,7 +2,7 @@
 //!
 //! On a detail page it renders the 1-hop neighborhood graph of the
 //! active resource. On every other page it renders nothing — the
-//! full-space graph has its own `/space/:encoded/graph` route.
+//! full-space graph has its own `/source/:encoded/graph` route.
 
 use dioxus::prelude::*;
 use notez_core::application::{layout_force, Graph};

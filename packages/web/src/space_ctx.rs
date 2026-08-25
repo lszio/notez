@@ -3,7 +3,7 @@
 //! The web reader is a single-page reader: the active space travels in
 //! the URL path (`/space/<encoded>/...`) but every page in the app
 //! needs to know which space is active to:
-//! 1. Pass it back to server functions (`list_resources(space_root)`).
+//! 1. Pass it back to server functions (`list_resources(source_root)`).
 //! 2. Render the friendly space name in the header.
 //! 3. Build "back to list" / "switch space" links.
 //!

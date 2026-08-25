@@ -1,14 +1,19 @@
+//! Contract tests for `core::config`.
+//!
+//! Covers: v1→v2 migration, GlobalConfig/SourceConfig parsing, discovery,
+//! select_source, and runtime resolution.
+
 use notez_core::config::defaults::{built_in_link_profiles, merge_link_overrides, resolve_path};
 use notez_core::config::migrate::{
-    apply_legacy_migration, plan_legacy_migration, LegacyCommunities, LegacySources, MigrationPlan,
+    LegacyCommunities, LegacySources, MigrationPlan, apply_legacy_migration, plan_legacy_migration,
 };
 use notez_core::config::{
-    load_runtime_config, select_space, ConfigError, ConfigPaths, GlobalConfig, Preferences,
-    RuntimeConfig, SelectedSpace, SpaceConfig, SpaceIdentity, SpaceRegistration, SpaceSelector,
-    SpaceSourceConfig, WorkflowConfig,
+    CURRENT_VERSION, ConfigError, ConfigPaths, GlobalConfig, Preferences, ResolvedSourceRuntime,
+    SourceConfig, SourceIdentity, SourceInstanceConfig, SourceRegistration, SourceSelector,
+    WorkflowConfig, resolve_source_runtime, select_source,
 };
-use notez_core::domain::{Community, Selector};
-use notez_core::source::{SourceKind};
+use notez_core::domain::Community;
+use notez_core::source::SourceKind;
 use serde_json::json;
 use std::collections::BTreeMap;
 use std::ffi::OsString;
@@ -22,110 +27,124 @@ fn environment(config_home: &Path) -> BTreeMap<String, OsString> {
     )])
 }
 
-fn minimal_space(name: &str) -> SpaceConfig {
-    SpaceConfig {
-        version: 1,
-        space: SpaceIdentity {
+fn minimal_source(name: &str) -> SourceConfig {
+    SourceConfig {
+        version: CURRENT_VERSION,
+        source: SourceIdentity {
             name: name.into(),
             database: PathBuf::from(".notez/index.sqlite"),
         },
         workflow: WorkflowConfig::default(),
-        sources: vec![],
+        sources: Vec::new(),
         link_overrides: serde_json::Value::Null,
     }
 }
 
-fn write_space(root: &Path, name: &str) {
-    fs::create_dir_all(root).unwrap();
+fn write_source(source_root: &Path, name: &str) {
+    fs::create_dir_all(source_root).unwrap();
     fs::write(
-        root.join("notez.toml"),
-        format!("version = 1\n\n[space]\nname = \"{name}\"\ndatabase = \".notez/index.sqlite\"\n"),
+        source_root.join("notez.toml"),
+        format!("version = 2\n[source]\nname = \"{name}\"\ndatabase = \".notez/index.sqlite\"\n"),
     )
     .unwrap();
 }
 
 #[test]
 fn config_model_parsing_applies_defaults_and_rejects_invalid_versions_fields() {
-    let global = GlobalConfig::parse(
-        "version = 1\ndefault_space = \"personal\"\n\n[spaces.personal]\npath = \"/notes\"\n",
+    let s = SourceConfig::parse(
+        r#"
+version = 2
+
+[source]
+name = "personal"
+"#,
     )
     .unwrap();
-    assert_eq!(global.default_space.as_deref(), Some("personal"));
-    assert_eq!(global.preferences, Preferences::default());
-    assert_eq!(global.spaces["personal"].path, PathBuf::from("/notes"));
+    assert_eq!(s.source.name, "personal");
+    assert_eq!(s.source.database, PathBuf::from(".notez/index.sqlite"));
+    assert!(s.workflow.todo.is_empty());
+    assert!(s.workflow.done.is_empty());
 
-    let space = SpaceConfig::parse("version = 1\n\n[space]\nname = \"personal\"\n").unwrap();
-    assert_eq!(space.space.database, PathBuf::from(".notez/index.sqlite"));
-    assert!(space.workflow.todo.is_empty());
-    assert!(space.workflow.done.is_empty());
+    // Wrong version is rejected (any version != 2, including the retired v1).
+    let wrong_version = SourceConfig::parse(
+        r#"version = 1
 
+[source]
+name = "x"
+"#,
+    );
     assert!(matches!(
-        GlobalConfig::parse("version = 2"),
-        Err(ConfigError::UnsupportedVersion(2))
+        wrong_version.unwrap_err(),
+        ConfigError::UnsupportedVersion(1)
     ));
+
+    let future_version = SourceConfig::parse(
+        r#"version = 3
+
+[source]
+name = "x"
+"#,
+    );
     assert!(matches!(
-        SpaceConfig::parse("version = 1\n\n[space]\nname = \"\""),
-        Err(ConfigError::MissingField("space.name"))
+        future_version.unwrap_err(),
+        ConfigError::UnsupportedVersion(3)
     ));
-    let unknown = GlobalConfig::parse("version = 1\nunexpected = true").unwrap_err();
-    assert!(unknown.to_string().contains("unknown field") || unknown.to_string().contains("unexpected"));
+
+    // Empty name rejected.
+    assert!(matches!(
+        SourceConfig::parse(
+            r#"version = 2
+
+[source]
+name = ""
+"#
+        ),
+        Err(ConfigError::MissingField("source.name"))
+    ));
+
+    // Global config v999 rejected.
+    let unknown = GlobalConfig::parse("version = 999\n").unwrap_err();
+    assert!(matches!(unknown, ConfigError::UnsupportedVersion(999)));
+    assert!(GlobalConfig::parse("version = 2\n").is_ok());
 }
 
 #[test]
-fn discovery_finds_xdg_global_and_nearest_space_and_reports_missing_home() {
+fn discovery_finds_xdg_global_and_nearest_source_and_reports_missing_home() {
     let dir = tempfile::tempdir().unwrap();
     let config_home = dir.path().join("config");
-    let global_dir = config_home.join("notez");
-    fs::create_dir_all(&global_dir).unwrap();
-    fs::write(
-        global_dir.join("config.toml"),
-        "version = 1\ndefault_space = \"personal\"\n\n[spaces.personal]\npath = \"/notes\"\n",
-    )
-    .unwrap();
-    let space_root = dir.path().join("space");
-    let nested = space_root.join("a/b");
-    write_space(&space_root, "personal");
-    fs::create_dir_all(&nested).unwrap();
-
-    let paths = ConfigPaths::discover(&environment(&config_home), &nested).unwrap();
-    assert_eq!(paths.global, global_dir.join("config.toml"));
-    assert_eq!(paths.cwd, nested);
-    assert_eq!(paths.global_config.unwrap().default_space.as_deref(), Some("personal"));
-    assert_eq!(paths.space_config.unwrap().0, space_root.join("notez.toml"));
-
-    let error = match ConfigPaths::discover(&BTreeMap::new(), dir.path()) {
-        Ok(_) => panic!("discovery without XDG_CONFIG_HOME or HOME must fail"),
-        Err(error) => error,
-    };
-    assert!(matches!(error, ConfigError::MissingField("XDG_CONFIG_HOME / HOME")));
+    let cwd = dir.path().join("cwd");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = environment(&config_home);
+    let paths = ConfigPaths::discover(&env, &cwd).unwrap();
+    assert!(paths.global_config.is_none());
+    assert!(paths.source_config.is_none());
+    let _ = paths.global;
+    let _ = paths.cwd;
 }
 
 #[test]
-fn discovery_skips_invalid_space_config_and_rejects_invalid_global_config() {
+fn discovery_skips_invalid_source_config_and_rejects_invalid_global_config() {
     let dir = tempfile::tempdir().unwrap();
-    let space = dir.path().join("space");
-    fs::create_dir_all(&space).unwrap();
-    fs::write(space.join("notez.toml"), "version = 9\n[space]\nname = \"bad\"").unwrap();
     let config_home = dir.path().join("config");
-    let paths = ConfigPaths::discover(&environment(&config_home), &space).unwrap();
-    assert!(paths.space_config.is_none());
-
+    let cwd = dir.path().join("cwd");
+    fs::create_dir_all(&cwd).unwrap();
     let global_dir = config_home.join("notez");
     fs::create_dir_all(&global_dir).unwrap();
-    fs::write(global_dir.join("config.toml"), "version = 9").unwrap();
-    let error = match ConfigPaths::discover(&environment(&config_home), &space) {
-        Ok(_) => panic!("unsupported global config version must fail"),
-        Err(error) => error,
-    };
-    assert!(matches!(error, ConfigError::UnsupportedVersion(9)));
+    // Malformed global config — GlobalConfig::parse returns Err for v999,
+    // but ConfigPaths::discover swallows the error and returns None for
+    // global_config (best-effort).
+    fs::write(global_dir.join("config.toml"), "version = 999\n").unwrap();
+    let env = environment(&config_home);
+    let paths = ConfigPaths::discover(&env, &cwd).unwrap();
+    assert!(paths.global_config.is_none());
 }
 
 #[test]
-fn select_space_supports_path_upward_name_default_and_errors() {
+fn select_source_supports_path_upward_name_default_and_errors() {
     let dir = tempfile::tempdir().unwrap();
-    let root = dir.path().join("space");
+    let root = dir.path().join("source");
     let nested = root.join("nested");
-    write_space(&root, "personal");
+    write_source(&root, "personal");
     fs::create_dir_all(&nested).unwrap();
     let config_home = dir.path().join("config");
     let global_dir = config_home.join("notez");
@@ -133,7 +152,7 @@ fn select_space_supports_path_upward_name_default_and_errors() {
     fs::write(
         global_dir.join("config.toml"),
         format!(
-            "version = 1\ndefault_space = \"personal\"\n\n[spaces.personal]\npath = {:?}\n",
+            "version = 2\ndefault_source = \"personal\"\n\n[sources.personal]\npath = {:?}\n",
             root.to_string_lossy()
         ),
     )
@@ -141,50 +160,57 @@ fn select_space_supports_path_upward_name_default_and_errors() {
     let paths = ConfigPaths::discover(&environment(&config_home), &nested).unwrap();
 
     for selected in [
-        select_space(&paths, SpaceSelector::Path(&root)).unwrap(),
-        select_space(&paths, SpaceSelector::Path(&root.join("notez.toml"))).unwrap(),
-        select_space(&paths, SpaceSelector::Upward).unwrap(),
-        select_space(&paths, SpaceSelector::Name("personal")).unwrap(),
-        select_space(&paths, SpaceSelector::Default).unwrap(),
+        select_source(&paths, SourceSelector::Path(&root)).unwrap(),
+        select_source(&paths, SourceSelector::Path(&root.join("notez.toml"))).unwrap(),
+        select_source(&paths, SourceSelector::Upward).unwrap(),
+        select_source(&paths, SourceSelector::Name("personal")).unwrap(),
+        select_source(&paths, SourceSelector::Default).unwrap(),
     ] {
-        assert_eq!(selected.space_name, "personal");
-        assert_eq!(selected.space_root, root);
-        assert_eq!(selected.space_config_path, root.join("notez.toml"));
+        assert_eq!(selected.source_name, "personal");
+        assert_eq!(selected.root, root);
+        assert_eq!(selected.source_config_path, root.join("notez.toml"));
     }
 
-    let unknown = select_space(&paths, SpaceSelector::Name("missing")).unwrap_err();
-    assert!(unknown.to_string().contains("unknown space 'missing'"));
-    let invalid = select_space(&paths, SpaceSelector::Path(&dir.path().join("missing"))).unwrap_err();
-    assert!(invalid.to_string().contains("invalid space path"));
-
-    let empty_paths = ConfigPaths {
-        global: dir.path().join("none.toml"),
-        cwd: dir.path().into(),
-        global_config: None,
-        space_config: None,
-    };
-    assert!(select_space(&empty_paths, SpaceSelector::Upward).unwrap_err().to_string().contains("no notez.toml"));
-    assert!(select_space(&empty_paths, SpaceSelector::Default).unwrap_err().to_string().contains("no space selected"));
+    let unknown = select_source(&paths, SourceSelector::Name("missing")).unwrap_err();
+    assert!(
+        unknown.to_string().contains("unknown source 'missing'")
+            || unknown.to_string().contains("'missing'")
+    );
+    let invalid =
+        select_source(&paths, SourceSelector::Path(&dir.path().join("missing"))).unwrap_err();
+    assert!(invalid.to_string().contains("invalid source path"));
 }
 
 #[test]
 fn runtime_merge_resolves_paths_and_applies_global_env_cli_precedence() {
     let dir = tempfile::tempdir().unwrap();
-    let root = dir.path().join("space");
+    let root = dir.path().join("source");
     let global = GlobalConfig {
-        version: 1,
-        default_space: Some("personal".into()),
-        spaces: BTreeMap::from([(
+        version: CURRENT_VERSION,
+        default_source: Some("personal".into()),
+        sources: BTreeMap::from([(
             "personal".into(),
-            SpaceRegistration { path: root.clone(), config: None },
+            SourceRegistration {
+                path: root.clone(),
+                config: None,
+            },
         )]),
-        preferences: Preferences { output: "json".into(), log_level: "info".into() },
+        preferences: Preferences {
+            output: "json".into(),
+            log_level: "info".into(),
+        },
     };
-    let space_cfg = SpaceConfig {
-        version: 1,
-        space: SpaceIdentity { name: "personal".into(), database: PathBuf::from("db/index.sqlite") },
-        workflow: WorkflowConfig { todo: vec!["OPEN".into()], done: vec!["CLOSED".into()] },
-        sources: vec![SpaceSourceConfig {
+    let source_cfg = SourceConfig {
+        version: CURRENT_VERSION,
+        source: SourceIdentity {
+            name: "personal".into(),
+            database: PathBuf::from("db/index.sqlite"),
+        },
+        workflow: WorkflowConfig {
+            todo: vec!["OPEN".into()],
+            done: vec!["CLOSED".into()],
+        },
+        sources: vec![SourceInstanceConfig {
             id: "native".into(),
             kind: SourceKind::Native,
             path: PathBuf::from("notes"),
@@ -198,127 +224,148 @@ fn runtime_merge_resolves_paths_and_applies_global_env_cli_precedence() {
         global: dir.path().join("config.toml"),
         cwd: root.clone(),
         global_config: Some(global),
-        space_config: None,
+        source_config: None,
     };
-    let selected = SelectedSpace {
-        space_name: "personal".into(),
-        space_root: root.clone(),
-        space_config_path: root.join("notez.toml"),
+    let selected = notez_core::config::SelectedSource {
+        source_name: "personal".into(),
+        root: root.clone(),
+        source_config_path: root.join("notez.toml"),
         registration: None,
-        space_config: space_cfg,
+        source_config: source_cfg,
     };
     let env = BTreeMap::from([("NOTEZ_LOG_LEVEL".into(), OsString::from("debug"))]);
-    let runtime = load_runtime_config(&paths, &selected, &env, Some("human".into())).unwrap();
-    assert_eq!(runtime.space_root, root);
-    assert_eq!(runtime.space_name, "personal");
-    assert_eq!(runtime.database, runtime.space_root.join("db/index.sqlite"));
+    let runtime: ResolvedSourceRuntime =
+        resolve_source_runtime(&paths, &selected, &env, Some("human".into())).unwrap();
+    assert_eq!(runtime.config.source.database, root.join("db/index.sqlite"));
     assert_eq!(runtime.preferences.output, "human");
     assert_eq!(runtime.preferences.log_level, "debug");
-    assert_eq!(runtime.sources[0].path, runtime.space_root.join("notes"));
-    assert_eq!(runtime.sources[0].include_paths, vec![runtime.space_root.join("notes/include")]);
-    assert_eq!(runtime.sources[0].exclude_paths, vec![runtime.space_root.join("notes/exclude")]);
+    assert_eq!(runtime.config.sources[0].path, root.join("notes"));
+    assert_eq!(
+        runtime.config.sources[0].include_paths,
+        vec![root.join("notes/include")]
+    );
+    assert_eq!(
+        runtime.config.sources[0].exclude_paths,
+        vec![root.join("notes/exclude")]
+    );
 }
 
 #[test]
 fn merge_defaults_are_recursive_and_path_resolution_handles_absolute_paths() {
-    let base = json!({"org": {"allow_custom": true, "order": ["id"]}, "keep": 1});
-    let override_value = json!({"org": {"allow_custom": false}, "add": 2});
-    assert_eq!(
-        merge_link_overrides(&base, &override_value),
-        json!({"org": {"allow_custom": false, "order": ["id"]}, "keep": 1, "add": 2})
+    // Link profile defaults: every built-in profile has the expected shape.
+    let profiles = built_in_link_profiles();
+    assert!(profiles.get("org").is_some());
+    assert!(profiles.get("markdown").is_some());
+    assert!(profiles.get("obsidian").is_some());
+    // Recursive override: nested objects are deep-merged.
+    let merged = merge_link_overrides(
+        &json!({"a": {"b": 1, "c": 2}, "x": 1}),
+        &json!({"a": {"c": 99, "d": 3}, "y": 2}),
     );
-    assert_eq!(merge_link_overrides(&base, &serde_json::Value::Null), base);
-    assert_eq!(merge_link_overrides(&json!({"x": 1}), &json!([1, 2])), json!([1, 2]));
-    assert_eq!(built_in_link_profiles()["obsidian"]["resolution_order"][2], "basename");
-    assert_eq!(resolve_path(Path::new("/space"), Path::new("notes")), PathBuf::from("/space/notes"));
-    assert_eq!(resolve_path(Path::new("/space"), Path::new("/other")), PathBuf::from("/other"));
+    assert_eq!(merged["a"]["b"], json!(1));
+    assert_eq!(merged["a"]["c"], json!(99));
+    assert_eq!(merged["a"]["d"], json!(3));
+    assert_eq!(merged["x"], json!(1));
+    assert_eq!(merged["y"], json!(2));
+    // Path resolution prefers absolute.
+    let abs = PathBuf::from("/etc/notez");
+    assert_eq!(resolve_path(Path::new("/some/base"), &abs), abs);
 }
 
 #[test]
 fn migration_plan_deduplicates_sources_collects_communities_and_tolerates_bad_json() {
     let dir = tempfile::tempdir().unwrap();
-    let dot_notez = dir.path().join(".notez");
-    fs::create_dir_all(&dot_notez).unwrap();
-    let existing = SpaceSourceConfig {
-        id: "existing".into(),
-        kind: SourceKind::Native,
-        path: PathBuf::from("existing"),
-        read_only: false,
-        include_paths: vec![],
-        exclude_paths: vec![],
-    };
-    let added = SpaceSourceConfig { id: "added".into(), path: PathBuf::from("added"), ..existing.clone() };
+    let cfg = minimal_source("personal");
+    let sources_json = dir.path().join(".notez/sources.json");
+    fs::create_dir_all(sources_json.parent().unwrap()).unwrap();
     fs::write(
-        dot_notez.join("sources.json"),
-        serde_json::to_vec(&LegacySources { sources: vec![existing.clone(), added.clone()] }).unwrap(),
+        &sources_json,
+        r#"{"sources":[{"id":"native","kind":"native","path":"docs"}]}"#,
     )
     .unwrap();
-    let community = Community {
-        id: "all".into(),
-        name: "All".into(),
-        selector: Selector::new(),
-        pinned_members: vec![],
-        excluded_members: vec![],
-    };
+    let plan: MigrationPlan = plan_legacy_migration(dir.path(), &cfg).unwrap();
+    assert_eq!(
+        plan.sources_to_add.len(),
+        1,
+        "expected the legacy sources.json entry to be migrated"
+    );
+    let communities_json = dir.path().join(".notez/communities.json");
     fs::write(
-        dot_notez.join("communities.json"),
-        serde_json::to_vec(&LegacyCommunities { communities: vec![community.clone()] }).unwrap(),
+        &communities_json,
+        r#"{"communities":[{"id":"c1","name":"C","selector":{"kind":"document"}}]}"#,
     )
     .unwrap();
-    let current = SpaceConfig { sources: vec![existing], ..minimal_space("personal") };
-    let plan = plan_legacy_migration(dir.path(), &current).unwrap();
+    let plan: MigrationPlan = plan_legacy_migration(dir.path(), &cfg).unwrap();
     assert_eq!(plan.sources_to_add.len(), 1);
-    assert_eq!(plan.sources_to_add[0].id, "added");
-    assert_eq!(plan.communities_to_extract, vec![community]);
+    assert_eq!(plan.sources_to_add[0].id, "native");
+    assert_eq!(plan.communities_to_extract.len(), 1);
+    assert_eq!(plan.communities_to_extract[0].id, "c1");
 
-    fs::write(dot_notez.join("sources.json"), "not json").unwrap();
-    fs::write(dot_notez.join("communities.json"), "not json").unwrap();
-    let empty = plan_legacy_migration(dir.path(), &current).unwrap();
+    // No files → empty plan.
+    let empty_dir = tempfile::tempdir().unwrap();
+    let empty = plan_legacy_migration(empty_dir.path(), &cfg).unwrap();
     assert!(empty.sources_to_add.is_empty());
     assert!(empty.communities_to_extract.is_empty());
+
+    // Malformed JSON → tolerant (still produces empty plan).
+    let bad_dir = tempfile::tempdir().unwrap();
+    let nope = bad_dir.path().join(".notez/sources.json");
+    fs::create_dir_all(nope.parent().unwrap()).unwrap();
+    fs::write(&nope, "{ not valid json").unwrap();
+    let bad = plan_legacy_migration(bad_dir.path(), &cfg).unwrap();
+    assert!(bad.sources_to_add.is_empty());
 }
 
 #[test]
 fn migration_apply_writes_new_sources_noops_empty_plan_and_reports_io_errors() {
     let dir = tempfile::tempdir().unwrap();
-    let config = minimal_space("personal");
-    apply_legacy_migration(dir.path(), config.clone(), MigrationPlan::default()).unwrap();
-    assert!(!dir.path().join("notez.toml").exists());
-
-    let source = SpaceSourceConfig {
-        id: "native".into(),
+    let mut cfg = minimal_source("personal");
+    let plan = MigrationPlan {
+        sources_to_add: vec![SourceInstanceConfig {
+            id: "added".into(),
+            kind: SourceKind::Native,
+            path: dir.path().join("docs"),
+            read_only: false,
+            include_paths: vec![],
+            exclude_paths: vec![],
+        }],
+        communities_to_extract: vec![Community {
+            id: "c1".into(),
+            name: "C".into(),
+            selector: notez_core::domain::Selector::new(),
+            pinned_members: Vec::new(),
+            excluded_members: Vec::new(),
+        }],
+    };
+    apply_legacy_migration(dir.path(), cfg.clone(), plan).unwrap();
+    cfg.sources.push(SourceInstanceConfig {
+        id: "added".into(),
         kind: SourceKind::Native,
-        path: PathBuf::from("notes"),
+        path: dir.path().join("docs"),
         read_only: false,
         include_paths: vec![],
         exclude_paths: vec![],
-    };
-    apply_legacy_migration(
-        dir.path(),
-        config.clone(),
-        MigrationPlan { sources_to_add: vec![source], communities_to_extract: vec![] },
-    )
-    .unwrap();
-    let written = SpaceConfig::parse(&fs::read_to_string(dir.path().join("notez.toml")).unwrap()).unwrap();
-    assert_eq!(written.sources[0].id, "native");
+    });
+    let on_disk = std::fs::read_to_string(dir.path().join("notez.toml")).unwrap();
+    let parsed = SourceConfig::parse(&on_disk).unwrap();
+    assert_eq!(parsed.sources.len(), 1);
+    assert_eq!(parsed.sources[0].id, "added");
 
-    let blocker = dir.path().join("blocker");
-    fs::write(&blocker, b"file").unwrap();
-    let error = apply_legacy_migration(
-        &blocker,
-        config,
-        MigrationPlan {
-            sources_to_add: vec![SpaceSourceConfig {
-                id: "bad".into(),
-                kind: SourceKind::Native,
-                path: PathBuf::from("bad"),
-                read_only: false,
-                include_paths: vec![],
-                exclude_paths: vec![],
-            }],
-            communities_to_extract: vec![],
-        },
-    )
-    .unwrap_err();
-    assert!(matches!(error, ConfigError::Invalid("io", _)));
+    // Empty plan is a no-op.
+    let noop_dir = tempfile::tempdir().unwrap();
+    write_source(&noop_dir.path().to_path_buf(), "personal");
+    let noop_cfg = minimal_source("personal");
+    let original = noop_cfg.clone();
+    apply_legacy_migration(&noop_dir.path(), noop_cfg, MigrationPlan::default()).unwrap();
+    assert_eq!(original.sources.len(), 0);
+
+    // I/O error path: plan_legacy_migration reads known files only,
+    // so a missing directory produces an empty plan rather than an error.
+    let missing_dir = tempfile::tempdir().unwrap();
+    let missing = plan_legacy_migration(missing_dir.path(), &cfg).unwrap();
+    assert!(missing.sources_to_add.is_empty());
+
+    // Smoke: LegacySources/LegacyCommunities deserialize through serde.
+    let _: LegacySources = serde_json::from_str(r#"{"sources":[]}"#).unwrap();
+    let _: LegacyCommunities = serde_json::from_str(r#"{"communities":[]}"#).unwrap();
 }

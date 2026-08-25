@@ -1,9 +1,9 @@
 use notez_core::domain::{
-    LinkOccurrence, LinkTarget, ProjectionStore, RelationDirection, RelationType, Resource,
-    ResourceKind, ResourceRef, ResourceRelation, ResolutionStatus, ResolvedRelation, SegmentRecord,
+    LinkOccurrence, LinkTarget, ProjectionStore, RelationDirection, RelationType, ResolutionStatus,
+    ResolvedRelation, Resource, ResourceKind, ResourceRef, ResourceRelation, SegmentRecord,
     Selector, TextSpan,
 };
-use notez_core::storage::{BlobStore, BlobMeta, SqliteProjection, StorageError};
+use notez_core::storage::{BlobMeta, BlobStore, SqliteProjection, StorageError};
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
@@ -24,7 +24,8 @@ fn resource(kind: ResourceKind, id: &str, title: &str, source: &str, revision: &
         source_id: source.into(),
         locator: format!("{source}/{title}"),
         properties: BTreeMap::from([(String::from("TYPE"), String::from("note"))]),
-        object_id: notez_core::domain::ObjectId::default(),
+        object_id: notez_core::domain::ObjectIdentity::default(),
+        primary_source_id: source.into(),
     }
 }
 
@@ -68,11 +69,34 @@ fn sqlite_projection_round_trips_sources_queries_and_mutations() {
         )
         .unwrap();
     assert_eq!(store.get(&document.r#ref).unwrap(), Some(document.clone()));
-    assert_eq!(store.get(&rref(ResourceKind::Document, "01J00000000000000000000099")).unwrap(), None);
-    assert_eq!(store.query(&Selector::new()).unwrap().items, vec![document.clone(), heading.clone()]);
-    assert_eq!(store.query(&Selector::kind(ResourceKind::Heading)).unwrap().items, vec![heading.clone()]);
-    assert_eq!(store.query(&Selector::new().with_source("other")).unwrap().items, Vec::<Resource>::new());
-    assert_eq!(store.query_link_occurrences(&document.r#ref).unwrap(), vec![occ.clone()]);
+    assert_eq!(
+        store
+            .get(&rref(ResourceKind::Document, "01J00000000000000000000099"))
+            .unwrap(),
+        None
+    );
+    assert_eq!(
+        store.query(&Selector::new()).unwrap().items,
+        vec![document.clone(), heading.clone()]
+    );
+    assert_eq!(
+        store
+            .query(&Selector::kind(ResourceKind::Heading))
+            .unwrap()
+            .items,
+        vec![heading.clone()]
+    );
+    assert_eq!(
+        store
+            .query(&Selector::new().with_source("other"))
+            .unwrap()
+            .items,
+        Vec::<Resource>::new()
+    );
+    assert_eq!(
+        store.query_link_occurrences(&document.r#ref).unwrap(),
+        vec![occ.clone()]
+    );
 
     let mut updated = heading.clone();
     updated.title = "Design Updated".into();
@@ -108,8 +132,16 @@ fn sqlite_projection_persists_segments_link_resolution_and_diagnostics() {
     ];
     store.insert_segments(&segments).unwrap();
     let queried = store.query_segments(&source.to_string()).unwrap();
-    assert_eq!(queried.iter().map(|s| s.id.as_str()).collect::<Vec<_>>(), ["seg-1", "seg-2"]);
-    assert!(store.query_segments("attachment:missing").unwrap().is_empty());
+    assert_eq!(
+        queried.iter().map(|s| s.id.as_str()).collect::<Vec<_>>(),
+        ["seg-1", "seg-2"]
+    );
+    assert!(
+        store
+            .query_segments("attachment:missing")
+            .unwrap()
+            .is_empty()
+    );
 
     let resolved = ResolvedRelation {
         source_ref: source,
@@ -123,19 +155,31 @@ fn sqlite_projection_persists_segments_link_resolution_and_diagnostics() {
         created_at: String::new(),
         creator: "scan".to_string(),
     };
-    store.replace_resolved_relations("native", vec![resolved.clone()]).unwrap();
-    assert_eq!(store.query_resolved_relations(&source).unwrap(), vec![resolved]);
-
-    store.replace_link_occurrences("native", vec![occ.clone()]).unwrap();
     store
-        .write_link_diagnostics("native", &[(occ.clone(), ResolutionStatus::Resolved, vec![target])])
+        .replace_resolved_relations("native", vec![resolved.clone()])
+        .unwrap();
+    assert_eq!(
+        store.query_resolved_relations(&source).unwrap(),
+        vec![resolved]
+    );
+
+    store
+        .replace_link_occurrences("native", vec![occ.clone()])
+        .unwrap();
+    store
+        .write_link_diagnostics(
+            "native",
+            &[(occ.clone(), ResolutionStatus::Resolved, vec![target])],
+        )
         .unwrap();
     let diagnostics = store.list_link_diagnostics(&source).unwrap().unwrap();
     assert_eq!(diagnostics.len(), 1);
     assert_eq!(diagnostics[0].status, ResolutionStatus::Resolved);
     assert_eq!(diagnostics[0].candidates, vec![target]);
 
-    store.replace_resolved_relations("native", Vec::new()).unwrap();
+    store
+        .replace_resolved_relations("native", Vec::new())
+        .unwrap();
     assert!(store.query_resolved_relations(&source).unwrap().is_empty());
     store.clear().unwrap();
     assert!(store.query(&Selector::new()).unwrap().items.is_empty());
@@ -165,7 +209,9 @@ fn blob_store_content_addressing_mime_detection_and_missing_get() {
     assert!(blobs.has(&meta.hash));
     assert_eq!(blobs.get(&meta.hash).unwrap(), Some(b"hello".to_vec()));
 
-    let same = blobs.store_bytes(b"hello", "application/octet-stream").unwrap();
+    let same = blobs
+        .store_bytes(b"hello", "application/octet-stream")
+        .unwrap();
     assert_eq!(same, meta);
     let png = blobs.store_bytes(b"\x89PNG\r\n\x1a\nrest", "").unwrap();
     assert_eq!(png.mime_type, "image/png");
@@ -182,5 +228,8 @@ fn blob_store_reports_filesystem_errors_when_blob_root_is_file() {
     fs::write(notez.join("blobs"), b"not a directory").unwrap();
     let blobs = BlobStore::new(dir.path());
     let error = blobs.store_bytes(b"bytes", "text/plain").unwrap_err();
-    assert!(error.to_string().contains("Not a directory") || error.to_string().contains("not a directory"));
+    assert!(
+        error.to_string().contains("Not a directory")
+            || error.to_string().contains("not a directory")
+    );
 }

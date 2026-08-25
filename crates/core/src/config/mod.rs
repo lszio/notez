@@ -1,13 +1,15 @@
-pub mod discovery;
 pub mod defaults;
+pub mod discovery;
 pub mod merge;
 pub mod migrate;
 pub mod model;
 pub mod web_space;
-pub use merge::load_runtime_config;
-pub use discovery::{select_space, ConfigPaths, SelectedSpace, SpaceSelector};
+
+pub use defaults::resolve_path;
+pub use discovery::{ConfigPaths, SelectedSource, SourceSelector, select_source};
+pub use merge::{ResolvedSourceRuntime, resolve_source_runtime};
 
 pub use model::{
-    ConfigError, GlobalConfig, Preferences, RuntimeConfig, SpaceConfig, SpaceIdentity,
-    SpaceRegistration, SpaceSourceConfig, WorkflowConfig,
+    CURRENT_VERSION, ConfigError, GlobalConfig, Preferences, SourceConfig, SourceIdentity,
+    SourceInstanceConfig, SourceRegistration, WorkflowConfig,
 };

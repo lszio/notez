@@ -1,5 +1,5 @@
 //! Content hashing helpers used by the document scanners to derive
-//! cross-Space stable `ObjectId` values (spec §3.1).
+//! cross-Space stable `ObjectIdentity` values (spec §3.1).
 //!
 //! The algorithm is intentionally cheap: SHA-256 of the file's full
 //! byte length (mixed in as a `u64` little-endian) followed by up to

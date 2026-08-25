@@ -6,12 +6,12 @@ use crate::storage::SqliteProjection;
 #[test]
 fn attachment_addition_extraction_and_segment_query() {
     let temp_dir = tempfile::tempdir().unwrap();
-    let space_root = temp_dir.path();
-    let dot_notez = space_root.join(".notez");
+    let source_root = temp_dir.path();
+    let dot_notez = source_root.join(".notez");
     fs::create_dir_all(&dot_notez).unwrap();
     let db_path = dot_notez.join("index.sqlite");
 
-    let file_path = space_root.join("sample_attachment.txt");
+    let file_path = source_root.join("sample_attachment.txt");
     let content =
         "Hello Notez Attachment Content! Detailed text segment 1. Detailed text segment 2.";
     fs::write(&file_path, content).unwrap();
@@ -20,7 +20,7 @@ fn attachment_addition_extraction_and_segment_query() {
     let mut service = ApplicationService::new(store);
 
     let att_ref = service
-        .add_attachment(space_root, &file_path, "text/plain")
+        .add_attachment(source_root, &file_path, "text/plain")
         .unwrap();
 
     assert_eq!(att_ref.kind(), ResourceKind::Attachment);
@@ -44,7 +44,7 @@ fn attachment_addition_extraction_and_segment_query() {
         Some("text/plain")
     );
 
-    let segments = service.run_extraction(space_root, &att_ref).unwrap();
+    let segments = service.run_extraction(source_root, &att_ref).unwrap();
     assert!(!segments.is_empty());
 
     let fetched_segments = service.query_segments(&att_ref).unwrap();
@@ -58,12 +58,12 @@ fn attachment_locator_is_posix_relative_under_space_root() {
     // subdirectory path so the tree builder can reconstruct
     // the hierarchy and the raw endpoint can serve the file.
     let temp_dir = tempfile::tempdir().unwrap();
-    let space_root = temp_dir.path();
-    let dot_notez = space_root.join(".notez");
+    let source_root = temp_dir.path();
+    let dot_notez = source_root.join(".notez");
     fs::create_dir_all(&dot_notez).unwrap();
     let db_path = dot_notez.join("index.sqlite");
 
-    let sub = space_root.join("docs").join("proposals");
+    let sub = source_root.join("docs").join("proposals");
     fs::create_dir_all(&sub).unwrap();
     let nested = sub.join("whitepaper.pdf");
     fs::write(&nested, b"fake-pdf").unwrap();
@@ -71,7 +71,7 @@ fn attachment_locator_is_posix_relative_under_space_root() {
     let store = SqliteProjection::open(&db_path).unwrap();
     let mut service = ApplicationService::new(store);
     let att_ref = service
-        .add_attachment(space_root, &nested, "application/pdf")
+        .add_attachment(source_root, &nested, "application/pdf")
         .unwrap();
     let res = service.read(&att_ref).unwrap().unwrap();
     assert_eq!(res.locator, "docs/proposals/whitepaper.pdf");

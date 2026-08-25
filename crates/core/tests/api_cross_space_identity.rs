@@ -71,7 +71,7 @@ fn two_spaces_scanning_same_file_produce_same_object_id() {
     let doc_a = find_doc(&scanned_a).expect("space A document");
     let doc_b = find_doc(&scanned_b).expect("space B document");
 
-    // object_id matches across spaces (the headline assertion).
+    // object_id matches across sources (the headline assertion).
     assert_eq!(doc_a.object_id, doc_b.object_id);
     assert_eq!(doc_a.object_id, expected_doc);
 

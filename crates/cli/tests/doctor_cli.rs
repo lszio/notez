@@ -15,11 +15,7 @@ fn notez_cmd() -> Command {
 
 fn warm_space(space: &std::path::Path) {
     let doc = space.join("note.org");
-    fs::write(
-        &doc,
-        "#+title: Healthy\n#+ID: 01J00000000000000000000001\n",
-    )
-    .unwrap();
+    fs::write(&doc, "#+title: Healthy\n#+ID: 01J00000000000000000000001\n").unwrap();
     notez_cmd()
         .arg("--space")
         .arg(space)
@@ -38,7 +34,7 @@ fn cli_space_doctor_reports_unsupported() {
         .arg("--space")
         .arg(space)
         .arg("--json")
-        .arg("space")
+        .arg("workspace")
         .arg("doctor")
         .assert()
         .failure()

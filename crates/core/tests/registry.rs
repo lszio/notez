@@ -53,8 +53,13 @@ impl FormatParser for FakeOrg {
         mime == "text/org"
     }
     fn parse(&self, entity: &RawEntity, source_id: &str) -> Result<ParsedEntity, ParserError> {
-use notez_core::domain::{Resource, ResourceKind, ResourceRef, derived_id};
-        let doc_ref = derived_id(ResourceKind::Document, source_id, &entity.locator, "fake-org");
+        use notez_core::domain::{Resource, ResourceKind, ResourceRef, derived_id};
+        let doc_ref = derived_id(
+            ResourceKind::Document,
+            source_id,
+            &entity.locator,
+            "fake-org",
+        );
         let mut resources = vec![Resource {
             r#ref: doc_ref,
             kind: ResourceKind::Document,
@@ -63,7 +68,8 @@ use notez_core::domain::{Resource, ResourceKind, ResourceRef, derived_id};
             source_id: source_id.to_string(),
             locator: entity.locator.clone(),
             properties: Default::default(),
-            object_id: notez_core::domain::ObjectId::default(),
+            object_id: notez_core::domain::ObjectIdentity::default(),
+            primary_source_id: String::new(),
         }];
         // We can't synthesise LinkOccurrence without going through the
         // link model; just emit empty occurrences.
@@ -78,7 +84,8 @@ use notez_core::domain::{Resource, ResourceKind, ResourceRef, derived_id};
             source_id: source_id.to_string(),
             locator: entity.locator.clone(),
             properties: Default::default(),
-            object_id: notez_core::domain::ObjectId::default(),
+            object_id: notez_core::domain::ObjectIdentity::default(),
+            primary_source_id: String::new(),
         });
         Ok(ParsedEntity {
             resources,
@@ -96,8 +103,13 @@ impl FormatParser for FakeMarkdown {
         mime == "text/markdown"
     }
     fn parse(&self, entity: &RawEntity, source_id: &str) -> Result<ParsedEntity, ParserError> {
-use notez_core::domain::{Resource, ResourceKind, ResourceRef, derived_id};
-        let doc_ref = derived_id(ResourceKind::Document, source_id, &entity.locator, "fake-md");
+        use notez_core::domain::{Resource, ResourceKind, ResourceRef, derived_id};
+        let doc_ref = derived_id(
+            ResourceKind::Document,
+            source_id,
+            &entity.locator,
+            "fake-md",
+        );
         Ok(ParsedEntity {
             resources: vec![Resource {
                 r#ref: doc_ref,
@@ -107,7 +119,8 @@ use notez_core::domain::{Resource, ResourceKind, ResourceRef, derived_id};
                 source_id: source_id.to_string(),
                 locator: entity.locator.clone(),
                 properties: Default::default(),
-                object_id: notez_core::domain::ObjectId::default(),
+                object_id: notez_core::domain::ObjectIdentity::default(),
+                primary_source_id: String::new(),
             }],
             relations: vec![],
             link_occurrences: vec![],
@@ -190,7 +203,11 @@ fn registry_rejects_unknown_mime_without_partial_results() {
 
     let err = adapter.scan().expect_err("scan must fail on unknown MIME");
     match err {
-        SourceError::ParserNotFound { source_id, mime, locator } => {
+        SourceError::ParserNotFound {
+            source_id,
+            mime,
+            locator,
+        } => {
             assert_eq!(source_id, "native");
             assert_eq!(mime, "application/json");
             assert_eq!(locator, "/space/c.json");

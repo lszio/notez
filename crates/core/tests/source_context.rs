@@ -5,7 +5,7 @@
 //!   working directory.
 //! - `writeback_resource` and related mutation paths fail loudly when the
 //!   targeted source is missing from the space's configuration.
-//! - Constructing a service with an explicit `SpaceContext` is the only
+//! - Constructing a service with an explicit `SourceContext` is the only
 //!   supported way to reach filesystem resources.
 
 use std::fs;

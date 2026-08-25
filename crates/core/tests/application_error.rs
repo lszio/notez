@@ -11,7 +11,10 @@ fn not_found_display_and_serde_round_trip() {
         kind: ResourceKind::Heading,
         r_ref,
     };
-    assert_eq!(err.to_string(), "resource not found: heading:01J00000000000000000000F01 (kind=heading)");
+    assert_eq!(
+        err.to_string(),
+        "resource not found: heading:01J00000000000000000000F01 (kind=heading)"
+    );
     let s = serde_json::to_string(&err).unwrap();
     let back: ApplicationError = serde_json::from_str(&s).unwrap();
     assert_eq!(back, err);
@@ -31,19 +34,25 @@ fn storage_display_and_serde_round_trip() {
 
 #[test]
 fn unsupported_capability_display() {
-    let err = ApplicationError::UnsupportedCapability { capability: "space doctor" };
+    let err = ApplicationError::UnsupportedCapability {
+        capability: "space doctor",
+    };
     assert_eq!(err.to_string(), "unsupported capability: space doctor");
 }
 
 #[test]
 fn source_not_found_display() {
-    let err = ApplicationError::SourceNotFound { source_id: "vault".to_string() };
+    let err = ApplicationError::SourceNotFound {
+        source_id: "vault".to_string(),
+    };
     assert_eq!(err.to_string(), "source not found: vault");
 }
 
 #[test]
 fn read_only_source_display() {
-    let err = ApplicationError::ReadOnlySource { source_id: "vault".to_string() };
+    let err = ApplicationError::ReadOnlySource {
+        source_id: "vault".to_string(),
+    };
     assert_eq!(err.to_string(), "read-only source: vault");
 }
 

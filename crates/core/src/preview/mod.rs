@@ -30,7 +30,6 @@ pub trait Previewer: Send + Sync {
     fn render(&self, ctx: &PreviewContext) -> Result<PreviewModel, PreviewError>;
 }
 
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct QueryRequest {
     pub source: String,
@@ -41,22 +40,63 @@ pub struct QueryRequest {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum PreviewModel {
-    Org       { html: String, outline: Vec<Heading> },
-    Markdown  { html: String },
-    Pdf       { pages: Vec<PdfPage>, text: String },
-    Xlsx      { sheets: Vec<Sheet> },
-    Pptx      { slides: Vec<Slide> },
-    Zip       { entries: Vec<ZipEntry> },
-    Docx      { paragraphs: Vec<DocxParagraph> },
-    Table     { table: Table },
-    Image     { src: String, width: u32, height: u32, mime: String },
-    Mermaid   { source: String },
-    D2        { source: String },
-    Iframe    { src: String, sandbox: String },
-    LinkEmbed { target: Resource, child: Box<PreviewModel> },
-    QueryEmbed { query: QueryRequest, snapshot: Vec<Resource> },
-    BlockEmbed{ source: ResourceRef, html: String },
-    Fallback  { message: String },
+    Org {
+        html: String,
+        outline: Vec<Heading>,
+    },
+    Markdown {
+        html: String,
+    },
+    Pdf {
+        pages: Vec<PdfPage>,
+        text: String,
+    },
+    Xlsx {
+        sheets: Vec<Sheet>,
+    },
+    Pptx {
+        slides: Vec<Slide>,
+    },
+    Zip {
+        entries: Vec<ZipEntry>,
+    },
+    Docx {
+        paragraphs: Vec<DocxParagraph>,
+    },
+    Table {
+        table: Table,
+    },
+    Image {
+        src: String,
+        width: u32,
+        height: u32,
+        mime: String,
+    },
+    Mermaid {
+        source: String,
+    },
+    D2 {
+        source: String,
+    },
+    Iframe {
+        src: String,
+        sandbox: String,
+    },
+    LinkEmbed {
+        target: Resource,
+        child: Box<PreviewModel>,
+    },
+    QueryEmbed {
+        query: QueryRequest,
+        snapshot: Vec<Resource>,
+    },
+    BlockEmbed {
+        source: ResourceRef,
+        html: String,
+    },
+    Fallback {
+        message: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -123,7 +163,9 @@ pub struct PreviewerCatalog {
 }
 
 impl PreviewerCatalog {
-    pub fn new() -> Self { Self { inner: Vec::new() } }
+    pub fn new() -> Self {
+        Self { inner: Vec::new() }
+    }
 
     pub fn register<P: Previewer + 'static>(&mut self, p: P) {
         self.inner.push(Box::new(p));
@@ -133,16 +175,25 @@ impl PreviewerCatalog {
         self.inner.iter().map(|p| p.as_ref())
     }
 
-    pub fn resolve<'a>(&'a self, override_id: Option<&str>, ctx: &PreviewContext) -> Option<&'a dyn Previewer> {
+    pub fn resolve<'a>(
+        &'a self,
+        override_id: Option<&str>,
+        ctx: &PreviewContext,
+    ) -> Option<&'a dyn Previewer> {
         if let Some(id) = override_id {
             return self.inner.iter().find(|p| p.id() == id).map(|p| p.as_ref());
         }
-        self.inner.iter().find(|p| p.matches(ctx)).map(|p| p.as_ref())
+        self.inner
+            .iter()
+            .find(|p| p.matches(ctx))
+            .map(|p| p.as_ref())
     }
 }
 
 impl Default for PreviewerCatalog {
-    fn default() -> Self { Self::new() }
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 /// Build the canonical `PreviewerCatalog` containing all 16 built-in
@@ -179,22 +230,11 @@ impl Default for PreviewerCatalog {
 ///   a chance to claim the context first.
 pub fn default_catalog() -> PreviewerCatalog {
     use builders::{
-        block_embed::BlockEmbedPreviewer,
-        csv_tsv::CsvTsvPreviewer,
-        d2::D2Previewer,
-        docx::DocxPreviewer,
-        fallback::FallbackPreviewer,
-        iframe::IframePreviewer,
-        image::ImagePreviewer,
-        link_embed::LinkEmbedPreviewer,
-        markdown::MarkdownPreviewer,
-        mermaid::MermaidPreviewer,
-        org::OrgPreviewer,
-        pdf::PdfPreviewer,
-        pptx::PptxPreviewer,
-        query_embed::QueryEmbedPreviewer,
-        xlsx::XlsxPreviewer,
-        zip::ZipPreviewer,
+        block_embed::BlockEmbedPreviewer, csv_tsv::CsvTsvPreviewer, d2::D2Previewer,
+        docx::DocxPreviewer, fallback::FallbackPreviewer, iframe::IframePreviewer,
+        image::ImagePreviewer, link_embed::LinkEmbedPreviewer, markdown::MarkdownPreviewer,
+        mermaid::MermaidPreviewer, org::OrgPreviewer, pdf::PdfPreviewer, pptx::PptxPreviewer,
+        query_embed::QueryEmbedPreviewer, xlsx::XlsxPreviewer, zip::ZipPreviewer,
     };
 
     let mut c = PreviewerCatalog::new();

@@ -15,11 +15,7 @@ fn notez_cmd() -> Command {
 
 fn warm_space(space: &std::path::Path) {
     let doc = space.join("note.org");
-    fs::write(
-        &doc,
-        "#+title: Healthy\n#+ID: 01J00000000000000000000E01\n",
-    )
-    .unwrap();
+    fs::write(&doc, "#+title: Healthy\n#+ID: 01J00000000000000000000E01\n").unwrap();
     notez_cmd()
         .arg("--space")
         .arg(space)
@@ -43,7 +39,7 @@ fn resolve_missing_is_exit_3_not_found() {
 }
 
 #[test]
-fn space_doctor_is_exit_6_unsupported_capability() {
+fn source_doctor_is_exit_6_unsupported_capability() {
     let temp = tempdir().unwrap();
     let space = temp.path();
     warm_space(space);
@@ -51,7 +47,7 @@ fn space_doctor_is_exit_6_unsupported_capability() {
         .arg("--space")
         .arg(space)
         .arg("--json")
-        .arg("space")
+        .arg("workspace")
         .arg("doctor")
         .assert()
         .code(6);

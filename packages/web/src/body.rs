@@ -48,8 +48,8 @@ static CATALOG: LazyLock<PreviewerCatalog> =
     LazyLock::new(notez_core::preview::default_catalog);
 
 /// Render the body of `row` for the detail page.
-pub fn render_body(row: &ResourceRow, space_root: &Path) -> String {
-    let file_path = resolve_file_path(space_root, &row.locator);
+pub fn render_body(row: &ResourceRow, source_root: &Path) -> String {
+    let file_path = resolve_file_path(source_root, &row.locator);
     let bytes = match std::fs::read(&file_path) {
         Ok(b) => b,
         Err(_) => return String::new(),
@@ -60,7 +60,7 @@ pub fn render_body(row: &ResourceRow, space_root: &Path) -> String {
         .map(|s| s.to_ascii_lowercase())
         .unwrap_or_default();
 
-    let raw_url = raw_attachment_url(space_root, &row.locator);
+    let raw_url = raw_attachment_url(source_root, &row.locator);
     // The row's properties carry the body the projection indexed for
     // document / heading resources. Pass them through so the catalog
     // previewers (Markdown / Org / block_embed / query_embed) see
@@ -86,10 +86,10 @@ pub fn render_body(row: &ResourceRow, space_root: &Path) -> String {
 }
 
 /// Render an arbitrary on-disk file with the same logic the resource
-/// detail page uses. `title` is shown in the fallback link; `space_root`
+/// detail page uses. `title` is shown in the fallback link; `source_root`
 /// is the parent directory used to compute the `locator` portion of the
 /// raw-attachment URL.
-pub fn render_path(file_path: &Path, title: &str, space_root: &Path) -> String {
+pub fn render_path(file_path: &Path, title: &str, source_root: &Path) -> String {
     let bytes = match std::fs::read(file_path) {
         Ok(b) => b,
         Err(_) => return String::new(),
@@ -100,11 +100,11 @@ pub fn render_path(file_path: &Path, title: &str, space_root: &Path) -> String {
         .map(|s| s.to_ascii_lowercase())
         .unwrap_or_default();
     let rel_locator = file_path
-        .strip_prefix(space_root)
+        .strip_prefix(source_root)
         .ok()
         .map(|p| p.to_string_lossy().replace('\\', "/"))
         .unwrap_or_else(|| file_path.to_string_lossy().into_owned());
-    let raw_url = raw_attachment_url(space_root, &rel_locator);
+    let raw_url = raw_attachment_url(source_root, &rel_locator);
 
     // For loose files, seed the body property from the on-disk bytes
     // so document previewers (Markdown / Org) can render the file
@@ -459,22 +459,23 @@ fn placeholder_resource(
         locator: file_path.to_string_lossy().into_owned(),
         properties,
         object_id: Default::default(),
+        primary_source_id: String::new(),
     }
 }
 
-fn resolve_file_path(space_root: &Path, locator: &str) -> PathBuf {
+fn resolve_file_path(source_root: &Path, locator: &str) -> PathBuf {
     let p = PathBuf::from(locator);
     if p.is_absolute() {
         p
     } else {
-        space_root.join(p)
+        source_root.join(p)
     }
 }
 
-fn raw_attachment_url(space_root: &Path, locator: &str) -> String {
+fn raw_attachment_url(source_root: &Path, locator: &str) -> String {
     format!(
-        "/api/spaces/attachment/raw?space_root={}&locator={}",
-        urlencoding::encode(&space_root.to_string_lossy()),
+        "/api/sources/attachment/raw?source_root={}&locator={}",
+        urlencoding::encode(&source_root.to_string_lossy()),
         urlencoding::encode(locator)
     )
 }

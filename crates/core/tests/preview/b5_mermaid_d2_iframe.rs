@@ -23,7 +23,8 @@ fn doc_with_body(body: &str) -> Resource {
         source_id: "src-1".into(),
         locator: "doc.org".into(),
         properties,
-        object_id: notez_core::domain::ObjectId::default(),
+        object_id: notez_core::domain::ObjectIdentity::default(),
+        primary_source_id: String::new(),
     }
 }
 

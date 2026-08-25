@@ -107,16 +107,11 @@ pub fn from_name(name: &str) -> ErrorKind {
 pub mod io_kind {
     use super::*;
 
-    pub fn serialize<S: Serializer>(
-        kind: &ErrorKind,
-        serializer: S,
-    ) -> Result<S::Ok, S::Error> {
+    pub fn serialize<S: Serializer>(kind: &ErrorKind, serializer: S) -> Result<S::Ok, S::Error> {
         serializer.serialize_str(name(kind))
     }
 
-    pub fn deserialize<'de, D: Deserializer<'de>>(
-        deserializer: D,
-    ) -> Result<ErrorKind, D::Error> {
+    pub fn deserialize<'de, D: Deserializer<'de>>(deserializer: D) -> Result<ErrorKind, D::Error> {
         let name = String::deserialize(deserializer)?;
         Ok(from_name(&name))
     }

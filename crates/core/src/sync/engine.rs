@@ -72,7 +72,7 @@ impl SyncEngine {
                     pushed_objects += 1;
 
                     let manifest = Manifest {
-                        space_id: "default_space".to_string(),
+                        source_id: "default_source".to_string(),
                         actor_id: self.actor_id.clone(),
                         parent_snapshots: vec![],
                         logical_path,

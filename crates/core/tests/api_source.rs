@@ -23,7 +23,8 @@ fn fake_resource(source_id: &str, locator: &str) -> Resource {
         source_id: source_id.into(),
         locator: locator.into(),
         properties: Default::default(),
-        object_id: notez_core::domain::ObjectId::default(),
+        object_id: notez_core::domain::ObjectIdentity::default(),
+        primary_source_id: String::new(),
     }
 }
 
@@ -39,9 +40,7 @@ impl SourceTransport for ListTransport {
     }
 
     fn mutate(&self, _locator: &str, _payload: &str) -> Result<(), TransportError> {
-        self.mutation
-            .clone()
-            .map_err(TransportError::Other)
+        self.mutation.clone().map_err(TransportError::Other)
     }
 }
 
@@ -79,17 +78,26 @@ fn source_config_new_and_source_kind_are_serializable_and_capabilities_have_defa
     assert_eq!(cfg.exclude_paths, vec![PathBuf::from("private")]);
     let json = serde_json::to_string(&cfg).unwrap();
     assert_eq!(serde_json::from_str::<SourceConfig>(&json).unwrap(), cfg);
-    assert_eq!(serde_json::to_string(&SourceKind::AppleNotes).unwrap(), "\"apple_notes\"");
+    assert_eq!(
+        serde_json::to_string(&SourceKind::AppleNotes).unwrap(),
+        "\"apple_notes\""
+    );
 
-    let transport = ListTransport { entities: vec![], mutation: Ok(()) };
+    let transport = ListTransport {
+        entities: vec![],
+        mutation: Ok(()),
+    };
     let adapter = ComposedSourceAdapter::new(cfg.clone(), Box::new(transport), vec![]);
     assert_eq!(adapter.config(), &cfg);
-    assert_eq!(adapter.capabilities(), SourceCapabilities {
-        can_read: true,
-        can_write: false,
-        can_import: false,
-        can_watch: false,
-    });
+    assert_eq!(
+        adapter.capabilities(),
+        SourceCapabilities {
+            can_read: true,
+            can_write: false,
+            can_import: false,
+            can_watch: false,
+        }
+    );
 }
 
 #[test]
@@ -108,7 +116,10 @@ fn source_transport_fetches_raw_entities_and_default_mutation_reports_unsupporte
     assert!(transport.mutate("notes.md", "payload").is_ok());
 
     let unsupported = <ListTransport as SourceTransport>::mutate(
-        &ListTransport { entities: vec![], mutation: Err("unused".into()) },
+        &ListTransport {
+            entities: vec![],
+            mutation: Err("unused".into()),
+        },
         "locator",
         "payload",
     );
@@ -116,7 +127,9 @@ fn source_transport_fetches_raw_entities_and_default_mutation_reports_unsupporte
 
     let mut default_transport = NoMutationTransport;
     assert!(matches!(default_transport.fetch_raw(), Ok(items) if items.is_empty()));
-    assert!(matches!(default_transport.mutate("x", "y"), Err(TransportError::Other(msg)) if msg.contains("not supported")));
+    assert!(
+        matches!(default_transport.mutate("x", "y"), Err(TransportError::Other(msg)) if msg.contains("not supported"))
+    );
 }
 
 struct NoMutationTransport;
@@ -128,7 +141,10 @@ impl SourceTransport for NoMutationTransport {
 
 #[test]
 fn format_parser_supports_and_parses_entities_or_returns_parser_error() {
-    let parser = MimeParser { mime: "text/fake", fail: false };
+    let parser = MimeParser {
+        mime: "text/fake",
+        fail: false,
+    };
     assert!(parser.supports("text/fake"));
     assert!(!parser.supports("text/other"));
     let entity = RawEntity {
@@ -140,7 +156,10 @@ fn format_parser_supports_and_parses_entities_or_returns_parser_error() {
     assert_eq!(parsed.resources[0].source_id, "fake");
     assert_eq!(parsed.resources[0].locator, "virtual.fake");
 
-    let failing = MimeParser { mime: "text/fake", fail: true };
+    let failing = MimeParser {
+        mime: "text/fake",
+        fail: true,
+    };
     let error = failing.parse(&entity, "fake").unwrap_err();
     assert!(matches!(&error, ParserError::Format(msg) if msg == "parser exploded"));
     assert!(error.to_string().contains("Format parse error"));
@@ -166,7 +185,10 @@ fn composed_source_adapter_dispatches_parsers_and_supports_write_contract() {
     let mut adapter = ComposedSourceAdapter::new(
         config("fake", PathBuf::from("/space")),
         Box::new(transport),
-        vec![Box::new(MimeParser { mime: "text/fake", fail: false })],
+        vec![Box::new(MimeParser {
+            mime: "text/fake",
+            fail: false,
+        })],
     );
     let scanned = adapter.scan().unwrap();
     assert_eq!(scanned.source_id, "fake");
@@ -187,25 +209,36 @@ fn composed_source_adapter_dispatches_parsers_and_supports_write_contract() {
 fn composed_source_adapter_reports_unknown_mime_and_parser_errors() {
     let unknown = ComposedSourceAdapter::new(
         config("fake", PathBuf::from("/space")),
-        Box::new(ListTransport { entities: vec![RawEntity {
-            locator: "unknown.bin".into(),
-            mime_type: "application/unknown".into(),
-            payload: vec![],
-        }], mutation: Ok(()) }),
+        Box::new(ListTransport {
+            entities: vec![RawEntity {
+                locator: "unknown.bin".into(),
+                mime_type: "application/unknown".into(),
+                payload: vec![],
+            }],
+            mutation: Ok(()),
+        }),
         vec![],
     );
     let error = unknown.scan().unwrap_err();
-    assert!(matches!(&error, SourceError::ParserNotFound { source_id, mime, locator } if source_id == "fake" && mime == "application/unknown" && locator == "unknown.bin"));
+    assert!(
+        matches!(&error, SourceError::ParserNotFound { source_id, mime, locator } if source_id == "fake" && mime == "application/unknown" && locator == "unknown.bin")
+    );
     assert!(error.to_string().contains("no format parser"));
 
     let parser_error = ComposedSourceAdapter::new(
         config("fake", PathBuf::from("/space")),
-        Box::new(ListTransport { entities: vec![RawEntity {
-            locator: "bad.fake".into(),
-            mime_type: "text/fake".into(),
-            payload: vec![],
-        }], mutation: Ok(()) }),
-        vec![Box::new(MimeParser { mime: "text/fake", fail: true })],
+        Box::new(ListTransport {
+            entities: vec![RawEntity {
+                locator: "bad.fake".into(),
+                mime_type: "text/fake".into(),
+                payload: vec![],
+            }],
+            mutation: Ok(()),
+        }),
+        vec![Box::new(MimeParser {
+            mime: "text/fake",
+            fail: true,
+        })],
     );
     let error = parser_error.scan().unwrap_err();
     assert!(matches!(error, SourceError::Parse(msg) if msg.contains("parser exploded")));
@@ -219,14 +252,21 @@ fn composed_source_adapter_surfaces_transport_errors_and_unsupported_write_error
             Err(TransportError::Other("transport down".into()))
         }
     }
-    let adapter = ComposedSourceAdapter::new(config("bad", PathBuf::from("/space")), Box::new(FailingTransport), vec![]);
+    let adapter = ComposedSourceAdapter::new(
+        config("bad", PathBuf::from("/space")),
+        Box::new(FailingTransport),
+        vec![],
+    );
     let error = adapter.scan().unwrap_err();
     assert!(matches!(&error, SourceError::Other(msg) if msg.contains("transport down")));
     assert!(error.to_string().contains("Source error"));
 
     let adapter = ComposedSourceAdapter::new(
         config("read-only", PathBuf::from("/space")),
-        Box::new(ListTransport { entities: vec![], mutation: Err("denied".into()) }),
+        Box::new(ListTransport {
+            entities: vec![],
+            mutation: Err("denied".into()),
+        }),
         vec![],
     );
     let prep = adapter.prepare_write("x", "payload").unwrap();
@@ -239,7 +279,11 @@ fn native_source_adapter_scans_supported_files_deterministically_and_skips_hidde
     let dir = tempfile::tempdir().unwrap();
     std::fs::create_dir_all(dir.path().join(".hidden")).unwrap();
     std::fs::write(dir.path().join("b.md"), "# B").unwrap();
-    std::fs::write(dir.path().join("a.org"), "#+title: A\n#+ID: 01J00000000000000000000011\n").unwrap();
+    std::fs::write(
+        dir.path().join("a.org"),
+        "#+title: A\n#+ID: 01J00000000000000000000011\n",
+    )
+    .unwrap();
     std::fs::write(dir.path().join("ignored.txt"), "ignored").unwrap();
     std::fs::write(dir.path().join(".hidden/secret.md"), "# Secret").unwrap();
 
@@ -250,7 +294,11 @@ fn native_source_adapter_scans_supported_files_deterministically_and_skips_hidde
     let scanned = adapter.scan().unwrap();
     assert_eq!(scanned.source_id, "native");
     assert_eq!(scanned.resources.len(), 3);
-    let locators: Vec<_> = scanned.resources.iter().map(|r| r.locator.clone()).collect();
+    let locators: Vec<_> = scanned
+        .resources
+        .iter()
+        .map(|r| r.locator.clone())
+        .collect();
     assert!(locators[0] < locators[1]);
     assert!(locators.iter().all(|locator| !locator.contains("secret")));
 }

@@ -21,7 +21,8 @@ fn sample_resource(
         source_id: source_id.to_string(),
         locator: locator.to_string(),
         properties: BTreeMap::new(),
-        object_id: notez_core::domain::ObjectId::default(),
+        object_id: notez_core::domain::ObjectIdentity::default(),
+        primary_source_id: String::new(),
     }
 }
 

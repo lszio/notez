@@ -5,7 +5,7 @@
 //! from data passed in by the caller.
 
 use notez_core::domain::{Resource, ResourceKind, ResourceRef};
-use notez_core::preview::{default_catalog, PreviewContext, PreviewModel, PreviewerCatalog};
+use notez_core::preview::{PreviewContext, PreviewModel, PreviewerCatalog, default_catalog};
 
 fn make_ctx<'a>(
     bytes: &'static [u8],
@@ -22,7 +22,8 @@ fn make_ctx<'a>(
             source_id: "native".to_string(),
             locator: locator.to_string(),
             properties: Default::default(),
-            object_id: notez_core::domain::ObjectId::default(),
+            object_id: notez_core::domain::ObjectIdentity::default(),
+            primary_source_id: String::new(),
         },
         bytes: Some(bytes::Bytes::from_static(bytes)),
         mime: Some(mime.to_string()),

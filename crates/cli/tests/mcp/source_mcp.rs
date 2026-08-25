@@ -10,9 +10,9 @@ use notez_core::storage::SqliteProjection;
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn mcp_source_add_and_list() {
     let temp_dir = tempfile::tempdir().unwrap();
-    let space_root = temp_dir.path();
+    let source_root = temp_dir.path();
 
-    let vault_dir = space_root.join("vault");
+    let vault_dir = source_root.join("vault");
     fs::create_dir_all(&vault_dir).unwrap();
     fs::write(
         vault_dir.join("note.md"),
@@ -25,8 +25,8 @@ async fn mcp_source_add_and_list() {
 
     let requests = vec![
         initialize_request(1).to_string(),
-        json!({"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "source_add", "arguments": {"space": space_root.to_string_lossy(), "id": "vault", "kind": "obsidian", "path": vault_dir.to_string_lossy(), "read_only": true}}}).to_string(),
-        json!({"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {"name": "source_list", "arguments": {"space": space_root.to_string_lossy()}}}).to_string(),
+        json!({"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "source_add", "arguments": {"space": source_root.to_string_lossy(), "id": "vault", "kind": "obsidian", "path": vault_dir.to_string_lossy(), "read_only": true}}}).to_string(),
+        json!({"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {"name": "source_list", "arguments": {"space": source_root.to_string_lossy()}}}).to_string(),
     ];
 
     let responses = run_session(service, requests).await;

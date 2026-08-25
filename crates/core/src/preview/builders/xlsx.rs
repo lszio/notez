@@ -1,6 +1,8 @@
-use crate::preview::{PreviewContext, PreviewError, PreviewModel, Previewer, PreviewerCatalog, Sheet};
+use crate::preview::{
+    PreviewContext, PreviewError, PreviewModel, Previewer, PreviewerCatalog, Sheet,
+};
 use bytes::Bytes;
-use calamine::{open_workbook_auto, Reader};
+use calamine::{Reader, open_workbook_auto};
 use std::io::Write;
 
 /// Previewer for Excel (XLSX) attachments.

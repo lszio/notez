@@ -8,7 +8,7 @@ fn manifest_and_object_store_operations() {
     let store = ObjectStore::new(temp.path());
 
     let manifest = Manifest {
-        space_id: "space_123".to_string(),
+        source_id: "space_123".to_string(),
         actor_id: "actor_device_a".to_string(),
         parent_snapshots: vec!["snap_0".to_string()],
         logical_path: "note.org".to_string(),
@@ -22,7 +22,7 @@ fn manifest_and_object_store_operations() {
         .read_manifest("note.org")
         .unwrap()
         .expect("manifest should exist");
-    assert_eq!(loaded.space_id, "space_123");
+    assert_eq!(loaded.source_id, "space_123");
     assert_eq!(loaded.content_hash, "hash_abc123");
 
     let obj = SyncObject {

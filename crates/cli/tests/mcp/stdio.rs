@@ -10,9 +10,9 @@ use notez_core::storage::SqliteProjection;
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn mcp_stdio_jsonrpc_transcript() {
     let temp_dir = tempfile::tempdir().unwrap();
-    let space_root = temp_dir.path();
+    let source_root = temp_dir.path();
 
-    let file1 = space_root.join("file1.org");
+    let file1 = source_root.join("file1.org");
     fs::write(
         &file1,
         "#+title: MCP Test Doc\n#+ID: 01J00000000000000000000200\n* NEXT Sync mcp heading\n:PROPERTIES:\n:ID: 01J00000000000000000000201\n:END:\n",
@@ -20,7 +20,7 @@ async fn mcp_stdio_jsonrpc_transcript() {
 
     let store = SqliteProjection::in_memory().unwrap();
     let mut service = ApplicationService::new(store);
-    service.scan_native(space_root).unwrap();
+    service.scan_native(source_root).unwrap();
 
     let requests = vec![
         initialize_request(1).to_string(),
@@ -91,9 +91,9 @@ async fn mcp_stdio_handshake_state_dropped() {
     // -> tools/call and verifies the tool call returns data, proving the
     // handshake state machine is gone.
     let temp_dir = tempfile::tempdir().unwrap();
-    let space_root = temp_dir.path();
+    let source_root = temp_dir.path();
 
-    let file = space_root.join("note.org");
+    let file = source_root.join("note.org");
     fs::write(
         &file,
         "#+title: Handshake Drop Test\n#+ID: 01J00000000000000000000900\n",
@@ -102,7 +102,7 @@ async fn mcp_stdio_handshake_state_dropped() {
 
     let store = SqliteProjection::in_memory().unwrap();
     let mut service = ApplicationService::new(store);
-    service.scan_native(space_root).unwrap();
+    service.scan_native(source_root).unwrap();
 
     let requests = vec![
         initialize_request(1).to_string(),

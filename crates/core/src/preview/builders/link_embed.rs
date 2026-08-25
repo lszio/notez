@@ -1,5 +1,5 @@
-use crate::preview::{PreviewContext, PreviewError, PreviewModel, Previewer};
 use crate::domain::{Resource, ResourceKind, ResourceRef};
+use crate::preview::{PreviewContext, PreviewError, PreviewModel, Previewer};
 use std::collections::BTreeMap;
 
 /// Previewer that renders a linked-target resource as a child preview.
@@ -29,7 +29,6 @@ use std::collections::BTreeMap;
 pub struct LinkEmbedPreviewer;
 
 impl Previewer for LinkEmbedPreviewer {
-
     fn id(&self) -> &'static str {
         "link_embed"
     }
@@ -53,25 +52,22 @@ impl Previewer for LinkEmbedPreviewer {
         // from the ref. We then move it directly into the child context and
         // re-borrow it for the returned `target` field — avoiding a second
         // clone of the (potentially large) `Resource` value.
-        let target_resource = if let Some(sibling) = ctx
-            .siblings
-            .iter()
-            .find(|r| r.r#ref == target_ref)
-            .cloned()
-        {
-            sibling
-        } else {
-            Resource {
-                r#ref: target_ref.clone(),
-                kind: ResourceKind::Document,
-                title: target_ref.to_string(),
-                revision: String::new(),
-                source_id: ctx.resource.source_id.clone(),
-                locator: target_ref.to_string(),
-                properties: BTreeMap::new(),
-                object_id: crate::domain::derived_object_id("", "", ""),
-            }
-        };
+        let target_resource =
+            if let Some(sibling) = ctx.siblings.iter().find(|r| r.r#ref == target_ref).cloned() {
+                sibling
+            } else {
+                Resource {
+                    r#ref: target_ref.clone(),
+                    kind: ResourceKind::Document,
+                    title: target_ref.to_string(),
+                    revision: String::new(),
+                    source_id: ctx.resource.source_id.clone(),
+                    locator: target_ref.to_string(),
+                    properties: BTreeMap::new(),
+                    object_id: crate::domain::derived_object_id("", "", ""),
+                    primary_source_id: String::new(),
+                }
+            };
 
         let child_locator = std::path::PathBuf::from(target_resource.locator.clone());
         let child_ctx = PreviewContext {

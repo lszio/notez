@@ -11,7 +11,8 @@ fn sample(kind: ResourceKind, ulid_str: &str, title: &str, source_id: &str, revi
         source_id: source_id.to_string(),
         locator: format!("/path/{title}.org"),
         properties: BTreeMap::new(),
-        object_id: notez_core::domain::ObjectId::default(),
+        object_id: notez_core::domain::ObjectIdentity::default(),
+        primary_source_id: String::new(),
     }
 }
 

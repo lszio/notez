@@ -25,7 +25,11 @@ impl FormatParser for PlainParser {
     fn supports(&self, mime: &str) -> bool {
         mime == "text/plain"
     }
-    fn parse(&self, _entity: &RawEntity, _source_id: &str) -> Result<ParsedEntity, notez_core::source::ParserError> {
+    fn parse(
+        &self,
+        _entity: &RawEntity,
+        _source_id: &str,
+    ) -> Result<ParsedEntity, notez_core::source::ParserError> {
         Ok(ParsedEntity {
             resources: vec![],
             relations: vec![],
@@ -77,18 +81,35 @@ impl notez_core::domain::ProjectionStore for CountingStore {
         Ok(None)
     }
     fn query(&self, _selector: &Selector) -> Result<notez_core::domain::QueryPage, Self::Error> {
-        Ok(notez_core::domain::QueryPage { items: vec![], next_cursor: None })
+        Ok(notez_core::domain::QueryPage {
+            items: vec![],
+            next_cursor: None,
+        })
     }
     fn clear(&mut self) -> Result<(), Self::Error> {
         Ok(())
     }
     fn upsert_resource(&mut self, resource: &Resource) -> Result<(), Self::Error> {
-        self.upserts.lock().unwrap().push(resource.r#ref.to_string());
+        self.upserts
+            .lock()
+            .unwrap()
+            .push(resource.r#ref.to_string());
         Ok(())
     }
     fn delete_resource(&mut self, r_ref: &ResourceRef) -> Result<(), Self::Error> {
         self.deletes.lock().unwrap().push(r_ref.to_string());
         Ok(())
+    }
+    fn replace_conflicts(
+        &mut self,
+        records: &[notez_core::domain::ConflictRecord],
+    ) -> Result<(), Self::Error> {
+        notez_core::domain::ProjectionStore::replace_conflicts(&mut self.base, records)
+            .map_err(|e| CountingError(e.to_string()))
+    }
+    fn list_conflicts(&self) -> Result<Vec<notez_core::domain::ConflictRecord>, Self::Error> {
+        notez_core::domain::ProjectionStore::list_conflicts(&self.base)
+            .map_err(|e| CountingError(e.to_string()))
     }
 }
 
@@ -117,11 +138,15 @@ fn projection_store_does_not_provide_silent_upsert_noop() {
         source_id: "native".to_string(),
         locator: "/space/single.org".to_string(),
         properties: BTreeMap::new(),
-        object_id: notez_core::domain::ObjectId::default(),
+        object_id: notez_core::domain::ObjectIdentity::default(),
+        primary_source_id: String::new(),
     };
     ProjectionStore::upsert_resource(&mut store, &res).unwrap();
     let got = ProjectionStore::get(&store, &r_ref).unwrap();
-    assert!(got.is_some(), "SqliteProjection must persist upsert_resource calls");
+    assert!(
+        got.is_some(),
+        "SqliteProjection must persist upsert_resource calls"
+    );
 }
 
 #[test]
@@ -140,7 +165,8 @@ fn upserting_one_resource_preserves_sibling_resources() {
         source_id: "native".to_string(),
         locator: format!("/space/{title}.org"),
         properties: BTreeMap::new(),
-        object_id: notez_core::domain::ObjectId::default(),
+        object_id: notez_core::domain::ObjectIdentity::default(),
+        primary_source_id: String::new(),
     };
 
     use notez_core::domain::ProjectionStore;
@@ -152,7 +178,13 @@ fn upserting_one_resource_preserves_sibling_resources() {
     a_updated.revision = "r2".to_string();
     ProjectionStore::upsert_resource(&mut store, &a_updated).unwrap();
 
-    assert_eq!(ProjectionStore::get(&store, &a_ref).unwrap().unwrap().revision, "r2");
+    assert_eq!(
+        ProjectionStore::get(&store, &a_ref)
+            .unwrap()
+            .unwrap()
+            .revision,
+        "r2"
+    );
     assert!(ProjectionStore::get(&store, &b_ref).unwrap().is_some());
 }
 
@@ -190,13 +222,19 @@ fn composed_source_adapter_does_not_silently_succeed_without_write_capability() 
         config: build_config(),
     };
     let prep = adapter.prepare_write("doc:1", "payload");
-    assert!(prep.is_err(), "adapter without write capability must reject prepare_write");
+    assert!(
+        prep.is_err(),
+        "adapter without write capability must reject prepare_write"
+    );
     let commit = adapter.commit_write(&PreparedWrite {
         target_ref: "doc:1".to_string(),
         payload: "payload".to_string(),
         ready: true,
     });
-    assert!(commit.is_err(), "commit must also fail when capability is false");
+    assert!(
+        commit.is_err(),
+        "commit must also fail when capability is false"
+    );
 }
 
 #[test]
@@ -219,11 +257,8 @@ fn composed_source_adapter_rejects_write_when_read_only() {
         include_paths: vec![],
         exclude_paths: vec![],
     };
-    let transport = ComposedSourceAdapter::new(
-        cfg,
-        Box::new(FailingTransport),
-        vec![Box::new(PlainParser)],
-    );
+    let transport =
+        ComposedSourceAdapter::new(cfg, Box::new(FailingTransport), vec![Box::new(PlainParser)]);
     let err = transport
         .commit_write(&PreparedWrite {
             target_ref: "doc:1".to_string(),
@@ -249,8 +284,14 @@ impl notez_core::source::SourceTransport for FailingTransport {
     fn fetch_raw(&self) -> Result<Vec<RawEntity>, notez_core::source::TransportError> {
         Ok(vec![])
     }
-    fn mutate(&self, _locator: &str, _payload: &str) -> Result<(), notez_core::source::TransportError> {
-        Err(notez_core::source::TransportError::Other("read-only".into()))
+    fn mutate(
+        &self,
+        _locator: &str,
+        _payload: &str,
+    ) -> Result<(), notez_core::source::TransportError> {
+        Err(notez_core::source::TransportError::Other(
+            "read-only".into(),
+        ))
     }
 }
 

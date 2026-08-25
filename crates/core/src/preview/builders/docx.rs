@@ -28,9 +28,9 @@
 
 use crate::preview::{DocxParagraph, PreviewContext, PreviewError, PreviewModel, Previewer};
 use bytes::Bytes;
+use quick_xml::Reader;
 use quick_xml::events::Event;
 use quick_xml::name::QName;
-use quick_xml::Reader;
 use std::io::{Cursor, Read};
 use zip::ZipArchive;
 
@@ -47,9 +47,8 @@ impl Previewer for DocxPreviewer {
 
     fn matches(&self, ctx: &PreviewContext) -> bool {
         ctx.locator.to_string_lossy().ends_with(".docx")
-            || ctx.mime.as_deref() == Some(
-                "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-            )
+            || ctx.mime.as_deref()
+                == Some("application/vnd.openxmlformats-officedocument.wordprocessingml.document")
     }
 
     fn render(&self, ctx: &PreviewContext) -> Result<PreviewModel, PreviewError> {
@@ -67,8 +66,8 @@ impl Previewer for DocxPreviewer {
 
 /// Open the DOCX zip and read `word/document.xml` into a UTF-8 string.
 fn read_document_xml(bytes: &[u8]) -> Result<String, PreviewError> {
-    let mut archive =
-        ZipArchive::new(Cursor::new(bytes)).map_err(|e| PreviewError::Extraction(format!("docx zip: {e}")))?;
+    let mut archive = ZipArchive::new(Cursor::new(bytes))
+        .map_err(|e| PreviewError::Extraction(format!("docx zip: {e}")))?;
 
     let mut entry = archive
         .by_name("word/document.xml")
@@ -262,6 +261,7 @@ mod tests {
             locator: locator.to_string_lossy().into_owned(),
             properties: BTreeMap::new(),
             object_id: Default::default(),
+            primary_source_id: String::new(),
         };
         PreviewContext {
             resource,
@@ -317,6 +317,7 @@ mod tests {
             locator: String::from("file.docx"),
             properties: BTreeMap::new(),
             object_id: Default::default(),
+            primary_source_id: String::new(),
         };
         let c = PreviewContext {
             resource,

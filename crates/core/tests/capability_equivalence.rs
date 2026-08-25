@@ -97,11 +97,9 @@ fn register_capability_then_capabilities_json_observes_insertion() {
     let after = facade.capabilities_json();
     let entries = after.as_array().expect("array");
     assert_eq!(entries.len(), 10);
-    assert!(entries
-        .iter()
-        .any(|e| e["id"] == "custom_metrics"
-            && e["description"] == "third-party metrics export"
-            && e["mutability"] == "read"));
+    assert!(entries.iter().any(|e| e["id"] == "custom_metrics"
+        && e["description"] == "third-party metrics export"
+        && e["mutability"] == "read"));
 }
 
 #[test]

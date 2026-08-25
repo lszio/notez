@@ -166,7 +166,7 @@ pub fn ListPage(encoded: String, query: ListQuery) -> Element {
             div { class: "controls-wrapper", style: "display:flex; gap:1rem; align-items:center; width:100%; flex-wrap:wrap;",
                 form {
                     class: "controls",
-                    action: format!("/space/{}/list", encoded),
+                    action: format!("/source/{}/list", encoded),
                     style: "flex:1; display:flex; gap:0.6rem; align-items:center;",
                     div { class: "control",
                         span { class: "control-label", "find" }
@@ -230,11 +230,11 @@ pub fn ListPage(encoded: String, query: ListQuery) -> Element {
                 div { class: "control",
                     form {
                         class: "control-form",
-                        action: "/api/spaces/scan",
+                        action: "/api/sources/scan",
                         method: "post",
                         input {
                             r#type: "hidden",
-                            name: "space_root",
+                            name: "source_root",
                             value: "{active_path_for_forms.clone().unwrap_or_default()}",
                         }
                         button {
@@ -247,11 +247,11 @@ pub fn ListPage(encoded: String, query: ListQuery) -> Element {
                 div { class: "control",
                     form {
                         class: "control-form",
-                        action: "/api/spaces/watch/start",
+                        action: "/api/sources/watch/start",
                         method: "post",
                         input {
                             r#type: "hidden",
-                            name: "space_root",
+                            name: "source_root",
                             value: "{active_path_for_forms.clone().unwrap_or_default()}",
                         }
                         button {
@@ -318,7 +318,7 @@ fn WatchPanel(active_path: Option<String>) -> Element {
             div { class: "watch-head",
                 span { class: "watch-label", "watch" }
                 form {
-                    action: "/api/spaces/watch/stop",
+                    action: "/api/sources/watch/stop",
                     method: "post",
                     input { r#type: "hidden", name: "path", value: "{path_str}" }
                     button { r#type: "submit", "stop watching" }
@@ -332,7 +332,7 @@ fn WatchPanel(active_path: Option<String>) -> Element {
 #[component]
 fn ResultRow(row: ResourceRow, current: String) -> Element {
     let ref_link = format!(
-        "/space/{}/resource/{}",
+        "/source/{}/resource/{}",
         current,
         encode_space(&row.ref_str)
     );

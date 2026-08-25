@@ -136,6 +136,7 @@ fn ctx<'a>(
         locator: locator.to_string_lossy().into_owned(),
         properties: BTreeMap::new(),
         object_id: Default::default(),
+        primary_source_id: String::new(),
     };
     PreviewContext {
         resource,
@@ -156,12 +157,7 @@ mod tests {
     #[test]
     fn matches_csv_locator() {
         let cat = PreviewerCatalog::new();
-        let c = ctx(
-            b"a,b\n1,2\n",
-            PathBuf::from("data.csv"),
-            "text/plain",
-            &cat,
-        );
+        let c = ctx(b"a,b\n1,2\n", PathBuf::from("data.csv"), "text/plain", &cat);
         assert!(CsvTsvPreviewer.matches(&c));
     }
 
@@ -263,6 +259,7 @@ mod tests {
             locator: String::from("data.csv"),
             properties: BTreeMap::new(),
             object_id: Default::default(),
+            primary_source_id: String::new(),
         };
         let c = PreviewContext {
             resource,

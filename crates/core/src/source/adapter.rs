@@ -11,7 +11,9 @@ pub enum SourceError {
     Document(#[from] crate::document::OrgDocumentError),
     #[error("Markdown document error: {0}")]
     MarkdownDocument(#[from] crate::document::MarkdownDocumentError),
-    #[error("no format parser registered for MIME `{mime}` from source `{source_id}` at `{locator}`")]
+    #[error(
+        "no format parser registered for MIME `{mime}` from source `{source_id}` at `{locator}`"
+    )]
     ParserNotFound {
         source_id: String,
         mime: String,
@@ -56,7 +58,7 @@ impl serde::Serialize for SourceKind {
     }
 }
 
- impl<'de> serde::Deserialize<'de> for SourceKind {
+impl<'de> serde::Deserialize<'de> for SourceKind {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: serde::Deserializer<'de>,
@@ -172,6 +174,34 @@ pub trait SourceAdapter {
             "write not supported by this source adapter".into(),
         ))
     }
+
+    /// Whether `path` is this adapter's native location syntax (a file
+    /// path, a `file://` URL, `notez://object/…`, a Notion URL, a Jira
+    /// key, etc.). Defaults to `false`; adapters override to claim their
+    /// own path forms.
+    fn recognizes_path(&self, path: &str) -> bool {
+        let _ = path;
+        false
+    }
+
+    /// Resolve an adapter-native path to an object identity. Returns
+    /// `Ok(None)` when `path` is not this adapter's form; `Err` when it
+    /// is this adapter's form but cannot be resolved.
+    fn resolve_path(
+        &self,
+        path: &str,
+    ) -> Result<Option<crate::domain::ObjectIdentity>, SourceError> {
+        let _ = path;
+        Ok(None)
+    }
+
+    /// Render an object identity back to this adapter's canonical path
+    /// form. Returns `None` when the identity does not belong to this
+    /// adapter's authority.
+    fn render_path(&self, identity: &crate::domain::ObjectIdentity) -> Option<String> {
+        let _ = identity;
+        None
+    }
 }
 
 use crate::source::protocol::{FormatParser, SourceTransport};
@@ -248,11 +278,7 @@ impl SourceAdapter for ComposedSourceAdapter {
         }
     }
 
-    fn prepare_write(
-        &self,
-        target_ref: &str,
-        payload: &str,
-    ) -> Result<PreparedWrite, SourceError> {
+    fn prepare_write(&self, target_ref: &str, payload: &str) -> Result<PreparedWrite, SourceError> {
         Ok(PreparedWrite {
             target_ref: target_ref.to_string(),
             payload: payload.to_string(),

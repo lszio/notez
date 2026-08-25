@@ -6,8 +6,8 @@ use crate::storage::SqliteProjection;
 #[test]
 fn inspect_rules_and_evaluation() {
     let temp_dir = tempfile::tempdir().unwrap();
-    let space_root = temp_dir.path();
-    let file = space_root.join("project.org");
+    let source_root = temp_dir.path();
+    let file = source_root.join("project.org");
     let content = r#"#+title: Alpha Project
 #+ID: 01J00000000000000000000500
 
@@ -21,7 +21,7 @@ fn inspect_rules_and_evaluation() {
 
     let store = SqliteProjection::in_memory().unwrap();
     let mut service = ApplicationService::new(store);
-    service.scan_native(space_root).unwrap();
+    service.scan_native(source_root).unwrap();
 
     let r_ref = ResourceRef::parse("heading:01J00000000000000000000501").unwrap();
     let inspect_res = service

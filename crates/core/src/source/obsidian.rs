@@ -1,5 +1,5 @@
-use crate::source::adapter::{ScannedSource, SourceAdapter, SourceConfig, SourceError};
 use crate::document::MarkdownScanner;
+use crate::source::adapter::{ScannedSource, SourceAdapter, SourceConfig, SourceError};
 use std::path::PathBuf;
 use walkdir::WalkDir;
 

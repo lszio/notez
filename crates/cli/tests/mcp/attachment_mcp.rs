@@ -10,21 +10,21 @@ use notez_core::storage::SqliteProjection;
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn mcp_attachment_add_extract_and_query_segments() {
     let temp_dir = tempfile::tempdir().unwrap();
-    let space_root = temp_dir.path();
+    let source_root = temp_dir.path();
 
-    let file_path = space_root.join("mcp_sample.txt");
+    let file_path = source_root.join("mcp_sample.txt");
     fs::write(&file_path, "MCP attachment content for extraction testing.").unwrap();
 
     let store = SqliteProjection::in_memory().unwrap();
     let mut service = ApplicationService::new(store);
 
     let att_ref = service
-        .add_attachment(space_root, &file_path, "text/plain")
+        .add_attachment(source_root, &file_path, "text/plain")
         .unwrap();
 
     let requests = vec![
         initialize_request(1).to_string(),
-        json!({"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "attachment_extract", "arguments": {"space": space_root.to_string_lossy(), "ref": att_ref.to_string()}}}).to_string(),
+        json!({"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "attachment_extract", "arguments": {"space": source_root.to_string_lossy(), "ref": att_ref.to_string()}}}).to_string(),
         json!({"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {"name": "query_segments", "arguments": {"ref": att_ref.to_string()}}}).to_string(),
     ];
 

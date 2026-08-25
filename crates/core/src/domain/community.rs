@@ -2,12 +2,17 @@ use crate::domain::query::Selector;
 use crate::domain::resource::{Resource, ResourceRef};
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct Community {
+    #[serde(default)]
     pub id: String,
+    #[serde(default)]
     pub name: String,
+    #[serde(default)]
     pub selector: Selector,
+    #[serde(default)]
     pub pinned_members: Vec<ResourceRef>,
+    #[serde(default)]
     pub excluded_members: Vec<ResourceRef>,
 }
 

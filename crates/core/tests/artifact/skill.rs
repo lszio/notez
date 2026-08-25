@@ -16,7 +16,8 @@ fn compile_skill_ir_and_export_skill_package() {
         source_id: "native".to_string(),
         locator: "/path/skill.org".to_string(),
         properties: BTreeMap::new(),
-        object_id: notez_core::domain::ObjectId::default(),
+        object_id: notez_core::domain::ObjectIdentity::default(),
+        primary_source_id: String::new(),
     };
 
     let resources = vec![res1];

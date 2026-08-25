@@ -108,7 +108,7 @@ pub struct WatchEvent {
 /// to the UI for the "watching / not watching" badge.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct WatchStatus {
-    pub space_root: PathBuf,
+    pub root: PathBuf,
     pub started_at: SystemTime,
     pub event_count: usize,
 }
@@ -117,7 +117,7 @@ pub struct WatchStatus {
 /// map; dropping it drops the `notify::RecommendedWatcher` which
 /// detaches from the kernel.
 struct WatchHandle {
-    space_root: PathBuf,
+    root: PathBuf,
     started_at: SystemTime,
     /// `notify` watcher; keep alive for as long as the watch is
     /// active. Dropping it stops the OS-level watch.
@@ -142,19 +142,21 @@ pub struct WatchService {
 impl WatchService {
     /// Construct an empty `WatchService`.
     pub fn new() -> Arc<Self> {
-        Arc::new(Self { handles: Mutex::new(HashMap::new()) })
+        Arc::new(Self {
+            handles: Mutex::new(HashMap::new()),
+        })
     }
 
-    /// Start watching `space_root` recursively.
+    /// Start watching `source_root` recursively.
     ///
     /// Returns the wall-clock start time of the watch. Errors when
     /// the path is missing, not a directory, or a watch is already
     /// running for that path.
-    pub fn start(self: &Arc<Self>, space_root: &Path) -> Result<SystemTime, WatchError> {
-        let canonical = match std::fs::canonicalize(space_root) {
+    pub fn start(self: &Arc<Self>, source_root: &Path) -> Result<SystemTime, WatchError> {
+        let canonical = match std::fs::canonicalize(source_root) {
             Ok(p) => p,
             Err(_) => {
-                return Err(WatchError::NotADirectory(space_root.display().to_string()));
+                return Err(WatchError::NotADirectory(source_root.display().to_string()));
             }
         };
         if !canonical.is_dir() {
@@ -168,7 +170,7 @@ impl WatchService {
 
         let started_at = SystemTime::now();
         let mut handle = WatchHandle {
-            space_root: canonical.clone(),
+            root: canonical.clone(),
             started_at,
             _watcher: build_watcher(self.clone())?,
             events: VecDeque::with_capacity(EVENT_BUFFER.min(64)),
@@ -183,21 +185,25 @@ impl WatchService {
     }
 
     /// Stop watching a space. Returns `true` if a watch was running.
-    pub fn stop(&self, space_root: &Path) -> bool {
-        let key = match std::fs::canonicalize(space_root) {
+    pub fn stop(&self, source_root: &Path) -> bool {
+        let key = match std::fs::canonicalize(source_root) {
             Ok(p) => p,
-            Err(_) => space_root.to_path_buf(),
+            Err(_) => source_root.to_path_buf(),
         };
-        self.handles.lock().expect("watch handles poisoned").remove(&key).is_some()
+        self.handles
+            .lock()
+            .expect("watch handles poisoned")
+            .remove(&key)
+            .is_some()
     }
 
     /// Status snapshot for a space. `None` if no watch is running.
-    pub fn status(&self, space_root: &Path) -> Option<WatchStatus> {
-        let key = self.lookup_key(space_root)?;
+    pub fn status(&self, source_root: &Path) -> Option<WatchStatus> {
+        let key = self.lookup_key(source_root)?;
         let handles = self.handles.lock().expect("watch handles poisoned");
         let h = handles.get(&key)?;
         Some(WatchStatus {
-            space_root: h.space_root.clone(),
+            root: h.root.clone(),
             started_at: h.started_at,
             event_count: h.events.len(),
         })
@@ -205,8 +211,8 @@ impl WatchService {
 
     /// The most recent `limit` events, oldest first. Returns an
     /// empty vec when no watch is running.
-    pub fn events(&self, space_root: &Path, limit: usize) -> Vec<WatchEvent> {
-        let Some(key) = self.lookup_key(space_root) else {
+    pub fn events(&self, source_root: &Path, limit: usize) -> Vec<WatchEvent> {
+        let Some(key) = self.lookup_key(source_root) else {
             return Vec::new();
         };
         let handles = self.handles.lock().expect("watch handles poisoned");
@@ -230,7 +236,7 @@ impl WatchService {
             .expect("watch handles poisoned")
             .values()
             .map(|h| WatchStatus {
-                space_root: h.space_root.clone(),
+                root: h.root.clone(),
                 started_at: h.started_at,
                 event_count: h.events.len(),
             })
@@ -332,7 +338,7 @@ mod tests {
         let svc = WatchService::new();
         let t0 = svc.start(dir.path()).expect("start");
         let status = svc.status(dir.path()).expect("status");
-        assert_eq!(status.space_root, fs::canonicalize(dir.path()).unwrap());
+        assert_eq!(status.root, fs::canonicalize(dir.path()).unwrap());
         assert_eq!(status.started_at, t0);
         assert_eq!(status.event_count, 0);
         assert!(svc.stop(dir.path()));
@@ -386,7 +392,10 @@ mod tests {
         // notify's event timing is OS-dependent; the test asserts
         // non-empty rather than exact contents so it doesn't flake
         // under heavy CI load.
-        assert!(!recent.is_empty(), "expected at least one event from create+remove");
+        assert!(
+            !recent.is_empty(),
+            "expected at least one event from create+remove"
+        );
         svc.stop(dir.path());
     }
 }

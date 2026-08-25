@@ -1,10 +1,8 @@
-use crate::config::model::ConfigError;
-use crate::config::{ConfigPaths, SelectedSpace, RuntimeConfig, SpaceConfig, GlobalConfig};
+use notez_core::config::merge::resolve_source_runtime;
+use notez_core::config::{ConfigPaths, GlobalConfig, SelectedSource, SourceConfig};
 use std::collections::BTreeMap;
 use std::ffi::OsString;
-
-// We need an origin enum inside the crate. We can test effective values via
-// RuntimeConfig fields since they are built via merge.
+use std::path::PathBuf;
 
 fn env_with(vars: &[(&str, &str)]) -> BTreeMap<String, OsString> {
     vars.iter()
@@ -13,56 +11,57 @@ fn env_with(vars: &[(&str, &str)]) -> BTreeMap<String, OsString> {
 }
 
 #[test]
-fn runtime_config_merges_global_and_space() {
-    let global_text = r#"
-version = 1
-default_space = "personal"
-
-[preferences]
-output = "json"
-log_level = "info"
-"#;
-    let space_text = r#"
-version = 1
-[space]
+fn runtime_config_merges_global_and_source() {
+    let global = GlobalConfig {
+        version: 2,
+        default_source: Some("personal".into()),
+        sources: Default::default(),
+        preferences: notez_core::config::Preferences {
+            output: "json".into(),
+            log_level: "info".into(),
+        },
+    };
+    let source_cfg_text = r#"
+version = 2
+[source]
 name = "personal"
 database = ".notez/index.sqlite"
 [workflow]
 todo = ["A"]
 done = ["B"]
 "#;
-    let global = GlobalConfig::parse(global_text).unwrap();
-    let space = SpaceConfig::parse(space_text).unwrap();
-    
-    let mut paths = ConfigPaths {
-        global: "/config".into(),
-        cwd: "/cwd".into(),
+    let source_cfg = SourceConfig::parse(source_cfg_text).unwrap();
+
+    let paths = ConfigPaths {
+        global: PathBuf::from("/config"),
+        cwd: PathBuf::from("/cwd"),
         global_config: Some(global),
-        space_config: None,
+        source_config: None,
     };
-    
-    let sel = SelectedSpace {
-        space_name: "personal".into(),
-        space_root: "/space".into(),
-        space_config_path: "/space/notez.toml".into(),
+
+    let sel = SelectedSource {
+        source_name: "personal".into(),
+        root: PathBuf::from("/source"),
+        source_config_path: PathBuf::from("/source/notez.toml"),
         registration: None,
-        space_config: space,
+        source_config: source_cfg,
     };
-    
-    // We expect a merge function that takes global, space, env, and cli.
-    // For now we test via load_runtime_config (to be implemented).
+
     let env = env_with(&[("NOTEZ_LOG_LEVEL", "debug")]);
     let cli_output = Some("human".to_string());
-    
-    let rc = config::load_runtime_config(&paths, &sel, &env, cli_output).unwrap();
-    
-    // Preferences: output overridden by CLI, log_level overridden by env
+
+    let rc = resolve_source_runtime(&paths, &sel, &env, cli_output).unwrap();
+
+    // Preferences: output overridden by CLI, log_level overridden by env.
     assert_eq!(rc.preferences.output, "human");
     assert_eq!(rc.preferences.log_level, "debug");
-    
-    // Database resolved relative to space_root
-    assert_eq!(rc.database, std::path::PathBuf::from("/space/.notez/index.sqlite"));
-    
-    // Workflow from space
-    assert_eq!(rc.workflow.todo, vec!["A"]);
+
+    // Database resolved relative to the source root.
+    assert_eq!(
+        rc.config.source.database,
+        PathBuf::from("/source/.notez/index.sqlite")
+    );
+
+    // Workflow from the on-disk source config.
+    assert_eq!(rc.config.workflow.todo, vec!["A"]);
 }
