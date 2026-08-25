@@ -1,0 +1,15 @@
+[package]
+name = "composition"
+version = "0.1.0"
+edition = "2024"
+description = "notez composition root: one place wires space selection, runtime config, storage and format parsers"
+
+[lib]
+name = "notez_composition"
+path = "src/lib.rs"
+
+[dependencies]
+core       = { path = "../core" }
+orgmode    = { path = "../adapters/orgmode" }
+markdown   = { path = "../adapters/markdown" }
+thiserror  = { workspace = true }

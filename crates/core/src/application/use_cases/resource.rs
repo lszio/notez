@@ -1,9 +1,7 @@
 //! Resource use case: single-resource CRUD and lookup helpers.
 
 use crate::application::{ApplicationError, ResolveResult};
-use crate::domain::{
-    QueryPage, Resource, ResourceRef, Selector,
-};
+use crate::domain::{QueryPage, Resource, ResourceRef, Selector};
 
 pub trait ResourceUseCase {
     fn upsert_resource(&mut self, resource: Resource) -> Result<(), ApplicationError>;

@@ -1,16 +1,19 @@
+use crate::config::SourceInstanceConfig;
 use serde::{Deserialize, Serialize};
-use crate::source::SourceConfig;
 use std::fs;
 use std::path::Path;
 
+/// Per-source persistent cache of registered source instances, written
+/// to `<source_root>/.notez/sources.json`. Used by `notez source add/list/remove`
+/// to track source bindings without rewriting the parent `notez.toml`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
-pub struct SpaceSourcesConfig {
-    pub sources: Vec<SourceConfig>,
+pub struct SourceInstancesCache {
+    pub sources: Vec<SourceInstanceConfig>,
 }
 
-impl SpaceSourcesConfig {
-    pub fn load(space_root: &Path) -> Result<Self, std::io::Error> {
-        let config_path = space_root.join(".notez/sources.json");
+impl SourceInstancesCache {
+    pub fn load(source_root: &Path) -> Result<Self, std::io::Error> {
+        let config_path = source_root.join(".notez/sources.json");
         if !config_path.exists() {
             return Ok(Self::default());
         }
@@ -19,8 +22,8 @@ impl SpaceSourcesConfig {
         Ok(cfg)
     }
 
-    pub fn save(&self, space_root: &Path) -> Result<(), std::io::Error> {
-        let dot_notez = space_root.join(".notez");
+    pub fn save(&self, source_root: &Path) -> Result<(), std::io::Error> {
+        let dot_notez = source_root.join(".notez");
         if !dot_notez.exists() {
             fs::create_dir_all(&dot_notez)?;
         }

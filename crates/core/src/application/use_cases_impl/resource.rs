@@ -3,39 +3,37 @@
 //! Method bodies were previously inlined in `service.rs`; this file
 //! is part of the 0.5.x-A1+A3 use-case impl split.
 
-use crate::application::service::{ApplicationError, ApplicationFacade, ResolveResult, StorageErrorKind};
-use crate::application::write_check;
+use crate::application::service::{
+    ApplicationError, ApplicationFacade, ResolveResult, StorageErrorKind,
+};
 use crate::application::use_cases::ResourceUseCase;
+use crate::application::write_check;
 use crate::domain::{
     LinkOccurrence, ProjectionStore, QueryPage, ResolutionStatus, Resource, ResourceKind,
     ResourceRef, Selector,
 };
 
 impl<S: ProjectionStore> ResourceUseCase for ApplicationFacade<S> {
-    fn upsert_resource(
-        &mut self,
-        resource: Resource,
-    ) -> Result<(), ApplicationError> {
+    fn upsert_resource(&mut self, resource: Resource) -> Result<(), ApplicationError> {
         write_check::check_capability(self, "resource")?;
         write_check::check_address_uniqueness(
             self,
-            &crate::domain::ResourceAddress::Ref { r#ref: resource.r#ref },
+            &crate::domain::ResourceAddress::Ref {
+                r#ref: resource.r#ref,
+            },
             &resource.r#ref,
         )?;
 
         self.store
             .upsert_resource(&resource)
             .map_err(|e| ApplicationError::Storage {
-                    kind: StorageErrorKind::Sqlite,
-                    message: e.to_string(),
-                })?;
+                kind: StorageErrorKind::Sqlite,
+                message: e.to_string(),
+            })?;
         Ok(())
     }
 
-    fn delete_resource(
-        &mut self,
-        r_ref: &ResourceRef,
-    ) -> Result<(), ApplicationError> {
+    fn delete_resource(&mut self, r_ref: &ResourceRef) -> Result<(), ApplicationError> {
         write_check::check_address_uniqueness(
             self,
             &crate::domain::ResourceAddress::Ref { r#ref: *r_ref },
@@ -46,9 +44,9 @@ impl<S: ProjectionStore> ResourceUseCase for ApplicationFacade<S> {
         self.store
             .delete_resource(r_ref)
             .map_err(|e| ApplicationError::Storage {
-                    kind: StorageErrorKind::Sqlite,
-                    message: e.to_string(),
-                })?;
+                kind: StorageErrorKind::Sqlite,
+                message: e.to_string(),
+            })?;
         Ok(())
     }
 
@@ -56,31 +54,28 @@ impl<S: ProjectionStore> ResourceUseCase for ApplicationFacade<S> {
         self.store
             .query(selector)
             .map_err(|e| ApplicationError::Storage {
-                    kind: StorageErrorKind::Sqlite,
-                    message: e.to_string(),
-                })
+                kind: StorageErrorKind::Sqlite,
+                message: e.to_string(),
+            })
     }
 
     fn read(&self, r_ref: &ResourceRef) -> Result<Option<Resource>, ApplicationError> {
         self.store
             .get(r_ref)
             .map_err(|e| ApplicationError::Storage {
-                    kind: StorageErrorKind::Sqlite,
-                    message: e.to_string(),
-                })
+                kind: StorageErrorKind::Sqlite,
+                message: e.to_string(),
+            })
     }
 
-    fn list_recent(
-        &self,
-        limit: usize,
-    ) -> Result<Vec<Resource>, ApplicationError> {
+    fn list_recent(&self, limit: usize) -> Result<Vec<Resource>, ApplicationError> {
         let page = self
             .store
             .query(&Selector::new())
             .map_err(|e| ApplicationError::Storage {
-                    kind: StorageErrorKind::Sqlite,
-                    message: e.to_string(),
-                })?;
+                kind: StorageErrorKind::Sqlite,
+                message: e.to_string(),
+            })?;
         let mut items = page.items;
         // Revision is monotonic by convention; lexicographic desc gives a
         // stable "most-recently-touched first" order.
@@ -98,9 +93,9 @@ impl<S: ProjectionStore> ResourceUseCase for ApplicationFacade<S> {
             .store
             .query(&Selector::new().with_source(source_id))
             .map_err(|e| ApplicationError::Storage {
-                    kind: StorageErrorKind::Sqlite,
-                    message: e.to_string(),
-                })?;
+                kind: StorageErrorKind::Sqlite,
+                message: e.to_string(),
+            })?;
         let mut items = page.items;
         if items.len() > limit {
             items.truncate(limit);
@@ -126,24 +121,24 @@ impl<S: ProjectionStore> ResourceUseCase for ApplicationFacade<S> {
         if trimmed.len() == 26 {
             let mut matched = Vec::new();
             if let Ok(heading_ref) = ResourceRef::parse(&format!("heading:{trimmed}"))
-                && let Some(res) = self
-                    .store
-                    .get(&heading_ref)
-                    .map_err(|e| ApplicationError::Storage {
-                    kind: StorageErrorKind::Sqlite,
-                    message: e.to_string(),
-                })?
+                && let Some(res) =
+                    self.store
+                        .get(&heading_ref)
+                        .map_err(|e| ApplicationError::Storage {
+                            kind: StorageErrorKind::Sqlite,
+                            message: e.to_string(),
+                        })?
             {
                 matched.push(res.r#ref);
             }
             if let Ok(doc_ref) = ResourceRef::parse(&format!("document:{trimmed}"))
-                && let Some(res) = self
-                    .store
-                    .get(&doc_ref)
-                    .map_err(|e| ApplicationError::Storage {
-                    kind: StorageErrorKind::Sqlite,
-                    message: e.to_string(),
-                })?
+                && let Some(res) =
+                    self.store
+                        .get(&doc_ref)
+                        .map_err(|e| ApplicationError::Storage {
+                            kind: StorageErrorKind::Sqlite,
+                            message: e.to_string(),
+                        })?
             {
                 matched.push(res.r#ref);
             }
@@ -154,7 +149,10 @@ impl<S: ProjectionStore> ResourceUseCase for ApplicationFacade<S> {
             }
         }
 
-        let page_all = <Self as crate::application::use_cases::ResourceUseCase>::query(self, &Selector::new())?;
+        let page_all = <Self as crate::application::use_cases::ResourceUseCase>::query(
+            self,
+            &Selector::new(),
+        )?;
         let locator_matches: Vec<ResourceRef> = page_all
             .items
             .iter()
@@ -168,7 +166,8 @@ impl<S: ProjectionStore> ResourceUseCase for ApplicationFacade<S> {
         }
 
         let title_selector = Selector::new().with_title_contains(trimmed);
-        let page_title = <Self as crate::application::use_cases::ResourceUseCase>::query(self, &title_selector)?;
+        let page_title =
+            <Self as crate::application::use_cases::ResourceUseCase>::query(self, &title_selector)?;
         let title_matches: Vec<ResourceRef> = page_title.items.iter().map(|r| r.r#ref).collect();
         if title_matches.len() == 1 {
             return Ok(ResolveResult::Found(title_matches[0]));
@@ -186,7 +185,9 @@ impl<S: ProjectionStore> ResourceUseCase for ApplicationFacade<S> {
         use crate::domain::ResourceAddress;
         match address {
             ResourceAddress::Ref { r#ref } => {
-                if let Some(res) = <Self as crate::application::use_cases::ResourceUseCase>::read(self, r#ref)? {
+                if let Some(res) =
+                    <Self as crate::application::use_cases::ResourceUseCase>::read(self, r#ref)?
+                {
                     Ok(ResolveResult::Found(res.r#ref))
                 } else {
                     Ok(ResolveResult::NotFound)
@@ -197,8 +198,7 @@ impl<S: ProjectionStore> ResourceUseCase for ApplicationFacade<S> {
                 // document-kind placeholder so resolver strategies that branch
                 // on kind_hint still work. The resolver never uses source_ref
                 // to compute the answer.
-                let placeholder =
-                    ResourceRef::new(ResourceKind::Document, ulid::Ulid::nil());
+                let placeholder = ResourceRef::new(ResourceKind::Document, ulid::Ulid::nil());
                 let occ = LinkOccurrence {
                     source_ref: placeholder,
                     target: target.clone(),
@@ -211,16 +211,20 @@ impl<S: ProjectionStore> ResourceUseCase for ApplicationFacade<S> {
                     },
                 };
                 let (status, target_ref, candidates) =
-                    crate::application::link_resolution::LinkResolver::resolve(&self.store, &occ);
+                    crate::application::link_resolution::LinkResolver::resolve(&self.store, &occ)?;
                 match status {
-                    ResolutionStatus::Resolved => Ok(ResolveResult::Found(
-                        target_ref.expect("resolved has target"),
-                    )),
+                    ResolutionStatus::Resolved => {
+                        let found = target_ref.ok_or_else(|| ApplicationError::Storage {
+                            kind: crate::application::StorageErrorKind::InvalidState,
+                            message: "link resolver returned Resolved without a target ref"
+                                .to_string(),
+                        })?;
+                        Ok(ResolveResult::Found(found))
+                    }
                     ResolutionStatus::Ambiguous => Ok(ResolveResult::Ambiguous(candidates)),
                     _ => Ok(ResolveResult::NotFound),
                 }
             }
         }
     }
-
 }

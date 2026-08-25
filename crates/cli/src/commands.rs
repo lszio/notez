@@ -26,12 +26,16 @@ pub enum Commands {
     Scan,
 
     /// Resolve a query string (ID, ref, locator, title)
-    Resolve { query: String },
+    Resolve {
+        query: String,
+    },
 
     /// Query resources from the space
     Query(QueryArgs),
     /// Read details of a specific resource ref
-    Read { r_ref: String },
+    Read {
+        r_ref: String,
+    },
 
     /// Recent activity feed (most-recently-touched first)
     Recent {
@@ -71,15 +75,14 @@ pub enum Commands {
     /// Agent Skill export commands
     Skill(SkillSubcommand),
     // Job is now merged into Task
-
     /// Derived artifact management
     Artifact(ArtifactSubcommand),
 
     /// MCP stdio server commands
     Mcp(McpSubcommand),
 
-    /// Space administrative commands
-    Space(SpaceSubcommand),
+    /// Workspace administrative commands (rebuild, doctor, global registry)
+    Workspace(WorkspaceSubcommand),
 
     /// Synchronization commands (folder push/pull/conflicts)
     Sync(SyncSubcommand),
@@ -177,16 +180,13 @@ pub enum LinkCommands {
         r_ref: String,
     },
     /// Re-resolve and tally link statuses for the whole space
-    Reindex {
-        #[arg(long = "space-root", default_value = ".")]
-        space_root: PathBuf,
-    },
+    Reindex,
 }
 
 #[derive(Args, Debug)]
-pub struct SpaceSubcommand {
+pub struct WorkspaceSubcommand {
     #[command(subcommand)]
-    pub command: SpaceCommands,
+    pub command: WorkspaceCommands,
 }
 
 #[derive(Args, Debug)]
@@ -216,14 +216,12 @@ pub enum TaskCommands {
         #[arg(long, default_value = "2026-07-22 Wed 16:00")]
         timestamp: String,
     },
-    
+
     /// List all tasks grouped by status
     List,
 
     /// Query complete record and content of a task
-    Detail {
-        r_ref: String,
-    },
+    Detail { r_ref: String },
 
     /// Agenda view of scheduled, deadline, or actionable items
     Agenda,
@@ -315,7 +313,7 @@ pub enum ConfigCommands {
     },
 }
 #[derive(Subcommand, Debug)]
-pub enum SpaceCommands {
+pub enum WorkspaceCommands {
     Rebuild,
     Doctor,
     List,
@@ -334,8 +332,6 @@ pub struct ArtifactSubcommand {
     #[command(subcommand)]
     pub command: ArtifactCommands,
 }
-
-
 
 #[derive(Subcommand, Debug)]
 pub enum ArtifactCommands {
@@ -485,4 +481,3 @@ pub enum WatchCommands {
         limit: usize,
     },
 }
-

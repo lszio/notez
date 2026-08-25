@@ -5,18 +5,19 @@
 //! step of the `0.5.x-A1+A3` use-case impl split (spec
 //! `docs/superpowers/specs/2026-08-09-0.5x-a1-a3-usecase-impl-split-and-write-checks-design.org`).
 
-use std::path::Path;
-
-use crate::application::service::{ApplicationError, ApplicationFacade, ScanReport, StorageErrorKind};
+use crate::application::service::{
+    ApplicationError, ApplicationFacade, ScanReport, StorageErrorKind,
+};
 use crate::application::use_cases::ScanUseCase;
 use crate::domain::ProjectionStore;
 
 impl<S: ProjectionStore> ScanUseCase for ApplicationFacade<S> {
-    fn scan_native(&mut self, root: &Path) -> Result<ScanReport, ApplicationError> {
+    fn scan_native(&mut self) -> Result<ScanReport, ApplicationError> {
         use crate::application::link_resolution::resolve_and_store_links;
-        use crate::source::native::NativeSourceAdapter;
         use crate::source::SourceAdapter;
+        use crate::source::native::NativeSourceAdapter;
 
+        let source_root = self.require_space_root()?;
         if self.format_parsers.is_empty() {
             return Err(ApplicationError::Storage {
                 kind: StorageErrorKind::InvalidState,
@@ -27,7 +28,7 @@ impl<S: ProjectionStore> ScanUseCase for ApplicationFacade<S> {
         let config = crate::source::SourceConfig {
             id: "native".to_string(),
             kind: crate::source::SourceKind::Native,
-            path: root.to_path_buf(),
+            path: source_root.to_path_buf(),
             read_only: false,
             include_paths: vec![],
             exclude_paths: vec![],
@@ -38,14 +39,10 @@ impl<S: ProjectionStore> ScanUseCase for ApplicationFacade<S> {
         // for additional MIME types. Scan via the adapter, then merge any
         // extra-parser results for non-handled MIMEs (none today, but
         // keeps the seam open).
-        let mut scanned = adapter
-            .scan()
-            .map_err(|e| {
-                ApplicationError::Storage {
-                    kind: StorageErrorKind::InvalidState,
-                    message: e.to_string(),
-                }
-            })?;
+        let mut scanned = adapter.scan().map_err(|e| ApplicationError::Storage {
+            kind: StorageErrorKind::InvalidState,
+            message: e.to_string(),
+        })?;
         for parser in &self.format_parsers {
             if parser.supports("text/org") || parser.supports("text/markdown") {
                 continue;
@@ -71,9 +68,9 @@ impl<S: ProjectionStore> ScanUseCase for ApplicationFacade<S> {
                 link_occurrences.clone(),
             )
             .map_err(|e| ApplicationError::Storage {
-                    kind: StorageErrorKind::Sqlite,
-                    message: e.to_string(),
-                })?;
+                kind: StorageErrorKind::Sqlite,
+                message: e.to_string(),
+            })?;
 
         resolve_and_store_links(&mut self.store, "native", link_occurrences)?;
 
@@ -99,15 +96,13 @@ impl<S: ProjectionStore> ScanUseCase for ApplicationFacade<S> {
         })
     }
 
-    fn scan_federation(
-        &mut self,
-        space_root: &Path,
-    ) -> Result<ScanReport, ApplicationError> {
+    fn scan_federation(&mut self) -> Result<ScanReport, ApplicationError> {
+        let source_root = self.require_space_root()?;
         use crate::source::SourceAdapter;
 
         let mut total_resources = 0;
 
-        let sources_cfg = crate::application::federation::SpaceSourcesConfig::load(space_root)
+        let sources_cfg = crate::application::federation::SourceInstancesCache::load(&source_root)
             .map_err(|e| ApplicationError::Storage {
                 kind: StorageErrorKind::InvalidState,
                 message: e.to_string(),
@@ -118,7 +113,7 @@ impl<S: ProjectionStore> ScanUseCase for ApplicationFacade<S> {
         let native_config = crate::source::SourceConfig {
             id: "native".to_string(),
             kind: crate::source::SourceKind::Native,
-            path: space_root.to_path_buf(),
+            path: source_root.to_path_buf(),
             read_only: false,
             include_paths: vec![],
             exclude_paths,
@@ -126,11 +121,9 @@ impl<S: ProjectionStore> ScanUseCase for ApplicationFacade<S> {
         let native_adapter = crate::source::NativeSourceAdapter::new(native_config);
         let native_scanned = native_adapter
             .scan()
-            .map_err(|e| {
-                ApplicationError::Storage {
-                    kind: StorageErrorKind::InvalidState,
-                    message: e.to_string(),
-                }
+            .map_err(|e| ApplicationError::Storage {
+                kind: StorageErrorKind::InvalidState,
+                message: e.to_string(),
             })?;
 
         total_resources += native_scanned.resources.len();
@@ -143,9 +136,9 @@ impl<S: ProjectionStore> ScanUseCase for ApplicationFacade<S> {
                 native_scanned.link_occurrences.clone(),
             )
             .map_err(|e| ApplicationError::Storage {
-                    kind: StorageErrorKind::Sqlite,
-                    message: e.to_string(),
-                })?;
+                kind: StorageErrorKind::Sqlite,
+                message: e.to_string(),
+            })?;
 
         crate::application::link_resolution::resolve_and_store_links(
             &mut self.store,
@@ -153,7 +146,7 @@ impl<S: ProjectionStore> ScanUseCase for ApplicationFacade<S> {
             native_scanned.link_occurrences,
         )?;
 
-        let sources_cfg = crate::application::federation::SpaceSourcesConfig::load(space_root)
+        let sources_cfg = crate::application::federation::SourceInstancesCache::load(&source_root)
             .map_err(|e| ApplicationError::Storage {
                 kind: StorageErrorKind::InvalidState,
                 message: e.to_string(),
@@ -161,21 +154,15 @@ impl<S: ProjectionStore> ScanUseCase for ApplicationFacade<S> {
         for src_cfg in sources_cfg.sources {
             let adapter = self
                 .source_registry
-                .build(src_cfg.clone())
-                .map_err(|e| {
-                    ApplicationError::Storage {
-                        kind: StorageErrorKind::InvalidState,
-                        message: e.to_string(),
-                    }
+                .build(src_cfg.clone().into_source_config())
+                .map_err(|e| ApplicationError::Storage {
+                    kind: StorageErrorKind::InvalidState,
+                    message: e.to_string(),
                 })?;
-            let scanned = adapter
-                .scan()
-                .map_err(|e| {
-                    ApplicationError::Storage {
-                        kind: StorageErrorKind::InvalidState,
-                        message: e.to_string(),
-                    }
-                })?;
+            let scanned = adapter.scan().map_err(|e| ApplicationError::Storage {
+                kind: StorageErrorKind::InvalidState,
+                message: e.to_string(),
+            })?;
 
             total_resources += scanned.resources.len();
 

@@ -1,9 +1,9 @@
 //! Task use case: agenda, PARA overview, and state transitions.
 
-use crate::application::task_para::{AgendaView, ParaOverview};
 use crate::application::ApplicationError;
-use crate::domain::ResourceRef;
+use crate::application::task_para::{AgendaView, ParaOverview};
 use crate::document::StateTransition;
+use crate::domain::ResourceRef;
 
 pub trait TaskUseCase {
     fn agenda(&self) -> Result<AgendaView, ApplicationError>;

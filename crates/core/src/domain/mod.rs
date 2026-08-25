@@ -1,18 +1,20 @@
 pub mod community;
+pub mod conflict;
 pub mod query;
 pub use community::{Community, CommunityCandidate, CommunitySelector};
+pub mod link;
 pub mod resource;
 pub mod rule;
 pub mod schema;
-pub mod link;
 pub use link::{
-    LinkOccurrence, LinkTarget, RelationDirection, RelationType, ResolvedRelation,
-    ResolutionStatus, ResourceAddress, TextSpan,
+    LinkOccurrence, LinkTarget, RelationDirection, RelationType, ResolutionStatus,
+    ResolvedRelation, ResourceAddress, TextSpan,
 };
 pub use rule::{InspectResult, Rule, RuleEngine, RuleKind, RuleTrace};
 
+pub use conflict::ConflictRecord;
 pub use query::{LinkDiagnostic, Projection, ProjectionStore, QueryPage, Selector};
 pub use resource::{
-    derived_id, derived_object_id, ObjectId, ObjectIdError, Resource, ResourceKind, ResourceRef,
-    ResourceRefError, ResourceRelation, SegmentRecord,
+    ObjectIdentity, ObjectIdentityError, Resource, ResourceKind, ResourceRef, ResourceRefError,
+    ResourceRelation, SegmentRecord, derived_id, derived_object_id,
 };

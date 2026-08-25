@@ -10,6 +10,7 @@ path = "src/lib.rs"
 
 [dependencies]
 core        = { path = "../../crates/core" }
+composition = { path = "../../crates/composition" }
 orgmode     = { path = "../../crates/adapters/orgmode" }
 markdown    = { path = "../../crates/adapters/markdown" }
 serde       = { workspace = true }

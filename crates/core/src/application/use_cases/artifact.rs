@@ -9,13 +9,11 @@ use crate::artifact::{DerivedArtifact, SkillPackage};
 pub trait ArtifactUseCase {
     fn derive_artifact(
         &self,
-        space_root: &Path,
         community_id: &str,
         recipe_name: &str,
     ) -> Result<DerivedArtifact, ApplicationError>;
     fn export_skill(
         &self,
-        space_root: &Path,
         community_id: &str,
         description: &str,
         export_path: &Path,

@@ -26,16 +26,17 @@ fn new_registry_is_empty() {
 }
 
 #[test]
-fn with_builtins_registers_six_kinds() {
+fn with_builtins_registers_three_real_kinds() {
     let reg = SourceRegistry::with_builtins();
     let kinds = reg.kinds();
     assert!(kinds.contains(&SourceKind::Native));
     assert!(kinds.contains(&SourceKind::Git));
     assert!(kinds.contains(&SourceKind::Obsidian));
-    assert!(kinds.contains(&SourceKind::Anytype));
-    assert!(kinds.contains(&SourceKind::AppleNotes));
-    assert!(kinds.contains(&SourceKind::AppleCalendar));
-    assert_eq!(kinds.len(), 6);
+    assert_eq!(
+        kinds.len(),
+        3,
+        "stub-backed kinds must not be builtin-registered"
+    );
 }
 
 #[test]
@@ -84,16 +85,9 @@ fn build_with_unknown_other_kind_returns_error() {
 }
 
 #[test]
-fn get_returns_factory_for_known_kinds() {
+fn get_returns_factory_for_real_kinds() {
     let reg = SourceRegistry::with_builtins();
-    for k in [
-        SourceKind::Native,
-        SourceKind::Git,
-        SourceKind::Obsidian,
-        SourceKind::Anytype,
-        SourceKind::AppleNotes,
-        SourceKind::AppleCalendar,
-    ] {
+    for k in [SourceKind::Native, SourceKind::Git, SourceKind::Obsidian] {
         assert!(reg.get(&k).is_some(), "factory missing for {k}");
     }
 }
@@ -137,7 +131,9 @@ impl SourceAdapterFactory for MarkerFactory {
         let _ = self.marker; // informational only; no shared state
         let transport: Box<dyn SourceTransport> = Box::new(NoopTransport);
         let parsers: Vec<Box<dyn FormatParser>> = vec![];
-        Ok(Box::new(ComposedSourceAdapter::new(config, transport, parsers)))
+        Ok(Box::new(ComposedSourceAdapter::new(
+            config, transport, parsers,
+        )))
     }
 }
 

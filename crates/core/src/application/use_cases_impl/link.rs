@@ -4,13 +4,12 @@
 //! is part of the 0.5.x-A1+A3 use-case impl split.
 
 use crate::application::service::{ApplicationError, ApplicationFacade, StorageErrorKind};
-use crate::application::write_check;
 use crate::application::use_cases::LinkUseCase;
+use crate::application::write_check;
 use crate::domain::{
     LinkDiagnostic, LinkOccurrence, ProjectionStore, ResolutionStatus, ResolvedRelation,
     ResourceRef, Selector,
 };
-use std::path::Path;
 
 impl<S: ProjectionStore> LinkUseCase for ApplicationFacade<S> {
     fn query_link_occurrences(
@@ -20,9 +19,9 @@ impl<S: ProjectionStore> LinkUseCase for ApplicationFacade<S> {
         self.store
             .query_link_occurrences(source_ref)
             .map_err(|e| ApplicationError::Storage {
-                    kind: StorageErrorKind::Sqlite,
-                    message: e.to_string(),
-                })
+                kind: StorageErrorKind::Sqlite,
+                message: e.to_string(),
+            })
     }
 
     fn query_resolved_relations(
@@ -32,16 +31,18 @@ impl<S: ProjectionStore> LinkUseCase for ApplicationFacade<S> {
         self.store
             .query_resolved_relations(source_ref)
             .map_err(|e| ApplicationError::Storage {
-                    kind: StorageErrorKind::Sqlite,
-                    message: e.to_string(),
-                })
+                kind: StorageErrorKind::Sqlite,
+                message: e.to_string(),
+            })
     }
 
     fn list_links(
         &self,
         source_ref: &ResourceRef,
     ) -> Result<Vec<LinkOccurrence>, ApplicationError> {
-        <Self as crate::application::use_cases::LinkUseCase>::query_link_occurrences(self, source_ref)
+        <Self as crate::application::use_cases::LinkUseCase>::query_link_occurrences(
+            self, source_ref,
+        )
     }
 
     fn resolve_links(
@@ -54,7 +55,9 @@ impl<S: ProjectionStore> LinkUseCase for ApplicationFacade<S> {
             &crate::domain::ResourceAddress::Ref { r#ref: *source_ref },
             &source_ref,
         )?;
-        let occs = <Self as crate::application::use_cases::LinkUseCase>::query_link_occurrences(self, source_ref)?;
+        let occs = <Self as crate::application::use_cases::LinkUseCase>::query_link_occurrences(
+            self, source_ref,
+        )?;
         // Determine the source_id by inspecting the existing diagnostics row.
         let source_id = occs
             .first()
@@ -69,45 +72,45 @@ impl<S: ProjectionStore> LinkUseCase for ApplicationFacade<S> {
         self.store
             .query_resolved_relations(source_ref)
             .map_err(|e| ApplicationError::Storage {
-                    kind: StorageErrorKind::Sqlite,
-                    message: e.to_string(),
-                })
+                kind: StorageErrorKind::Sqlite,
+                message: e.to_string(),
+            })
     }
 
     fn diagnose_link(
         &self,
         source_ref: &ResourceRef,
     ) -> Result<Vec<LinkDiagnostic>, ApplicationError> {
-        let rows = self
-            .store
-            .list_link_diagnostics(source_ref)
-            .map_err(|e| ApplicationError::Storage {
-                    kind: StorageErrorKind::Sqlite,
-                    message: e.to_string(),
-                })?;
+        let rows = self.store.list_link_diagnostics(source_ref).map_err(|e| {
+            ApplicationError::Storage {
+                kind: StorageErrorKind::Sqlite,
+                message: e.to_string(),
+            }
+        })?;
         Ok(rows.unwrap_or_default())
     }
 
     fn reindex_links(
         &mut self,
-        space_root: &Path,
     ) -> Result<crate::application::link_resolution::LinkReindexReport, ApplicationError> {
+        let _space_root = self.require_space_root()?;
         // Aggregate counts from the existing projection without mutating it.
         // A full rewrite is unnecessary: `replace_source` already persisted
         // occurrences during scan, and `LinkResolver::resolve_all` already
         // wrote diagnostics. Here we merely tally what is on disk so callers
         // get a stable view of unresolved/ambiguous/external counts.
-        let _ = space_root;
-        let page = <Self as crate::application::use_cases::ResourceUseCase>::query(self, &Selector::new())?;
+        let page = <Self as crate::application::use_cases::ResourceUseCase>::query(
+            self,
+            &Selector::new(),
+        )?;
         let mut report = crate::application::link_resolution::LinkReindexReport::default();
         for res in &page.items {
-            let diags = self
-                .store
-                .list_link_diagnostics(&res.r#ref)
-                .map_err(|e| ApplicationError::Storage {
+            let diags = self.store.list_link_diagnostics(&res.r#ref).map_err(|e| {
+                ApplicationError::Storage {
                     kind: StorageErrorKind::Sqlite,
                     message: e.to_string(),
-                })?;
+                }
+            })?;
             if let Some(rows) = diags {
                 for d in rows {
                     report.scanned += 1;
@@ -123,5 +126,4 @@ impl<S: ProjectionStore> LinkUseCase for ApplicationFacade<S> {
         }
         Ok(report)
     }
-
 }

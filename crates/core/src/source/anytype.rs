@@ -1,10 +1,13 @@
 use crate::source::adapter::{
-    PreparedWrite, ScannedSource, SourceAdapter, SourceCapabilities, SourceConfig, SourceError,
-    WriteResult,
+    ScannedSource, SourceAdapter, SourceCapabilities, SourceConfig, SourceError,
 };
-use crate::domain::{Resource, ResourceKind, ResourceRef};
-use std::collections::BTreeMap;
 
+/// Anytype source adapter.
+///
+/// The remote Anytype transport is NOT wired yet (roadmap「后续扩展」).
+/// The factory exists so compositions can opt in explicitly, but the
+/// adapter reports no capabilities and every read or write attempt fails
+/// with a `SourceError` instead of returning fake data or fake success.
 pub struct AnytypeSourceAdapter {
     config: SourceConfig,
 }
@@ -20,51 +23,23 @@ impl SourceAdapter for AnytypeSourceAdapter {
         &self.config
     }
 
+    fn scan(&self) -> Result<ScannedSource, SourceError> {
+        Err(SourceError::Other(
+            "anytype source adapter is not implemented yet; no remote transport is \
+             wired (roadmap: 后续扩展 — Notion / Anytype 双向 Adapter)"
+                .into(),
+        ))
+    }
+
     fn capabilities(&self) -> SourceCapabilities {
         SourceCapabilities {
-            can_read: true,
-            can_write: true,
-            can_import: true,
+            can_read: false,
+            can_write: false,
+            can_import: false,
             can_watch: false,
         }
     }
 
-    fn scan(&self) -> Result<ScannedSource, SourceError> {
-        let att_ref = ResourceRef::parse("document:01J00000000000000000000077").unwrap();
-        let mut props = BTreeMap::new();
-        props.insert("source_type".to_string(), "anytype_stub".to_string());
-
-        let res = Resource {
-            r#ref: att_ref,
-            kind: ResourceKind::Document,
-            title: "Anytype External Object Note".to_string(),
-            revision: "anytype_rev1".to_string(),
-            source_id: self.config.id.clone(),
-            locator: "/anytype/object/01J00000000000000000000077".to_string(),
-            properties: props,
-            object_id: crate::domain::derived_object_id("", "", ""),
-        };
-
-        Ok(ScannedSource {
-            source_id: self.config.id.clone(),
-            resources: vec![res],
-            relations: vec![],
-            link_occurrences: vec![],
-        })
-    }
-
-    fn prepare_write(&self, target_ref: &str, payload: &str) -> Result<PreparedWrite, SourceError> {
-        Ok(PreparedWrite {
-            target_ref: target_ref.to_string(),
-            payload: payload.to_string(),
-            ready: true,
-        })
-    }
-
-    fn commit_write(&self, prep: &PreparedWrite) -> Result<WriteResult, SourceError> {
-        Ok(WriteResult {
-            target_ref: prep.target_ref.clone(),
-            committed: true,
-        })
-    }
+    // `prepare_write` / `commit_write` inherit the trait defaults, which
+    // refuse writes with "write not supported by this source adapter".
 }

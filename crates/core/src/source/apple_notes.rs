@@ -1,8 +1,10 @@
-use crate::source::adapter::{ComposedSourceAdapter, ScannedSource, SourceAdapter, SourceConfig, SourceError};
-use crate::source::protocol::{FormatParser, ParsedEntity, RawEntity, SourceTransport, TransportError, ParserError};
-use crate::domain::{Resource, ResourceKind, ResourceRef};
-use std::collections::BTreeMap;
-use ulid::Ulid;
+use crate::source::adapter::{
+    ComposedSourceAdapter, ScannedSource, SourceAdapter, SourceCapabilities, SourceConfig,
+    SourceError,
+};
+use crate::source::protocol::{
+    FormatParser, ParsedEntity, ParserError, RawEntity, SourceTransport, TransportError,
+};
 
 pub struct AppleNotesSourceAdapter {
     inner: ComposedSourceAdapter,
@@ -12,25 +14,20 @@ pub struct JxaNotesTransport;
 
 impl SourceTransport for JxaNotesTransport {
     fn fetch_raw(&self) -> Result<Vec<RawEntity>, TransportError> {
-        // In a complete implementation, this would execute `osascript` (JXA or AppleScript)
-        // to query the Notes.app SQLite database or CloudKit API, extracting checklists.
-        // For the architectural skeleton, we return an empty list or mock data.
-        
-        // Example JXA invocation (conceptual):
-        // let output = std::process::Command::new("osascript")
-        //     .arg("-l").arg("JavaScript")
-        //     .arg("-e").arg("... JXA script to fetch checklists ...")
-        //     .output()?;
-        // let json_payload = output.stdout;
-        
-        Ok(vec![])
+        // A complete implementation executes `osascript` (JXA or AppleScript)
+        // to query the Notes.app SQLite database or CloudKit API. Until that
+        // lands, fail loudly instead of silently scanning to an empty source.
+        Err(TransportError::Other(
+            "apple_notes transport is not implemented yet; osascript integration pending".into(),
+        ))
     }
 
-    fn mutate(&self, locator: &str, payload: &str) -> Result<(), TransportError> {
-        // Execute surgical update via JXA to check/uncheck a specific checklist item
-        // without rewriting the entire note body (which would destroy formatting).
-        // e.g. osascript -l JavaScript -e "Application('Notes').notes.byId('{}')....status = {}"
-        Ok(())
+    fn mutate(&self, _locator: &str, _payload: &str) -> Result<(), TransportError> {
+        // The JXA/osascript integration is not wired yet. Refuse instead of
+        // reporting a fake successful mutation.
+        Err(TransportError::Other(
+            "apple_notes transport cannot mutate yet; osascript integration pending".into(),
+        ))
     }
 }
 
@@ -42,10 +39,8 @@ impl FormatParser for AppleNotesParser {
     }
 
     fn parse(&self, _entity: &RawEntity, _source_id: &str) -> Result<ParsedEntity, ParserError> {
-        // Parse the JSON payload from JxaNotesTransport
-        // Map checklist items to Resource { kind: Heading, properties: { "todo": "TODO" | "DONE" } }
-        // For this skeleton, we just return empty.
-        
+        // Parse the JSON payload from JxaNotesTransport into checklist
+        // Resources. Unreachable until the transport above is implemented.
         Ok(ParsedEntity {
             resources: vec![],
             relations: vec![],
@@ -58,7 +53,7 @@ impl AppleNotesSourceAdapter {
     pub fn new(config: SourceConfig) -> Self {
         let transport = JxaNotesTransport;
         let parsers: Vec<Box<dyn FormatParser>> = vec![Box::new(AppleNotesParser)];
-        
+
         let inner = ComposedSourceAdapter::new(config, Box::new(transport), parsers);
         Self { inner }
     }
@@ -67,6 +62,17 @@ impl AppleNotesSourceAdapter {
 impl SourceAdapter for AppleNotesSourceAdapter {
     fn config(&self) -> &SourceConfig {
         self.inner.config()
+    }
+
+    /// The composed transport is a skeleton; report honestly instead of
+    /// inheriting `ComposedSourceAdapter`'s optimistic read capability.
+    fn capabilities(&self) -> SourceCapabilities {
+        SourceCapabilities {
+            can_read: false,
+            can_write: false,
+            can_import: false,
+            can_watch: false,
+        }
     }
 
     fn scan(&self) -> Result<ScannedSource, SourceError> {

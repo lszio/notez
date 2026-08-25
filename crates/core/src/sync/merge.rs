@@ -1,15 +1,8 @@
-use serde::{Deserialize, Serialize};
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ConflictRecord {
-    pub logical_path: String,
-    pub mine_hash: String,
-    pub theirs_hash: String,
-    pub conflict_text: String,
-}
+pub use crate::domain::ConflictRecord;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MergeResult {
@@ -96,12 +89,12 @@ impl ThreeWayMerger {
             let theirs_hash = format!("{:x}", Sha256::digest(theirs.as_bytes()));
 
             MergeResult::Conflict {
-                conflict: ConflictRecord {
-                    logical_path: logical_path.to_string(),
+                conflict: ConflictRecord::pending(
+                    logical_path,
                     mine_hash,
                     theirs_hash,
-                    conflict_text: result_text,
-                },
+                    result_text,
+                ),
             }
         } else {
             MergeResult::Clean(result_text)

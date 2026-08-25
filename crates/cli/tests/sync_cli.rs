@@ -59,6 +59,6 @@ fn cli_sync_push_pull_and_conflicts() {
         .arg("sync")
         .arg("conflicts")
         .assert()
-        .failure()
-        .stderr(predicates::str::contains("unsupported capability"));
+        .success()
+        .stdout(predicates::str::contains("[]"));
 }

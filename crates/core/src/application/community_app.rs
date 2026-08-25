@@ -10,8 +10,8 @@ pub struct SpaceCommunitiesConfig {
 }
 
 impl SpaceCommunitiesConfig {
-    pub fn load(space_root: &Path) -> Result<Self, io::Error> {
-        let path = space_root.join(".notez/communities.json");
+    pub fn load(source_root: &Path) -> Result<Self, io::Error> {
+        let path = source_root.join(".notez/communities.json");
         if !path.exists() {
             return Ok(Self::default());
         }
@@ -20,8 +20,8 @@ impl SpaceCommunitiesConfig {
         Ok(cfg)
     }
 
-    pub fn save(&self, space_root: &Path) -> Result<(), io::Error> {
-        let dot_notez = space_root.join(".notez");
+    pub fn save(&self, source_root: &Path) -> Result<(), io::Error> {
+        let dot_notez = source_root.join(".notez");
         if !dot_notez.exists() {
             fs::create_dir_all(&dot_notez)?;
         }

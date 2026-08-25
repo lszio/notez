@@ -1,8 +1,11 @@
-use crate::domain::link::{LinkOccurrence, ResolvedRelation, ResolutionStatus};
-use crate::domain::resource::{Resource, ResourceKind, ResourceRef, ResourceRelation, SegmentRecord};
+use crate::domain::link::{LinkOccurrence, ResolutionStatus, ResolvedRelation};
+use crate::domain::resource::{
+    Resource, ResourceKind, ResourceRef, ResourceRelation, SegmentRecord,
+};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct Selector {
     pub kind: Option<ResourceKind>,
     pub exact_refs: Vec<ResourceRef>,
@@ -153,11 +156,22 @@ pub trait ProjectionStore {
     /// 默认空实现（测试替身无需关心），`SqliteProjection` 必须 override。
     fn find_by_object(
         &self,
-        object_id: crate::domain::ObjectId,
+        _object_id: &crate::domain::ObjectIdentity,
     ) -> Result<Vec<crate::domain::Resource>, Self::Error> {
         Ok(Vec::new())
     }
- }
+
+    /// Persist sync conflict records (spec §7). Upsert keyed by
+    /// `logical_path`; the latest detection wins per path. Required — a
+    /// store that silently drops conflicts would hide sync failures.
+    fn replace_conflicts(
+        &mut self,
+        records: &[crate::domain::ConflictRecord],
+    ) -> Result<(), Self::Error>;
+
+    /// List persisted sync conflict records, newest first.
+    fn list_conflicts(&self) -> Result<Vec<crate::domain::ConflictRecord>, Self::Error>;
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct QueryPage {

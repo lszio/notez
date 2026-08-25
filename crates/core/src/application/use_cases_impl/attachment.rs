@@ -3,33 +3,38 @@
 //! Method bodies were previously inlined in `service.rs`; this file
 //! is part of the 0.5.x-A1+A3 use-case impl split.
 
-use crate::application::service::{ApplicationError, ApplicationFacade, DocumentErrorKind, StorageErrorKind};
-use crate::application::write_check;
-use crate::application::use_cases::ResourceUseCase;
+use crate::application::service::{
+    ApplicationError, ApplicationFacade, DocumentErrorKind, StorageErrorKind,
+};
 use crate::application::use_cases::AttachmentUseCase;
-use crate::domain::{ProjectionStore, Resource, ResourceKind, ResourceRef, SegmentRecord, Selector};
+use crate::application::use_cases::ResourceUseCase;
+use crate::application::write_check;
+use crate::domain::{
+    ProjectionStore, Resource, ResourceKind, ResourceRef, SegmentRecord, Selector,
+};
 use std::path::Path;
 
 impl<S: ProjectionStore> AttachmentUseCase for ApplicationFacade<S> {
     fn add_attachment(
         &mut self,
-        space_root: &Path,
         file_path: &Path,
         default_mime: &str,
     ) -> Result<ResourceRef, ApplicationError> {
+        let source_root = self.require_space_root()?;
         write_check::check_capability(self, "attachment")?;
 
         let bytes = std::fs::read(file_path).map_err(|e| ApplicationError::Io {
             path: Some(file_path.to_path_buf()),
             source: e.kind(),
         })?;
-        let blob_store = crate::storage::BlobStore::new(space_root);
-        let meta = blob_store
-            .store_bytes(&bytes, default_mime)
-            .map_err(|e| ApplicationError::Io {
-                path: Some(file_path.to_path_buf()),
-                source: e.kind(),
-            })?;
+        let blob_store = crate::storage::BlobStore::new(&source_root);
+        let meta =
+            blob_store
+                .store_bytes(&bytes, default_mime)
+                .map_err(|e| ApplicationError::Io {
+                    path: Some(file_path.to_path_buf()),
+                    source: e.kind(),
+                })?;
 
         let att_ulid = if meta.hash.len() >= 32 {
             u128::from_str_radix(&meta.hash[..32], 16)
@@ -53,11 +58,11 @@ impl<S: ProjectionStore> AttachmentUseCase for ApplicationFacade<S> {
         // Locator must be a POSIX-relative path so the tree builder
         // can reconstruct the directory hierarchy and so the raw
         // attachment endpoint serves the file under the space root.
-        // When `file_path` is not under `space_root` (rare: user
+        // When `file_path` is not under `source_root` (rare: user
         // dragged an external file in), fall back to the absolute
         // path so we never silently lose the file.
         let locator = file_path
-            .strip_prefix(space_root)
+            .strip_prefix(source_root)
             .map(|p| p.to_string_lossy().replace('\\', "/"))
             .unwrap_or_else(|_| file_path.to_string_lossy().to_string());
 
@@ -70,9 +75,13 @@ impl<S: ProjectionStore> AttachmentUseCase for ApplicationFacade<S> {
             locator,
             properties,
             object_id: crate::domain::derived_object_id("", "", ""),
+            primary_source_id: String::new(),
         };
 
-        let page = <Self as crate::application::use_cases::ResourceUseCase>::query(self, &Selector::new())?;
+        let page = <Self as crate::application::use_cases::ResourceUseCase>::query(
+            self,
+            &Selector::new(),
+        )?;
         let mut native_resources: Vec<Resource> = page
             .items
             .into_iter()
@@ -83,20 +92,20 @@ impl<S: ProjectionStore> AttachmentUseCase for ApplicationFacade<S> {
         self.store
             .replace_source("native", native_resources, vec![], vec![])
             .map_err(|e| ApplicationError::Storage {
-                    kind: StorageErrorKind::Sqlite,
-                    message: e.to_string(),
-                })?;
+                kind: StorageErrorKind::Sqlite,
+                message: e.to_string(),
+            })?;
 
         Ok(att_ref)
     }
 
     fn run_extraction(
         &mut self,
-        space_root: &Path,
         att_ref: &ResourceRef,
     ) -> Result<Vec<crate::domain::SegmentRecord>, ApplicationError> {
-        use crate::artifact::{Extractor, ImageMetadataExtractor, SegmentSlicer, TextExtractor};
+        let source_root = self.require_space_root()?;
 
+        use crate::artifact::{Extractor, ImageMetadataExtractor, SegmentSlicer, TextExtractor};
         let res = <Self as crate::application::use_cases::ResourceUseCase>::read(self, att_ref)?
             .ok_or_else(|| ApplicationError::NotFound {
                 kind: att_ref.kind(),
@@ -116,7 +125,7 @@ impl<S: ProjectionStore> AttachmentUseCase for ApplicationFacade<S> {
             .cloned()
             .unwrap_or_else(|| "application/octet-stream".to_string());
 
-        let blob_store = crate::storage::BlobStore::new(space_root);
+        let blob_store = crate::storage::BlobStore::new(&source_root);
         let bytes = blob_store
             .get(hash)
             .map_err(|e| ApplicationError::Io {
@@ -130,22 +139,20 @@ impl<S: ProjectionStore> AttachmentUseCase for ApplicationFacade<S> {
 
         let extracted_content = if mime.starts_with("image/") {
             let ext = ImageMetadataExtractor;
-            ext.extract(&bytes, &mime).map_err(|e| {
-                ApplicationError::Document {
-                    source: DocumentErrorKind::Org(
-                        crate::document::OrgDocumentError::Other(e.to_string()),
-                    ),
-                }
-            })?
+            ext.extract(&bytes, &mime)
+                .map_err(|e| ApplicationError::Document {
+                    source: DocumentErrorKind::Org(crate::document::OrgDocumentError::Other(
+                        e.to_string(),
+                    )),
+                })?
         } else {
             let ext = TextExtractor;
-            ext.extract(&bytes, &mime).map_err(|e| {
-                ApplicationError::Document {
-                    source: DocumentErrorKind::Org(
-                        crate::document::OrgDocumentError::Other(e.to_string()),
-                    ),
-                }
-            })?
+            ext.extract(&bytes, &mime)
+                .map_err(|e| ApplicationError::Document {
+                    source: DocumentErrorKind::Org(crate::document::OrgDocumentError::Other(
+                        e.to_string(),
+                    )),
+                })?
         };
 
         let slicer = SegmentSlicer::default();
@@ -154,9 +161,9 @@ impl<S: ProjectionStore> AttachmentUseCase for ApplicationFacade<S> {
         self.store
             .insert_segments(&records)
             .map_err(|e| ApplicationError::Storage {
-                    kind: StorageErrorKind::Sqlite,
-                    message: e.to_string(),
-                })?;
+                kind: StorageErrorKind::Sqlite,
+                message: e.to_string(),
+            })?;
 
         Ok(records)
     }
@@ -168,9 +175,8 @@ impl<S: ProjectionStore> AttachmentUseCase for ApplicationFacade<S> {
         self.store
             .query_segments(&att_ref.to_string())
             .map_err(|e| ApplicationError::Storage {
-                    kind: StorageErrorKind::Sqlite,
-                    message: e.to_string(),
-                })
+                kind: StorageErrorKind::Sqlite,
+                message: e.to_string(),
+            })
     }
-
 }

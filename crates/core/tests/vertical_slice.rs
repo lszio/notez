@@ -5,9 +5,24 @@ use std::fs;
 
 /// Build an `ApplicationService` with the canonical Org/Markdown parsers
 /// registered. Mirrors the composition root used by the CLI binary.
-fn build_service(db_path: &std::path::Path) -> ApplicationService<SqliteProjection> {
+fn build_service(
+    root: &std::path::Path,
+    db_path: &std::path::Path,
+) -> ApplicationService<SqliteProjection> {
     let store = SqliteProjection::open(db_path).unwrap();
-    let mut service = ApplicationService::new(store);
+    let config = notez_core::config::model::SourceConfig {
+        version: 2,
+        source: notez_core::config::model::SourceIdentity {
+            name: "test".into(),
+            database: std::path::PathBuf::from(".notez/index.sqlite"),
+        },
+        workflow: Default::default(),
+        sources: vec![],
+        link_overrides: serde_json::Value::Null,
+    };
+    let ctx =
+        notez_core::application::context::SourceContext::new("test", root.to_path_buf(), config);
+    let mut service = ApplicationService::with_source(store, ctx);
     service.register_format_parser(Box::new(orgmode::OrgParser::new()));
     service.register_format_parser(Box::new(markdown::MarkdownParser::new()));
     service
@@ -16,12 +31,12 @@ fn build_service(db_path: &std::path::Path) -> ApplicationService<SqliteProjecti
 #[test]
 fn vertical_slice_scan_query_resolve_rebuild() {
     let temp_dir = tempfile::tempdir().unwrap();
-    let space_root = temp_dir.path();
-    let dot_notez = space_root.join(".notez");
+    let source_root = temp_dir.path();
+    let dot_notez = source_root.join(".notez");
     fs::create_dir_all(&dot_notez).unwrap();
     let db_path = dot_notez.join("index.sqlite");
 
-    let file1 = space_root.join("file1.org");
+    let file1 = source_root.join("file1.org");
     let content1 = r#"#+title: Index Document
 #+ID: 01J00000000000000000000010
 
@@ -32,15 +47,15 @@ fn vertical_slice_scan_query_resolve_rebuild() {
 "#;
     fs::write(&file1, content1).unwrap();
 
-    let file2 = space_root.join("file2.org");
+    let file2 = source_root.join("file2.org");
     let content2 = r#"#+title: Notes
 #+ID: 01J00000000000000000000020
 "#;
     fs::write(&file2, content2).unwrap();
 
-    let mut service = build_service(&db_path);
+    let mut service = build_service(source_root, &db_path);
 
-    let scan_report = service.scan_native(space_root).unwrap();
+    let scan_report = service.scan_native().unwrap();
     assert_eq!(scan_report.scanned_files, 2);
     assert_eq!(scan_report.scanned_resources, 3); // 2 docs + 1 heading
 
@@ -64,8 +79,8 @@ fn vertical_slice_scan_query_resolve_rebuild() {
     drop(service);
     fs::remove_file(&db_path).unwrap();
 
-    let mut service2 = build_service(&db_path);
-    service2.rebuild(space_root).unwrap();
+    let mut service2 = build_service(source_root, &db_path);
+    service2.rebuild().unwrap();
 
     let page_rebuilt = service2
         .query(&Selector::kind(ResourceKind::Heading).with_title_contains("sync"))
@@ -77,28 +92,28 @@ fn vertical_slice_scan_query_resolve_rebuild() {
 #[test]
 fn scan_corrupt_org_preserves_valid_projection() {
     let temp_dir = tempfile::tempdir().unwrap();
-    let space_root = temp_dir.path();
-    let dot_notez = space_root.join(".notez");
+    let source_root = temp_dir.path();
+    let dot_notez = source_root.join(".notez");
     fs::create_dir_all(&dot_notez).unwrap();
     let db_path = dot_notez.join("index.sqlite");
 
-    let valid_file = space_root.join("valid.org");
+    let valid_file = source_root.join("valid.org");
     fs::write(
         &valid_file,
         "#+title: Valid\n#+ID: 01J00000000000000000000099\n",
     )
     .unwrap();
 
-    let mut service = build_service(&db_path);
+    let mut service = build_service(source_root, &db_path);
 
-    let report = service.scan_native(space_root).unwrap();
+    let report = service.scan_native().unwrap();
     assert_eq!(report.scanned_resources, 1);
 
     // Add a corrupt org file with an invalid ULID
-    let corrupt_file = space_root.join("corrupt.org");
+    let corrupt_file = source_root.join("corrupt.org");
     fs::write(&corrupt_file, "#+title: Corrupt\n#+ID: invalid-ulid!\n").unwrap();
 
-    let err = service.scan_native(space_root).unwrap_err();
+    let err = service.scan_native().unwrap_err();
     assert!(err.to_string().contains("corrupt.org"));
 
     // Verify existing projection was preserved

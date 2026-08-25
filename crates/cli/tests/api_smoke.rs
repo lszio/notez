@@ -402,8 +402,6 @@ fn smoke_link_reindex_returns_report() {
         .arg("--json")
         .arg("link")
         .arg("reindex")
-        .arg("--space-root")
-        .arg(tmp.path())
         .assert()
         .success()
         .stdout(str::contains("\"scanned\""));
@@ -490,7 +488,7 @@ fn smoke_config_show_returns_runtime_config() {
     let tmp = TempDir::new().unwrap();
     seed_space(tmp.path());
 
-    notez()
+    let output = notez()
         .arg("--space")
         .arg(tmp.path())
         .arg("--json")
@@ -498,7 +496,19 @@ fn smoke_config_show_returns_runtime_config() {
         .arg("show")
         .assert()
         .success()
-        .stdout(str::contains("space_name"));
+        .get_output()
+        .clone();
+    let stdout = std::str::from_utf8(&output.stdout).unwrap();
+    let json: serde_json::Value = serde_json::from_str(stdout).unwrap();
+    let source_name = json
+        .get("source")
+        .and_then(|s| s.get("name"))
+        .and_then(|n| n.as_str())
+        .unwrap_or("");
+    assert!(
+        !source_name.is_empty(),
+        "config show must include source.name"
+    );
 }
 
 #[test]
@@ -723,7 +733,7 @@ fn smoke_community_create_derive_skill() {
 
 // ---------------------------------------------------------------------------
 // Sync subcommands. `push`/`pull` must succeed on a real folder exchange;
-// `conflicts` is an unsupported capability stub.
+// `conflicts` lists persisted conflict records (empty on a fresh space).
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -785,7 +795,7 @@ fn smoke_space_rebuild_succeeds() {
         .arg("--space")
         .arg(tmp.path())
         .arg("--json")
-        .arg("space")
+        .arg("workspace")
         .arg("rebuild")
         .assert()
         .success()
@@ -807,7 +817,7 @@ fn smoke_space_list_register_unregister() {
         .arg("--space")
         .arg(&space)
         .arg("--json")
-        .arg("space")
+        .arg("workspace")
         .arg("register")
         .arg("api_space")
         .arg("--path")
@@ -821,7 +831,7 @@ fn smoke_space_list_register_unregister() {
         .arg("--space")
         .arg(&space)
         .arg("--json")
-        .arg("space")
+        .arg("workspace")
         .arg("list")
         .assert()
         .success()
@@ -832,7 +842,7 @@ fn smoke_space_list_register_unregister() {
         .arg("--space")
         .arg(&space)
         .arg("--json")
-        .arg("space")
+        .arg("workspace")
         .arg("unregister")
         .arg("api_space")
         .assert()
@@ -856,7 +866,7 @@ fn smoke_unsupported_space_doctor() {
         .arg("--space")
         .arg(tmp.path())
         .arg("--json")
-        .arg("space")
+        .arg("workspace")
         .arg("doctor")
         .assert()
         .failure()
@@ -916,7 +926,7 @@ fn smoke_unsupported_sync_relay() {
 }
 
 #[test]
-fn smoke_unsupported_sync_conflicts() {
+fn smoke_sync_conflicts_lists_persisted_records() {
     let tmp = TempDir::new().unwrap();
     seed_space(tmp.path());
     scan(tmp.path());
@@ -928,8 +938,8 @@ fn smoke_unsupported_sync_conflicts() {
         .arg("sync")
         .arg("conflicts")
         .assert()
-        .failure()
-        .stderr(str::contains("unsupported"));
+        .success()
+        .stdout(str::contains("[]"));
 }
 
 #[test]

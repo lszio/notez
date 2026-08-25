@@ -1,11 +1,14 @@
 //! `SourceAdapterFactory` and `SourceRegistry`.
 //!
-//! Each `SourceKind` value is associated with a [`SourceAdapterFactory`]
+//! Each `SourceKind` value can be associated with a [`SourceAdapterFactory`]
 //! that knows how to construct a [`SourceAdapter`] from a
-//! [`SourceConfig`]. Built-in factories cover the six native kinds
-//! (`Native`, `Git`, `Obsidian`, `Anytype`, `AppleNotes`,
-//! `AppleCalendar`). Third-party crates can register a factory for a
-//! custom `SourceKind::Other(String)` without modifying `core`.
+//! [`SourceConfig`]. `with_builtins()` registers the three kinds with real
+//! implementations (`Native`, `Git`, `Obsidian`). The stub-backed kinds
+//! (`Anytype`, `AppleNotes`, `AppleCalendar`) ship factories but are NOT
+//! registered by default — opt in explicitly via
+//! `registry.register(Box::new(AnytypeFactory))` (and siblings). Third-party
+//! crates can register a factory for a custom `SourceKind::Other(String)`
+//! without modifying `core`.
 
 use std::collections::HashMap;
 
@@ -33,17 +36,17 @@ impl SourceRegistry {
         Self::default()
     }
 
-    /// Construct a registry pre-populated with the six built-in
-    /// factories. This is the default state used by
-    /// `ApplicationFacade::new` and `ApplicationFacade::with_space`.
+    /// Construct a registry pre-populated with the three built-in
+    /// factories backed by real adapters. This is the default state used
+    /// by `ApplicationFacade::new` and `ApplicationFacade::with_source`.
+    /// Stub-backed factories (`AnytypeFactory`, `AppleNotesFactory`,
+    /// `AppleCalendarFactory`) are available but not registered here;
+    /// their adapters fail every operation honestly.
     pub fn with_builtins() -> Self {
         let mut r = Self::new();
         r.register(Box::new(NativeFactory));
         r.register(Box::new(GitFactory));
         r.register(Box::new(ObsidianFactory));
-        r.register(Box::new(AnytypeFactory));
-        r.register(Box::new(AppleNotesFactory));
-        r.register(Box::new(AppleCalendarFactory));
         r
     }
 
@@ -62,10 +65,7 @@ impl SourceRegistry {
     /// Build an adapter for `config`. Returns
     /// `SourceError::Other(...)` when no factory is registered for
     /// the kind.
-    pub fn build(
-        &self,
-        config: SourceConfig,
-    ) -> Result<Box<dyn SourceAdapter>, SourceError> {
+    pub fn build(&self, config: SourceConfig) -> Result<Box<dyn SourceAdapter>, SourceError> {
         let factory = self.factories.get(&config.kind).ok_or_else(|| {
             SourceError::Other(format!(
                 "no source factory registered for kind `{}`",
@@ -134,7 +134,9 @@ impl SourceAdapterFactory for AppleNotesFactory {
         SourceKind::AppleNotes
     }
     fn build(&self, config: SourceConfig) -> Result<Box<dyn SourceAdapter>, SourceError> {
-        Ok(Box::new(crate::source::AppleNotesSourceAdapter::new(config)))
+        Ok(Box::new(crate::source::AppleNotesSourceAdapter::new(
+            config,
+        )))
     }
 }
 
@@ -144,6 +146,8 @@ impl SourceAdapterFactory for AppleCalendarFactory {
         SourceKind::AppleCalendar
     }
     fn build(&self, config: SourceConfig) -> Result<Box<dyn SourceAdapter>, SourceError> {
-        Ok(Box::new(crate::source::AppleCalendarSourceAdapter::new(config)))
+        Ok(Box::new(crate::source::AppleCalendarSourceAdapter::new(
+            config,
+        )))
     }
 }

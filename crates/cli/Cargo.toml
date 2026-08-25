@@ -15,6 +15,7 @@ path = "src/main.rs"
 core       = { path = "../core" }
 orgmode    = { path = "../adapters/orgmode" }
 markdown   = { path = "../adapters/markdown" }
+composition = { path = "../composition" }
 tokio      = { version = "1", features = ["rt-multi-thread", "macros", "io-util"] }
 clap       = { workspace = true }
 serde      = { workspace = true }

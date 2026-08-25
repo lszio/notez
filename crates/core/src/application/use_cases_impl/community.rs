@@ -4,28 +4,27 @@
 //! is part of the 0.5.x-A1+A3 use-case impl split.
 
 use crate::application::service::{ApplicationError, ApplicationFacade, StorageErrorKind};
-use crate::application::write_check;
 use crate::application::use_cases::CommunityUseCase;
+use crate::application::write_check;
 use crate::domain::ProjectionStore;
 use crate::domain::community::Community;
-use std::path::Path;
 
 impl<S: ProjectionStore> CommunityUseCase for ApplicationFacade<S> {
     fn create_community(
         &self,
-        space_root: &Path,
         community: crate::domain::community::Community,
     ) -> Result<(), ApplicationError> {
+        let source_root = self.require_space_root()?;
         write_check::check_capability(self, "community")?;
 
-        let mut cfg = crate::application::community_app::SpaceCommunitiesConfig::load(space_root)
+        let mut cfg = crate::application::community_app::SpaceCommunitiesConfig::load(&source_root)
             .map_err(|e| ApplicationError::Storage {
                 kind: StorageErrorKind::InvalidState,
                 message: e.to_string(),
             })?;
         cfg.communities.retain(|c| c.id != community.id);
         cfg.communities.push(community);
-        cfg.save(space_root)
+        cfg.save(&source_root)
             .map_err(|e| ApplicationError::Storage {
                 kind: StorageErrorKind::InvalidState,
                 message: e.to_string(),
@@ -35,14 +34,13 @@ impl<S: ProjectionStore> CommunityUseCase for ApplicationFacade<S> {
 
     fn list_communities(
         &self,
-        space_root: &Path,
     ) -> Result<Vec<crate::domain::community::Community>, ApplicationError> {
-        let cfg = crate::application::community_app::SpaceCommunitiesConfig::load(space_root)
+        let source_root = self.require_space_root()?;
+        let cfg = crate::application::community_app::SpaceCommunitiesConfig::load(&source_root)
             .map_err(|e| ApplicationError::Storage {
                 kind: StorageErrorKind::InvalidState,
                 message: e.to_string(),
             })?;
         Ok(cfg.communities)
     }
-
 }

@@ -57,7 +57,7 @@ pub fn check_revision<S: ProjectionStore>(
         return Ok(());
     }
     let actual = facade
-        .store()
+        .store
         .get(r_ref)
         .map_err(|e| ApplicationError::Storage {
             kind: crate::application::service::StorageErrorKind::Sqlite,
@@ -124,7 +124,8 @@ mod tests {
             source_id: "native".to_string(),
             locator: "/x.org".to_string(),
             properties: Default::default(),
-            object_id: crate::domain::resource::ObjectId::default(),
+            object_id: crate::domain::resource::ObjectIdentity::default(),
+            primary_source_id: String::new(),
         }
     }
 
@@ -140,7 +141,9 @@ mod tests {
         let err = check_capability(&facade, "does_not_exist").unwrap_err();
         assert!(matches!(
             err,
-            ApplicationError::UnsupportedCapability { capability: "does_not_exist" }
+            ApplicationError::UnsupportedCapability {
+                capability: "does_not_exist"
+            }
         ));
     }
 
@@ -166,8 +169,7 @@ mod tests {
     fn check_revision_matches_persisted() {
         let mut facade = facade_with_builtins();
         let r = make_resource("rev-7");
-        <ApplicationFacade<_> as ResourceUseCase>::upsert_resource(&mut facade, r.clone())
-            .unwrap();
+        <ApplicationFacade<_> as ResourceUseCase>::upsert_resource(&mut facade, r.clone()).unwrap();
         assert!(check_revision(&facade, &r.r#ref, "rev-7").is_ok());
     }
 
@@ -175,8 +177,7 @@ mod tests {
     fn check_revision_mismatch_raises_conflict() {
         let mut facade = facade_with_builtins();
         let r = make_resource("rev-7");
-        <ApplicationFacade<_> as ResourceUseCase>::upsert_resource(&mut facade, r.clone())
-            .unwrap();
+        <ApplicationFacade<_> as ResourceUseCase>::upsert_resource(&mut facade, r.clone()).unwrap();
         let err = check_revision(&facade, &r.r#ref, "rev-9").unwrap_err();
         assert!(matches!(
             err,
@@ -198,10 +199,16 @@ mod tests {
         let facade = facade_with_builtins();
         let existing_outer = ResourceRef::new(ResourceKind::Document, Ulid::new());
         let candidate_outer = ResourceRef::new(ResourceKind::Document, Ulid::new());
-        let addr = ResourceAddress::Ref { r#ref: existing_outer };
+        let addr = ResourceAddress::Ref {
+            r#ref: existing_outer,
+        };
         let err = check_address_uniqueness(&facade, &addr, &candidate_outer).unwrap_err();
         match err {
-            ApplicationError::AddressUniqueness { existing, candidate, .. } => {
+            ApplicationError::AddressUniqueness {
+                existing,
+                candidate,
+                ..
+            } => {
                 assert_eq!(existing, existing_outer);
                 assert_eq!(candidate, candidate_outer);
             }

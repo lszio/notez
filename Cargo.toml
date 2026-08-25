@@ -3,7 +3,7 @@ resolver = "3"
 members = [
     "crates/core",
     "crates/cli",
-    "crates/adapters/orgmode",
+    "crates/composition",
     "crates/adapters/markdown",
     "packages/ui",
     "packages/web",

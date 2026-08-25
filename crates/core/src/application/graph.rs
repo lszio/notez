@@ -13,7 +13,7 @@
 //!
 //! `Graph::from_facade` walks every resource in a space plus the
 //! `resolved_relations` rows to build the full graph. For very
-//! large spaces, the caller can opt for a sampled or pruned
+//! large sources, the caller can opt for a sampled or pruned
 //! graph; the v0.3 implementation just truncates the node list at
 //! `MAX_NODES` and reports `truncated: true` so the renderer can
 //! surface the gap.
@@ -22,7 +22,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use crate::application::service::ApplicationFacade;
 use crate::application::use_cases::{LinkUseCase, ResourceUseCase, ScanUseCase};
-use crate::domain::{ProjectionStore, Resource, ResourceRef, ResolvedRelation, Selector};
+use crate::domain::{ProjectionStore, ResolvedRelation, Resource, ResourceRef, Selector};
 use serde::{Deserialize, Serialize};
 
 /// A node in the graph. One per `Resource` in the space.
@@ -119,9 +119,7 @@ impl Graph {
             let Ok(parsed) = ref_str.parse::<ResourceRef>() else {
                 continue;
             };
-            let Ok(relations) = facade.query_resolved_relations(&parsed) else {
-                continue;
-            };
+            let relations = facade.query_resolved_relations(&parsed)?;
             for r in relations {
                 let (s, t) = (r.source_ref.to_string(), r.target_ref.to_string());
                 if !known_refs.contains(&s) || !known_refs.contains(&t) {
@@ -153,7 +151,12 @@ impl Graph {
             n.degree = degree.get(&n.ref_str).copied().unwrap_or(0);
         }
 
-        Ok(Graph { nodes, edges, total_nodes, truncated })
+        Ok(Graph {
+            nodes,
+            edges,
+            total_nodes,
+            truncated,
+        })
     }
 
     /// Build a 1-hop subgraph around `focus`.
@@ -204,47 +207,43 @@ impl Graph {
         let mut seen: BTreeSet<(String, String)> = BTreeSet::new();
 
         // Outgoing: focus is the source.
-        if let Ok(relations) = facade.query_resolved_relations(&focus_parsed) {
-            for r in relations {
-                let s = r.source_ref.to_string();
-                let t = r.target_ref.to_string();
-                let other = if s == focus { t.clone() } else { s.clone() };
-                edges.push(GraphEdge {
-                    source: s,
-                    target: t,
-                    kind: status_kind(&r.status).to_string(),
-                });
-                let (a, b) = {
-                    let last = edges.last().unwrap();
-                    if last.source <= last.target {
-                        (last.source.clone(), last.target.clone())
-                    } else {
-                        (last.target.clone(), last.source.clone())
-                    }
-                };
-                seen.insert((a, b));
-                if !nodes.contains_key(&other) {
-                    if let Some(r2) = page.items.iter().find(|r| r.r#ref.to_string() == other) {
-                        nodes.insert(
-                            other.clone(),
-                            GraphNode {
-                                ref_str: other.clone(),
-                                kind: r2.kind.to_string(),
-                                title: truncate(&r2.title, 80),
-                                degree: 0,
-                            },
-                        );
-                    } else {
-                        nodes.insert(
-                            other.clone(),
-                            GraphNode {
-                                ref_str: other.clone(),
-                                kind: "missing".to_string(),
-                                title: truncate(&other, 80),
-                                degree: 0,
-                            },
-                        );
-                    }
+        let relations = facade.query_resolved_relations(&focus_parsed)?;
+        for r in relations {
+            let s = r.source_ref.to_string();
+            let t = r.target_ref.to_string();
+            let other = if s == focus { t.clone() } else { s.clone() };
+            let (a, b) = if s <= t {
+                (s.clone(), t.clone())
+            } else {
+                (t.clone(), s.clone())
+            };
+            edges.push(GraphEdge {
+                source: s,
+                target: t,
+                kind: status_kind(&r.status).to_string(),
+            });
+            seen.insert((a, b));
+            if !nodes.contains_key(&other) {
+                if let Some(r2) = page.items.iter().find(|r| r.r#ref.to_string() == other) {
+                    nodes.insert(
+                        other.clone(),
+                        GraphNode {
+                            ref_str: other.clone(),
+                            kind: r2.kind.to_string(),
+                            title: truncate(&r2.title, 80),
+                            degree: 0,
+                        },
+                    );
+                } else {
+                    nodes.insert(
+                        other.clone(),
+                        GraphNode {
+                            ref_str: other.clone(),
+                            kind: "missing".to_string(),
+                            title: truncate(&other, 80),
+                            degree: 0,
+                        },
+                    );
                 }
             }
         }
@@ -259,16 +258,18 @@ impl Graph {
             let Ok(src_parsed) = src.parse::<ResourceRef>() else {
                 continue;
             };
-            let Ok(relations) = facade.query_resolved_relations(&src_parsed) else {
-                continue;
-            };
+            let relations = facade.query_resolved_relations(&src_parsed)?;
             for rel in relations {
                 if rel.target_ref.to_string() != focus {
                     continue;
                 }
                 let s = rel.source_ref.to_string();
                 let t = rel.target_ref.to_string();
-                let key = if s <= t { (s.clone(), t.clone()) } else { (t.clone(), s.clone()) };
+                let key = if s <= t {
+                    (s.clone(), t.clone())
+                } else {
+                    (t.clone(), s.clone())
+                };
                 if !seen.insert(key) {
                     continue;
                 }
@@ -455,8 +456,18 @@ mod tests {
     fn layout_force_separates_nodes() {
         let g = Graph {
             nodes: vec![
-                GraphNode { ref_str: "a".into(), kind: "doc".into(), title: "a".into(), degree: 0 },
-                GraphNode { ref_str: "b".into(), kind: "doc".into(), title: "b".into(), degree: 0 },
+                GraphNode {
+                    ref_str: "a".into(),
+                    kind: "doc".into(),
+                    title: "a".into(),
+                    degree: 0,
+                },
+                GraphNode {
+                    ref_str: "b".into(),
+                    kind: "doc".into(),
+                    title: "b".into(),
+                    degree: 0,
+                },
             ],
             edges: vec![],
             total_nodes: 2,
@@ -466,6 +477,9 @@ mod tests {
         let (ax, ay) = pos["a"];
         let (bx, by) = pos["b"];
         let d = ((ax - bx).powi(2) + (ay - by).powi(2)).sqrt();
-        assert!(d > 5.0, "two disconnected nodes should not collapse onto each other; got distance {d}");
+        assert!(
+            d > 5.0,
+            "two disconnected nodes should not collapse onto each other; got distance {d}"
+        );
     }
 }

@@ -760,6 +760,7 @@ dependencies = [
  "anyhow",
  "assert_cmd",
  "clap",
+ "composition",
  "core",
  "libc",
  "markdown",
@@ -833,6 +834,16 @@ checksum = "ba5a308b75df32fe02788e748662718f03fde005016435c444eea572398219fd"
 dependencies = [
  "bytes",
  "memchr",
+]
+
+[[package]]
+name = "composition"
+version = "0.1.0"
+dependencies = [
+ "core",
+ "markdown",
+ "orgmode",
+ "thiserror 2.0.20",
 ]
 
 [[package]]
@@ -7206,6 +7217,7 @@ dependencies = [
  "axum",
  "base64",
  "bytes",
+ "composition",
  "core",
  "dioxus",
  "getrandom 0.3.4",

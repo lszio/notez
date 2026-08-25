@@ -1,10 +1,9 @@
 use crate::ApplicationError;
 use crate::domain::{
-    LinkDiagnostic, LinkOccurrence, LinkTarget, ProjectionStore, ResolvedRelation, ResolutionStatus,
-    ResourceKind, ResourceRef, Selector,
+    LinkDiagnostic, LinkOccurrence, LinkTarget, ProjectionStore, ResolutionStatus,
+    ResolvedRelation, ResourceKind, ResourceRef, Selector,
 };
 use serde::{Deserialize, Serialize};
-use std::path::Path;
 
 /// Per-status counts produced by a reindex pass.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -24,20 +23,24 @@ pub struct LinkResolver;
 
 impl LinkResolver {
     /// Resolve a single occurrence against the store. Returns
-    /// `(status, target_ref, candidates)`.
+    /// `Ok((status, target_ref, candidates))`; storage failures surface as
+    /// `Err(ApplicationError::Storage)` instead of being misreported as
+    /// business-level "unresolved" links.
     pub fn resolve<S: ProjectionStore>(
         store: &S,
         occ: &LinkOccurrence,
-    ) -> (ResolutionStatus, Option<ResourceRef>, Vec<ResourceRef>) {
-        match &occ.target {
+    ) -> Result<(ResolutionStatus, Option<ResourceRef>, Vec<ResourceRef>), ApplicationError> {
+        Ok(match &occ.target {
             LinkTarget::Id { value, .. } => {
                 if let Some(r_ref) = occ.target.as_resource_ref() {
                     match store.get(&r_ref) {
                         Ok(Some(_)) => (ResolutionStatus::Resolved, Some(r_ref), vec![]),
                         Ok(None) => (ResolutionStatus::Unresolved, None, vec![]),
                         Err(e) => {
-                            eprintln!("link_resolver: store.get failed: {e}");
-                            (ResolutionStatus::Unresolved, None, vec![])
+                            return Err(ApplicationError::Storage {
+                                kind: crate::application::StorageErrorKind::Sqlite,
+                                message: format!("link resolver store.get failed: {e}"),
+                            });
                         }
                     }
                 } else {
@@ -70,8 +73,10 @@ impl LinkResolver {
                 let page = match store.query(&selector) {
                     Ok(p) => p,
                     Err(e) => {
-                        eprintln!("link_resolver: store.query failed: {e}");
-                        return (ResolutionStatus::Unresolved, None, vec![]);
+                        return Err(ApplicationError::Storage {
+                            kind: crate::application::StorageErrorKind::Sqlite,
+                            message: format!("link resolver store.query failed: {e}"),
+                        });
                     }
                 };
                 let normalized = path.trim_start_matches("./");
@@ -97,8 +102,10 @@ impl LinkResolver {
                 let page = match store.query(&selector) {
                     Ok(p) => p,
                     Err(e) => {
-                        eprintln!("link_resolver: store.query failed: {e}");
-                        return (ResolutionStatus::Unresolved, None, vec![]);
+                        return Err(ApplicationError::Storage {
+                            kind: crate::application::StorageErrorKind::Sqlite,
+                            message: format!("link resolver store.query failed: {e}"),
+                        });
                     }
                 };
                 let mut exact_matches = Vec::new();
@@ -122,7 +129,7 @@ impl LinkResolver {
             }
             LinkTarget::Url { .. } => (ResolutionStatus::External, None, vec![]),
             LinkTarget::Custom { .. } => (ResolutionStatus::Unresolved, None, vec![]),
-        }
+        })
     }
 
     /// Resolve all occurrences and persist the resulting diagnostics + resolved
@@ -137,7 +144,7 @@ impl LinkResolver {
         let mut diagnostics = Vec::with_capacity(occurrences.len());
 
         for occ in occurrences {
-            let (status, target_ref, candidates) = Self::resolve(store, &occ);
+            let (status, target_ref, candidates) = Self::resolve(store, &occ)?;
             let now_secs = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .map(|duration| duration.as_secs())
@@ -191,10 +198,9 @@ pub fn resolve_and_store_links<S: ProjectionStore>(
     Ok(())
 }
 
-/// Reindex every source under `space_root`, returning aggregate status counts.
+/// Reindex every source in the projection, returning aggregate status counts.
 pub fn reindex_links<S: ProjectionStore>(
     store: &mut S,
-    _space_root: &Path,
     occurrences_by_source: Vec<(String, Vec<LinkOccurrence>)>,
 ) -> Result<LinkReindexReport, ApplicationError> {
     let mut report = LinkReindexReport::default();
@@ -222,7 +228,7 @@ pub fn diagnostics_for<S: ProjectionStore>(
     store
         .list_link_diagnostics(source_ref)
         .map_err(|e| ApplicationError::Storage {
-                kind: crate::application::StorageErrorKind::Sqlite,
-                message: e.to_string(),
-            })
+            kind: crate::application::StorageErrorKind::Sqlite,
+            message: e.to_string(),
+        })
 }

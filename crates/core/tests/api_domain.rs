@@ -1,13 +1,13 @@
-use notez_core::application::{ApplicationError, ApplicationService, ResolveResult, SpaceContext};
-use notez_core::config::RuntimeConfig;
+use notez_core::application::{ApplicationError, ApplicationService, ResolveResult, SourceContext};
+use notez_core::config::SourceConfig;
 use notez_core::domain::community::Community;
 use notez_core::domain::schema::{
     PropertyType, SchemaField, Trait, TypeDefinition, TypeRegistry, ValidationError,
 };
 use notez_core::domain::{
-    derived_id, LinkOccurrence, LinkTarget, Projection, ProjectionStore, QueryPage,
-    RelationDirection, RelationType, Resource, ResourceAddress, ResourceKind, ResourceRef,
-    ResourceRefError, ResourceRelation, RuleEngine, Selector,
+    LinkOccurrence, LinkTarget, Projection, ProjectionStore, QueryPage, RelationDirection,
+    RelationType, Resource, ResourceAddress, ResourceKind, ResourceRef, ResourceRefError,
+    ResourceRelation, RuleEngine, Selector, TextSpan, derived_id,
 };
 use notez_core::source::{FormatParser, ParsedEntity, ParserError, RawEntity};
 use notez_core::storage::SqliteProjection;
@@ -41,7 +41,8 @@ fn resource(
         source_id: source_id.into(),
         locator: format!("{source_id}/{title}"),
         properties: BTreeMap::new(),
-        object_id: notez_core::domain::ObjectId::default(),
+        object_id: notez_core::domain::ObjectIdentity::default(),
+        primary_source_id: String::new(),
     }
 }
 
@@ -90,6 +91,17 @@ impl ProjectionStore for FailingStore {
     fn clear(&mut self) -> Result<(), Self::Error> {
         Err(ContractFailure)
     }
+
+    fn replace_conflicts(
+        &mut self,
+        _records: &[notez_core::domain::ConflictRecord],
+    ) -> Result<(), Self::Error> {
+        Err(ContractFailure)
+    }
+
+    fn list_conflicts(&self) -> Result<Vec<notez_core::domain::ConflictRecord>, Self::Error> {
+        Err(ContractFailure)
+    }
 }
 
 struct MarkerParser;
@@ -124,7 +136,10 @@ fn resource_kinds_refs_and_derived_ids_have_stable_happy_contracts() {
 
 #[test]
 fn resource_ref_and_resource_deserialization_reject_invalid_input() {
-    assert_eq!(ResourceRef::parse("missing-colon"), Err(ResourceRefError::InvalidFormat));
+    assert_eq!(
+        ResourceRef::parse("missing-colon"),
+        Err(ResourceRefError::InvalidFormat)
+    );
     assert!(matches!(
         ResourceRef::parse(&format!("unknown:{DOC_ID}")),
         Err(ResourceRefError::UnknownKind(kind)) if kind == "unknown"
@@ -156,7 +171,10 @@ fn resource_relation_segment_and_projection_domain_types_round_trip() {
         creator: "scan".to_string(),
     };
     let json = serde_json::to_string(&relation).unwrap();
-    assert_eq!(serde_json::from_str::<ResourceRelation>(&json).unwrap(), relation);
+    assert_eq!(
+        serde_json::from_str::<ResourceRelation>(&json).unwrap(),
+        relation
+    );
 
     let segment = notez_core::domain::SegmentRecord {
         id: "segment-1".into(),
@@ -165,9 +183,13 @@ fn resource_relation_segment_and_projection_domain_types_round_trip() {
         offset_start: 0,
         offset_end: 5,
     };
-    assert_eq!(serde_json::from_value::<notez_core::domain::SegmentRecord>(
-        serde_json::to_value(&segment).unwrap()
-    ).unwrap(), segment);
+    assert_eq!(
+        serde_json::from_value::<notez_core::domain::SegmentRecord>(
+            serde_json::to_value(&segment).unwrap()
+        )
+        .unwrap(),
+        segment
+    );
 
     assert_eq!(Projection::summary().fields, ["ref", "title", "revision"]);
     assert!(serde_json::from_str::<ResourceRelation>("{}").is_err());
@@ -190,11 +212,26 @@ fn selector_builders_select_and_invalid_json_is_rejected() {
 #[test]
 fn link_targets_and_addresses_cover_locators_refs_and_parse_errors() {
     let id = LinkTarget::id(DOC_ID, Some(ResourceKind::Document));
-    assert_eq!(id.as_resource_ref(), Some(rref(ResourceKind::Document, DOC_ID)));
-    assert_eq!(LinkTarget::file("notes.org", Some("Intro".into())).to_string(), "file:notes.org::Intro");
-    assert_eq!(LinkTarget::title("Design", Some("API".into())).to_string(), "[[Design#API]]");
-    assert_eq!(LinkTarget::url("https://example.test").to_string(), "https://example.test");
-    assert_eq!(LinkTarget::custom("zotero", "42", None).to_string(), "zotero:42");
+    assert_eq!(
+        id.as_resource_ref(),
+        Some(rref(ResourceKind::Document, DOC_ID))
+    );
+    assert_eq!(
+        LinkTarget::file("notes.org", Some("Intro".into())).to_string(),
+        "file:notes.org::Intro"
+    );
+    assert_eq!(
+        LinkTarget::title("Design", Some("API".into())).to_string(),
+        "[[Design#API]]"
+    );
+    assert_eq!(
+        LinkTarget::url("https://example.test").to_string(),
+        "https://example.test"
+    );
+    assert_eq!(
+        LinkTarget::custom("zotero", "42", None).to_string(),
+        "zotero:42"
+    );
 
     assert!(matches!(
         ResourceAddress::parse(&format!("document:{DOC_ID}")).unwrap(),
@@ -202,13 +239,18 @@ fn link_targets_and_addresses_cover_locators_refs_and_parse_errors() {
     ));
     assert!(matches!(
         ResourceAddress::parse("file:notes.org::Intro").unwrap(),
-        ResourceAddress::Locator { target: LinkTarget::File { .. } }
+        ResourceAddress::Locator {
+            target: LinkTarget::File { .. }
+        }
     ));
     assert!(matches!(
         ResourceAddress::from_locator(LinkTarget::title("Design", None)),
         ResourceAddress::Locator { .. }
     ));
-    assert_eq!(ResourceAddress::parse("   "), Err(ResourceRefError::InvalidFormat));
+    assert_eq!(
+        ResourceAddress::parse("   "),
+        Err(ResourceRefError::InvalidFormat)
+    );
 }
 
 #[test]
@@ -236,7 +278,10 @@ fn type_registry_validates_registered_types_and_reports_schema_errors() {
             ),
         ]),
     });
-    assert_eq!(registry.get("project").unwrap().traits, vec![Trait::Taskable, Trait::ParaItem]);
+    assert_eq!(
+        registry.get("project").unwrap().traits,
+        vec![Trait::Taskable, Trait::ParaItem]
+    );
 
     let mut valid = resource(ResourceKind::Heading, HEADING_ID, "Project", "native", "1");
     valid.properties.extend([
@@ -249,7 +294,9 @@ fn type_registry_validates_registered_types_and_reports_schema_errors() {
     valid.properties.remove("OWNER");
     assert_eq!(
         registry.validate(&valid),
-        Err(ValidationError::MissingRequiredField { field: "OWNER".into() })
+        Err(ValidationError::MissingRequiredField {
+            field: "OWNER".into()
+        })
     );
     valid.properties.insert("OWNER".into(), "Ada".into());
     valid.properties.insert("ESTIMATE".into(), "soon".into());
@@ -263,7 +310,9 @@ fn type_registry_validates_registered_types_and_reports_schema_errors() {
     valid.properties.insert("TYPE".into(), "unknown".into());
     assert_eq!(
         registry.validate(&valid),
-        Err(ValidationError::UnknownType { name: "unknown".into() })
+        Err(ValidationError::UnknownType {
+            name: "unknown".into()
+        })
     );
 }
 
@@ -274,7 +323,10 @@ fn rule_engine_reports_matching_and_non_matching_traces() {
     project.properties.insert("TYPE".into(), "project".into());
     let matching = engine.evaluate(&project);
     assert_eq!(matching.classified_type.as_deref(), Some("project"));
-    assert_eq!(matching.derived_properties.get("para").map(String::as_str), Some("projects"));
+    assert_eq!(
+        matching.derived_properties.get("para").map(String::as_str),
+        Some("projects")
+    );
     assert!(matching.traces.iter().all(|trace| trace.matched));
 
     let plain = resource(ResourceKind::Heading, TASK_ID, "Plain", "native", "1");
@@ -285,9 +337,21 @@ fn rule_engine_reports_matching_and_non_matching_traces() {
 
 #[test]
 fn community_filter_honors_selector_pins_and_exclusions() {
-    let project = resource(ResourceKind::Heading, HEADING_ID, "Project Alpha", "native", "1");
+    let project = resource(
+        ResourceKind::Heading,
+        HEADING_ID,
+        "Project Alpha",
+        "native",
+        "1",
+    );
     let pinned = resource(ResourceKind::Document, DOC_ID, "Pinned", "native", "1");
-    let excluded = resource(ResourceKind::Heading, TASK_ID, "Project Hidden", "native", "1");
+    let excluded = resource(
+        ResourceKind::Heading,
+        TASK_ID,
+        "Project Hidden",
+        "native",
+        "1",
+    );
     let community = Community {
         id: "projects".into(),
         name: "Projects".into(),
@@ -308,22 +372,25 @@ fn community_filter_honors_selector_pins_and_exclusions() {
 }
 
 #[test]
-fn space_context_is_explicit_and_service_exposes_bound_or_unbound_state() {
-    let runtime = RuntimeConfig {
-        space_root: PathBuf::from("/tmp/space"),
-        space_name: "personal".into(),
-        database: PathBuf::from("/tmp/space/.notez/index.sqlite"),
-        ..RuntimeConfig::default()
+fn source_context_is_explicit_and_service_exposes_bound_or_unbound_state() {
+    let cfg = SourceConfig {
+        version: notez_core::config::model::CURRENT_VERSION,
+        source: notez_core::config::model::SourceIdentity {
+            name: "personal".into(),
+            database: PathBuf::from("/tmp/source/.notez/index.sqlite"),
+        },
+        workflow: Default::default(),
+        sources: Vec::new(),
+        link_overrides: serde_json::Value::Null,
     };
-    let context = SpaceContext::new("space-1", PathBuf::from("/tmp/space"), runtime.clone());
-    let service = ApplicationService::with_space(SqliteProjection::in_memory().unwrap(), context);
-    let bound = service.space().unwrap();
-    assert_eq!(bound.space_id, "space-1");
-    assert_eq!(bound.root, PathBuf::from("/tmp/space"));
-    assert_eq!(bound.runtime, runtime);
-
+    let context = SourceContext::new("source-1", PathBuf::from("/tmp/source"), cfg);
+    let service = ApplicationService::with_source(SqliteProjection::in_memory().unwrap(), context);
+    let bound = service.source().unwrap();
+    assert_eq!(bound.source_id, "source-1");
+    assert_eq!(bound.root, PathBuf::from("/tmp/source"));
+    assert_eq!(bound.config.source.name, "personal");
     let unbound = ApplicationService::new(SqliteProjection::in_memory().unwrap());
-    assert!(unbound.space().is_none());
+    assert!(unbound.source().is_none());
 }
 
 #[test]
@@ -334,10 +401,21 @@ fn application_scan_query_read_and_resolve_cover_success_and_not_found() {
         format!("#+title: Notes\n#+ID: {DOC_ID}\n\n* Design API\n:PROPERTIES:\n:ID: {HEADING_ID}\n:END:\n"),
     )
     .unwrap();
-    let mut service = ApplicationService::new(SqliteProjection::in_memory().unwrap());
+    let config = notez_core::config::model::SourceConfig {
+        version: 2,
+        source: notez_core::config::model::SourceIdentity {
+            name: "test".into(),
+            database: std::path::PathBuf::from(".notez/index.sqlite"),
+        },
+        workflow: Default::default(),
+        sources: vec![],
+        link_overrides: serde_json::Value::Null,
+    };
+    let ctx = SourceContext::new("test", dir.path().to_path_buf(), config);
+    let mut service = ApplicationService::with_source(SqliteProjection::in_memory().unwrap(), ctx);
     service.register_format_parser(Box::new(MarkerParser));
 
-    let report = service.scan_native(dir.path()).unwrap();
+    let report = service.scan_native().unwrap();
     assert_eq!(report.scanned_files, 1);
     assert_eq!(report.scanned_resources, 2);
 
@@ -346,39 +424,78 @@ fn application_scan_query_read_and_resolve_cover_success_and_not_found() {
         .unwrap();
     assert_eq!(page.items.len(), 1);
     let heading_ref = rref(ResourceKind::Heading, HEADING_ID);
-    assert_eq!(service.read(&heading_ref).unwrap().unwrap().title, "Design API");
-    assert_eq!(service.resolve("Design API").unwrap(), ResolveResult::Found(heading_ref));
-    assert_eq!(service.resolve("missing title").unwrap(), ResolveResult::NotFound);
     assert_eq!(
-        service.resolve_address(&ResourceAddress::from_ref(heading_ref)).unwrap(),
+        service.read(&heading_ref).unwrap().unwrap().title,
+        "Design API"
+    );
+    assert_eq!(
+        service.resolve("Design API").unwrap(),
+        ResolveResult::Found(heading_ref)
+    );
+    assert_eq!(
+        service.resolve("missing title").unwrap(),
+        ResolveResult::NotFound
+    );
+    assert_eq!(
+        service
+            .resolve_address(&ResourceAddress::from_ref(heading_ref))
+            .unwrap(),
         ResolveResult::Found(heading_ref)
     );
     assert_eq!(
         service
-            .resolve_address(&ResourceAddress::from_locator(LinkTarget::url("https://example.test")))
+            .resolve_address(&ResourceAddress::from_locator(LinkTarget::url(
+                "https://example.test"
+            )))
             .unwrap(),
         ResolveResult::NotFound
     );
-    assert!(service.read(&rref(ResourceKind::Heading, TASK_ID)).unwrap().is_none());
+    assert!(
+        service
+            .read(&rref(ResourceKind::Heading, TASK_ID))
+            .unwrap()
+            .is_none()
+    );
 }
 
 #[test]
 fn application_scan_rejects_missing_registry_and_storage_errors_are_preserved() {
     let dir = tempfile::tempdir().unwrap();
-    let mut unregistered = ApplicationService::new(SqliteProjection::in_memory().unwrap());
-    let err = unregistered.scan_native(dir.path()).unwrap_err();
-    assert!(matches!(err, ApplicationError::Storage { kind: _, ref message } if message.contains("no format parsers")));
+    let config = notez_core::config::model::SourceConfig {
+        version: 2,
+        source: notez_core::config::model::SourceIdentity {
+            name: "test".into(),
+            database: std::path::PathBuf::from(".notez/index.sqlite"),
+        },
+        workflow: Default::default(),
+        sources: vec![],
+        link_overrides: serde_json::Value::Null,
+    };
+    let ctx = SourceContext::new("test", dir.path().to_path_buf(), config);
+    let mut unregistered =
+        ApplicationService::with_source(SqliteProjection::in_memory().unwrap(), ctx);
+    let err = unregistered.scan_native().unwrap_err();
+    assert!(
+        matches!(err, ApplicationError::Storage { kind: _, ref message } if message.contains("no format parsers"))
+    );
 
     let service = ApplicationService::new(FailingStore);
     for err in [
         service.query(&Selector::new()).unwrap_err(),
-        service.read(&rref(ResourceKind::Document, DOC_ID)).unwrap_err(),
+        service
+            .read(&rref(ResourceKind::Document, DOC_ID))
+            .unwrap_err(),
         service.resolve("anything").unwrap_err(),
         service
-            .resolve_address(&ResourceAddress::from_ref(rref(ResourceKind::Document, DOC_ID)))
+            .resolve_address(&ResourceAddress::from_ref(rref(
+                ResourceKind::Document,
+                DOC_ID,
+            )))
             .unwrap_err(),
     ] {
-        assert!(matches!(err, ApplicationError::Storage { kind: _, ref message } if message == "contract failure"));
+        assert!(
+            matches!(err, ApplicationError::Storage { kind: _, ref message } if message == "contract failure")
+        );
         assert_eq!(err.to_string(), "storage error (sqlite): contract failure");
     }
 }
@@ -386,9 +503,21 @@ fn application_scan_rejects_missing_registry_and_storage_errors_are_preserved() 
 #[test]
 fn application_mutation_listing_inspection_agenda_and_para_happy_paths() {
     let mut service = ApplicationService::new(SqliteProjection::in_memory().unwrap());
-    let mut project = resource(ResourceKind::Heading, HEADING_ID, "Project", "native", "2026-01-01");
+    let mut project = resource(
+        ResourceKind::Heading,
+        HEADING_ID,
+        "Project",
+        "native",
+        "2026-01-01",
+    );
     project.properties.insert("TYPE".into(), "project".into());
-    let mut task = resource(ResourceKind::Heading, TASK_ID, "Ship API", "git", "2026-02-01");
+    let mut task = resource(
+        ResourceKind::Heading,
+        TASK_ID,
+        "Ship API",
+        "git",
+        "2026-02-01",
+    );
     task.properties.extend([
         ("TODO".into(), "NEXT".into()),
         ("SCHEDULED".into(), "2026-08-02".into()),
@@ -397,17 +526,36 @@ fn application_mutation_listing_inspection_agenda_and_para_happy_paths() {
 
     service.upsert_resource(project.clone()).unwrap();
     service.upsert_resource(task.clone()).unwrap();
-    assert_eq!(service.store().get(&project.r#ref).unwrap(), Some(project.clone()));
-    assert!(service.store_mut().get(&task.r#ref).unwrap().is_some());
+    // `upsert_resource` materializes the implicit "self is primary" rule on
+    // persist: a Resource whose `primary_source_id` is empty is stored as
+    // `primary_source_id == source_id`, which is what the round trip returns.
+    let mut expected = project.clone();
+    expected.primary_source_id = "native".to_string();
+    assert_eq!(service.read(&project.r#ref).unwrap(), Some(expected));
 
     let recent = service.list_recent(1).unwrap();
-    assert_eq!(recent, vec![task.clone()]);
-    assert_eq!(service.list_by_source("native", 10).unwrap(), vec![project.clone()]);
+    let mut recent_task = task.clone();
+    recent_task.primary_source_id = task.source_id.clone();
+    assert_eq!(recent, vec![recent_task]);
+    let mut expected_project = project.clone();
+    expected_project.primary_source_id = project.source_id.clone();
+    assert_eq!(
+        service.list_by_source("native", 10).unwrap(),
+        vec![expected_project]
+    );
     assert!(service.list_by_source("missing", 10).unwrap().is_empty());
 
     let inspect = service.inspect_rules(&project.r#ref).unwrap().unwrap();
-    assert_eq!(inspect.derived_properties.get("para").map(String::as_str), Some("projects"));
-    assert!(service.inspect_rules(&rref(ResourceKind::Document, DOC_ID)).unwrap().is_none());
+    assert_eq!(
+        inspect.derived_properties.get("para").map(String::as_str),
+        Some("projects")
+    );
+    assert!(
+        service
+            .inspect_rules(&rref(ResourceKind::Document, DOC_ID))
+            .unwrap()
+            .is_none()
+    );
 
     let agenda = service.agenda().unwrap();
     assert_eq!(agenda.items.len(), 1);
@@ -429,7 +577,9 @@ fn application_main_paths_surface_storage_errors() {
         service.upsert_resource(doc.clone()).unwrap_err(),
         service.delete_resource(&doc.r#ref).unwrap_err(),
     ] {
-        assert!(matches!(err, ApplicationError::Storage { kind: _, ref message } if message == "contract failure"));
+        assert!(
+            matches!(err, ApplicationError::Storage { kind: _, ref message } if message == "contract failure")
+        );
     }
 
     let service = ApplicationService::new(FailingStore);
@@ -440,24 +590,43 @@ fn application_main_paths_surface_storage_errors() {
         service.agenda().unwrap_err(),
         service.para_overview().unwrap_err(),
     ] {
-        assert!(matches!(err, ApplicationError::Storage { kind: _, ref message } if message == "contract failure"));
+        assert!(
+            matches!(err, ApplicationError::Storage { kind: _, ref message } if message == "contract failure")
+        );
     }
 }
 
 #[test]
 fn application_error_variants_expose_not_found_and_unsupported_content() {
-    let mut service = ApplicationService::new(SqliteProjection::in_memory().unwrap());
+    let config = notez_core::config::model::SourceConfig {
+        version: 2,
+        source: notez_core::config::model::SourceIdentity {
+            name: "test".into(),
+            database: std::path::PathBuf::from(".notez/index.sqlite"),
+        },
+        workflow: Default::default(),
+        sources: vec![],
+        link_overrides: serde_json::Value::Null,
+    };
+    let ctx = SourceContext::new("test", PathBuf::from("/tmp/space"), config);
+    let mut service = ApplicationService::with_source(SqliteProjection::in_memory().unwrap(), ctx);
     let missing = rref(ResourceKind::Attachment, DOC_ID);
-    let err = service
-        .run_extraction(PathBuf::from("/tmp/space").as_path(), &missing)
-        .unwrap_err();
+    let err = service.run_extraction(&missing).unwrap_err();
     assert!(matches!(err, ApplicationError::NotFound { r_ref, .. } if r_ref == missing));
     assert_eq!(
         err.to_string(),
         format!("resource not found: {missing} (kind=attachment)")
     );
 
-    let err = service.list_conflicts().unwrap_err();
-    assert!(matches!(err, ApplicationError::UnsupportedCapability { capability } if capability.contains("conflict list")));
+    // `list_conflicts` now reads the persisted conflict table (returns an
+    // empty list on a fresh projection); the unsupported-capability shape
+    // is pinned by `relay_sync` instead.
+    let err = service.relay_sync().unwrap_err();
+    assert!(
+        matches!(err, ApplicationError::UnsupportedCapability { capability } if capability.contains("not yet implemented"))
+    );
     assert!(err.to_string().contains("unsupported capability"));
+
+    let conflicts = service.list_conflicts().unwrap();
+    assert!(conflicts.is_empty());
 }

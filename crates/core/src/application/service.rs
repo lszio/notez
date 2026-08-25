@@ -1,7 +1,8 @@
-use crate::application::context::SpaceContext;
+use crate::application::context::SourceContext;
+use crate::config::SourceInstanceConfig;
 use crate::domain::{
-    LinkDiagnostic, LinkOccurrence, ProjectionStore, QueryPage, ResolvedRelation,
-    ResolutionStatus, Resource, ResourceKind, ResourceRef, Selector,
+    LinkDiagnostic, LinkOccurrence, ProjectionStore, QueryPage, ResolutionStatus, ResolvedRelation,
+    Resource, ResourceKind, ResourceRef, Selector,
 };
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -10,6 +11,7 @@ use walkdir::WalkDir;
 /// The stable error taxonomy for the application layer. Every variant
 /// carries typed fields; the `Display` output and the `serde` shape are
 /// public contracts (see docs/superpowers/specs/2026-08-02-application-error-design.org).
+
 ///
 /// Wire format: internally tagged JSON, `{"kind": "<snake_case variant>", ...}`.
 /// The impls are hand-written because `UnsupportedCapability` carries a
@@ -102,7 +104,11 @@ impl std::fmt::Display for ApplicationError {
             ApplicationError::SourceNotFound { source_id } => {
                 write!(f, "source not found: {source_id}")
             }
-            ApplicationError::AddressUniqueness { addr, existing, candidate } => {
+            ApplicationError::AddressUniqueness {
+                addr,
+                existing,
+                candidate,
+            } => {
                 // ResourceAddress has no Display impl yet; render the
                 // bound refs (which are Copy) instead.
                 let _ = addr;
@@ -161,7 +167,11 @@ impl serde::Serialize for ApplicationError {
                 map.serialize_entry("kind", "source_not_found")?;
                 map.serialize_entry("source_id", source_id)?;
             }
-            ApplicationError::AddressUniqueness { addr, existing, candidate } => {
+            ApplicationError::AddressUniqueness {
+                addr,
+                existing,
+                candidate,
+            } => {
                 map.serialize_entry("kind", "address_uniqueness")?;
                 map.serialize_entry("addr", addr)?;
                 map.serialize_entry("existing", existing)?;
@@ -275,7 +285,8 @@ impl<'de> serde::Deserialize<'de> for ApplicationError {
                     .get("source_id")
                     .ok_or_else(|| D::Error::custom("ApplicationError: missing `source_id`"))?;
                 Ok(ApplicationError::ReadOnlySource {
-                    source_id: serde_json::from_value(source_id.clone()).map_err(D::Error::custom)?,
+                    source_id: serde_json::from_value(source_id.clone())
+                        .map_err(D::Error::custom)?,
                 })
             }
             "source_not_found" => {
@@ -283,7 +294,8 @@ impl<'de> serde::Deserialize<'de> for ApplicationError {
                     .get("source_id")
                     .ok_or_else(|| D::Error::custom("ApplicationError: missing `source_id`"))?;
                 Ok(ApplicationError::SourceNotFound {
-                    source_id: serde_json::from_value(source_id.clone()).map_err(D::Error::custom)?,
+                    source_id: serde_json::from_value(source_id.clone())
+                        .map_err(D::Error::custom)?,
                 })
             }
             "address_uniqueness" => {
@@ -299,7 +311,8 @@ impl<'de> serde::Deserialize<'de> for ApplicationError {
                 Ok(ApplicationError::AddressUniqueness {
                     addr: serde_json::from_value(addr.clone()).map_err(D::Error::custom)?,
                     existing: serde_json::from_value(existing.clone()).map_err(D::Error::custom)?,
-                    candidate: serde_json::from_value(candidate.clone()).map_err(D::Error::custom)?,
+                    candidate: serde_json::from_value(candidate.clone())
+                        .map_err(D::Error::custom)?,
                 })
             }
             other => Err(D::Error::custom(format!(
@@ -338,7 +351,7 @@ pub struct ApplicationFacade<S: ProjectionStore> {
     pub(crate) store: S,
     pub(crate) rule_engine: crate::domain::RuleEngine,
     pub(crate) format_parsers: Vec<Box<dyn crate::source::FormatParser>>,
-    pub(crate) space: Option<SpaceContext>,
+    pub(crate) source: Option<SourceContext>,
     pub(crate) capability_catalog: crate::capability::CapabilityCatalog,
     pub(crate) source_registry: crate::source::SourceRegistry,
 }
@@ -354,23 +367,23 @@ impl<S: ProjectionStore> ApplicationFacade<S> {
             store,
             rule_engine: crate::domain::RuleEngine::default_rules(),
             format_parsers: Vec::new(),
-            space: None,
+            source: None,
             capability_catalog: crate::capability::CapabilityCatalog::with_builtins(),
             source_registry: crate::source::SourceRegistry::with_builtins(),
         }
     }
 
     /// Construct an `ApplicationFacade` bound to an explicit
-    /// [`SpaceContext`]. The space is the single source of truth for the
+    /// [`SourceContext`]. The space is the single source of truth for the
     /// service's filesystem root and resolved configuration; the service
     /// will refuse mutation paths that depend on the process working
     /// directory.
-    pub fn with_space(store: S, space: SpaceContext) -> Self {
+    pub fn with_source(store: S, source: SourceContext) -> Self {
         Self {
             store,
             rule_engine: crate::domain::RuleEngine::default_rules(),
             format_parsers: Vec::new(),
-            space: Some(space),
+            source: Some(source),
             capability_catalog: crate::capability::CapabilityCatalog::with_builtins(),
             source_registry: crate::source::SourceRegistry::with_builtins(),
         }
@@ -381,15 +394,12 @@ impl<S: ProjectionStore> ApplicationFacade<S> {
     /// built-in factories; this constructor is for tests and for
     /// third-party compositions that want to start from an empty
     /// registry or one with custom factories pre-registered.
-    pub fn with_registry(
-        store: S,
-        registry: crate::source::SourceRegistry,
-    ) -> Self {
+    pub fn with_registry(store: S, registry: crate::source::SourceRegistry) -> Self {
         Self {
             store,
             rule_engine: crate::domain::RuleEngine::default_rules(),
             format_parsers: Vec::new(),
-            space: None,
+            source: None,
             capability_catalog: crate::capability::CapabilityCatalog::with_builtins(),
             source_registry: registry,
         }
@@ -408,8 +418,19 @@ impl<S: ProjectionStore> ApplicationFacade<S> {
     /// Return the active space context, if one was provided at
     /// construction. Callers that need filesystem paths should use this
     /// getter rather than the process working directory.
-    pub fn space(&self) -> Option<&SpaceContext> {
-        self.space.as_ref()
+    pub fn source(&self) -> Option<&SourceContext> {
+        self.source.as_ref()
+    }
+
+    /// Return a clone of the bound space root, or fail with the canonical
+    /// "no explicit SourceContext" error. Use-case implementations call
+    /// this instead of taking a `source_root` parameter so every transport
+    /// derives paths from the single composition-root binding.
+    pub(crate) fn require_space_root(&self) -> Result<std::path::PathBuf, ApplicationError> {
+        self.source.as_ref().map(|s| s.root.clone()).ok_or_else(|| ApplicationError::Storage {
+            kind: StorageErrorKind::InvalidState,
+            message: "operation requires an explicit SourceContext; open the runtime via composition::open_space".to_string(),
+        })
     }
 
     /// Register a `FormatParser` for use by future scans. Callers (typically
@@ -417,10 +438,7 @@ impl<S: ProjectionStore> ApplicationFacade<S> {
     /// the runtime needs. Without registrations, scans against a source
     /// whose transport yields non-Org/Orphan-Entity MIME bytes will fail
     /// with `ParserNotFound`.
-    pub fn register_format_parser(
-        &mut self,
-        parser: Box<dyn crate::source::FormatParser>,
-    ) {
+    pub fn register_format_parser(&mut self, parser: Box<dyn crate::source::FormatParser>) {
         self.format_parsers.push(parser);
     }
 
@@ -431,10 +449,7 @@ impl<S: ProjectionStore> ApplicationFacade<S> {
     /// `capabilities_json` helper observe the change. This is the
     /// canonical write path used by third-party composition roots to
     /// surface custom `UseCase` traits via the same CLI/MCP listing.
-    pub fn register_capability(
-        &mut self,
-        descriptor: &crate::capability::CapabilityDescriptor,
-    ) {
+    pub fn register_capability(&mut self, descriptor: &crate::capability::CapabilityDescriptor) {
         self.capability_catalog.register(descriptor.clone());
     }
 
@@ -454,12 +469,9 @@ impl<S: ProjectionStore> ApplicationFacade<S> {
         crate::capability::catalog_to_json_array(&self.capability_catalog)
     }
 
-    pub fn store_mut(&mut self) -> &mut S {
-        &mut self.store
-    }
-    pub fn store(&self) -> &S {
-        &self.store
-    }
+    // NOTE: no public `store()` / `store_mut()` accessors. Transports and
+    // external callers must go through the use-case methods; handing out
+    // the raw projection would let them bypass write checks and journaling.
     pub fn inspect_rules(
         &self,
         r_ref: &ResourceRef,
@@ -467,30 +479,29 @@ impl<S: ProjectionStore> ApplicationFacade<S> {
         <Self as crate::application::use_cases::InspectUseCase>::inspect_rules(self, r_ref)
     }
 
-
     pub fn add_source(
         &mut self,
-        space_root: &Path,
         config: crate::source::SourceConfig,
     ) -> Result<(), ApplicationError> {
-        let mut cfg = crate::application::federation::SpaceSourcesConfig::load(space_root)
+        let source_root = self.require_space_root()?;
+        let mut cfg = crate::application::federation::SourceInstancesCache::load(&source_root)
             .map_err(|e| ApplicationError::Storage {
                 kind: StorageErrorKind::InvalidState,
                 message: e.to_string(),
             })?;
         cfg.sources.retain(|s| s.id != config.id);
-        cfg.sources.push(config.clone());
-        cfg.save(space_root)
+        cfg.sources.push(config.clone().into());
+        cfg.save(&source_root)
             .map_err(|e| ApplicationError::Storage {
                 kind: StorageErrorKind::InvalidState,
                 message: e.to_string(),
             })?;
-        // Mirror the change into the in-memory SpaceContext so subsequent
+        // Mirror the change into the in-memory SourceContext so subsequent
         // operations (e.g. `writeback_resource`, `transition_task`) see
         // the new source without needing to reload the space.
-        if let Some(space) = self.space.as_mut() {
-            space.runtime.sources.retain(|s| s.id != config.id);
-            space.runtime.sources.push(config);
+        if let Some(src) = self.source.as_mut() {
+            src.config.sources.retain(|s| s.id != config.id);
+            src.config.sources.push(config.into());
         }
         Ok(())
     }
@@ -505,44 +516,45 @@ impl<S: ProjectionStore> ApplicationFacade<S> {
 
     /// List resources from a given source adapter.
 
-    pub fn list_sources(
-        &self,
-        space_root: &Path,
-    ) -> Result<Vec<crate::source::SourceConfig>, ApplicationError> {
-        let cfg = crate::application::federation::SpaceSourcesConfig::load(space_root)
+    pub fn list_sources(&self) -> Result<Vec<crate::source::SourceConfig>, ApplicationError> {
+        let source_root = self.require_space_root()?;
+        let cfg = crate::application::federation::SourceInstancesCache::load(&source_root)
             .map_err(|e| ApplicationError::Storage {
                 kind: StorageErrorKind::InvalidState,
                 message: e.to_string(),
             })?;
-        Ok(cfg.sources)
+        Ok(cfg
+            .sources
+            .into_iter()
+            .map(|s| s.into_source_config())
+            .collect())
     }
 
-
-
-    pub fn scan_federation(&mut self, space_root: &Path) -> Result<ScanReport, ApplicationError> {
-        <Self as crate::application::use_cases::ScanUseCase>::scan_federation(self, space_root)
+    pub fn scan_federation(&mut self) -> Result<ScanReport, ApplicationError> {
+        <Self as crate::application::use_cases::ScanUseCase>::scan_federation(self)
     }
 
-    pub fn scan_native(&mut self, root: &Path) -> Result<ScanReport, ApplicationError> {
-        <Self as crate::application::use_cases::ScanUseCase>::scan_native(self, root)
+    pub fn scan_native(&mut self) -> Result<ScanReport, ApplicationError> {
+        <Self as crate::application::use_cases::ScanUseCase>::scan_native(self)
     }
-
 
     pub fn query_link_occurrences(
         &self,
         source_ref: &ResourceRef,
     ) -> Result<Vec<crate::domain::LinkOccurrence>, ApplicationError> {
-        <Self as crate::application::use_cases::LinkUseCase>::query_link_occurrences(self, source_ref)
+        <Self as crate::application::use_cases::LinkUseCase>::query_link_occurrences(
+            self, source_ref,
+        )
     }
-
 
     pub fn query_resolved_relations(
         &self,
         source_ref: &ResourceRef,
     ) -> Result<Vec<crate::domain::ResolvedRelation>, ApplicationError> {
-        <Self as crate::application::use_cases::LinkUseCase>::query_resolved_relations(self, source_ref)
+        <Self as crate::application::use_cases::LinkUseCase>::query_resolved_relations(
+            self, source_ref,
+        )
     }
-
 
     /// List every link occurrence originating from `source_ref` (raw form).
     pub fn list_links(
@@ -552,7 +564,6 @@ impl<S: ProjectionStore> ApplicationFacade<S> {
         <Self as crate::application::use_cases::LinkUseCase>::list_links(self, source_ref)
     }
 
-
     /// Re-resolve every occurrence for `source_ref` and persist diagnostics.
     pub fn resolve_links(
         &mut self,
@@ -560,7 +571,6 @@ impl<S: ProjectionStore> ApplicationFacade<S> {
     ) -> Result<Vec<ResolvedRelation>, ApplicationError> {
         <Self as crate::application::use_cases::LinkUseCase>::resolve_links(self, source_ref)
     }
-
 
     /// Return per-occurrence diagnostics (status + candidates) for `source_ref`.
     pub fn diagnose_link(
@@ -570,25 +580,20 @@ impl<S: ProjectionStore> ApplicationFacade<S> {
         <Self as crate::application::use_cases::LinkUseCase>::diagnose_link(self, source_ref)
     }
 
-
-    /// Walk the native source under `space_root` again, resolve every link,
+    /// Walk the bound native source again, resolve every link,
     /// and return a [`LinkReindexReport`].
     pub fn reindex_links(
         &mut self,
-        space_root: &Path,
     ) -> Result<crate::application::link_resolution::LinkReindexReport, ApplicationError> {
-        <Self as crate::application::use_cases::LinkUseCase>::reindex_links(self, space_root)
+        <Self as crate::application::use_cases::LinkUseCase>::reindex_links(self)
     }
-
 
     /// Resolve a `ResourceAddress` (either a `Ref` or a `Locator`) and
     /// return a [`ResolveResult`].
 
-
     pub fn agenda(&self) -> Result<crate::application::task_para::AgendaView, ApplicationError> {
         <Self as crate::application::use_cases::TaskUseCase>::agenda(self)
     }
-
 
     pub fn transition_task(
         &mut self,
@@ -596,32 +601,35 @@ impl<S: ProjectionStore> ApplicationFacade<S> {
         to_state: &str,
         timestamp: &str,
     ) -> Result<crate::document::StateTransition, ApplicationError> {
-        <Self as crate::application::use_cases::TaskUseCase>::transition_task(self, r_ref, to_state, timestamp)
+        <Self as crate::application::use_cases::TaskUseCase>::transition_task(
+            self, r_ref, to_state, timestamp,
+        )
     }
 
-
-    pub fn para_overview(&self) -> Result<crate::application::task_para::ParaOverview, ApplicationError> {
+    pub fn para_overview(
+        &self,
+    ) -> Result<crate::application::task_para::ParaOverview, ApplicationError> {
         <Self as crate::application::use_cases::TaskUseCase>::para_overview(self)
     }
 
     pub fn add_attachment(
         &mut self,
-        space_root: &Path,
         file_path: &Path,
         default_mime: &str,
     ) -> Result<ResourceRef, ApplicationError> {
-        <Self as crate::application::use_cases::AttachmentUseCase>::add_attachment(self, space_root, file_path, default_mime)
+        <Self as crate::application::use_cases::AttachmentUseCase>::add_attachment(
+            self,
+            file_path,
+            default_mime,
+        )
     }
-
 
     pub fn run_extraction(
         &mut self,
-        space_root: &Path,
         att_ref: &ResourceRef,
     ) -> Result<Vec<crate::domain::SegmentRecord>, ApplicationError> {
-        <Self as crate::application::use_cases::AttachmentUseCase>::run_extraction(self, space_root, att_ref)
+        <Self as crate::application::use_cases::AttachmentUseCase>::run_extraction(self, att_ref)
     }
-
 
     pub fn query_segments(
         &self,
@@ -632,82 +640,86 @@ impl<S: ProjectionStore> ApplicationFacade<S> {
 
     pub fn create_community(
         &self,
-        space_root: &Path,
         community: crate::domain::community::Community,
     ) -> Result<(), ApplicationError> {
-        <Self as crate::application::use_cases::CommunityUseCase>::create_community(self, space_root, community)
+        <Self as crate::application::use_cases::CommunityUseCase>::create_community(self, community)
     }
-
 
     pub fn list_communities(
         &self,
-        space_root: &Path,
     ) -> Result<Vec<crate::domain::community::Community>, ApplicationError> {
-        <Self as crate::application::use_cases::CommunityUseCase>::list_communities(self, space_root)
+        <Self as crate::application::use_cases::CommunityUseCase>::list_communities(self)
     }
 
     pub fn derive_artifact(
         &self,
-        space_root: &Path,
         community_id: &str,
         recipe_name: &str,
     ) -> Result<crate::artifact::DerivedArtifact, ApplicationError> {
-        <Self as crate::application::use_cases::ArtifactUseCase>::derive_artifact(self, space_root, community_id, recipe_name)
+        <Self as crate::application::use_cases::ArtifactUseCase>::derive_artifact(
+            self,
+            community_id,
+            recipe_name,
+        )
     }
-
 
     pub fn export_skill(
         &self,
-        space_root: &Path,
         community_id: &str,
         description: &str,
         export_path: &Path,
     ) -> Result<crate::artifact::SkillPackage, ApplicationError> {
-        <Self as crate::application::use_cases::ArtifactUseCase>::export_skill(self, space_root, community_id, description, export_path)
+        <Self as crate::application::use_cases::ArtifactUseCase>::export_skill(
+            self,
+            community_id,
+            description,
+            export_path,
+        )
     }
 
     pub fn sync_push(
         &mut self,
         actor_id: &str,
-        space_root: &Path,
         shared_folder: &Path,
     ) -> Result<crate::sync::PushReport, ApplicationError> {
-        <Self as crate::application::use_cases::SyncUseCase>::sync_push(self, actor_id, space_root, shared_folder)
+        <Self as crate::application::use_cases::SyncUseCase>::sync_push(
+            self,
+            actor_id,
+            shared_folder,
+        )
     }
-
-
     pub fn sync_pull(
         &mut self,
         actor_id: &str,
-        space_root: &Path,
         shared_folder: &Path,
     ) -> Result<crate::sync::PullReport, ApplicationError> {
-        <Self as crate::application::use_cases::SyncUseCase>::sync_pull(self, actor_id, space_root, shared_folder)
+        <Self as crate::application::use_cases::SyncUseCase>::sync_pull(
+            self,
+            actor_id,
+            shared_folder,
+        )
     }
-
 
     pub fn list_conflicts(&self) -> Result<Vec<crate::sync::ConflictRecord>, ApplicationError> {
         <Self as crate::application::use_cases::SyncUseCase>::list_conflicts(self)
     }
 
-    pub fn space_doctor(
+    pub fn source_doctor(
         &self,
-        _space_root: &Path,
     ) -> Result<crate::application::doctor::DoctorReport, ApplicationError> {
-        <Self as crate::application::use_cases::InspectUseCase>::space_doctor(self, _space_root)
+        <Self as crate::application::use_cases::InspectUseCase>::source_doctor(self)
     }
 
-
-    pub fn list_jobs(&self) -> Result<Vec<crate::application::job_manager::JobRecord>, ApplicationError> {
+    pub fn list_jobs(
+        &self,
+    ) -> Result<Vec<crate::application::job_manager::JobRecord>, ApplicationError> {
         <Self as crate::application::use_cases::InspectUseCase>::list_jobs(self)
     }
 
-
     pub fn check_artifact_freshness(
         &self,
-        _space_root: &Path,
     ) -> Result<crate::application::job_manager::ArtifactStaleReport, ApplicationError> {
-        <Self as crate::application::use_cases::InspectUseCase>::check_artifact_freshness(self, _space_root)
+        <Self as crate::application::use_cases::InspectUseCase>::check_artifact_freshness(self)
     }
 
     pub fn writeback_resource(
@@ -716,25 +728,20 @@ impl<S: ProjectionStore> ApplicationFacade<S> {
         target_ref: &str,
         payload: &str,
     ) -> Result<crate::application::writeback::WritebackReport, ApplicationError> {
-        use crate::source::{SourceAdapter, SourceKind, AnytypeSourceAdapter, AppleNotesSourceAdapter, AppleCalendarSourceAdapter, NativeSourceAdapter};
-
-        let space = self.space.as_ref().ok_or_else(|| {
+        let source = self.source.as_ref().ok_or_else(|| {
             ApplicationError::Storage {
                 kind: StorageErrorKind::InvalidState,
-                message: "writeback_resource requires an explicit SpaceContext; current working directory must not be used".to_string(),
+                message: "writeback_resource requires an explicit SourceContext; current working directory must not be used".to_string(),
             }
         })?;
-        if space.runtime.sources.is_empty() {
+        if source.config.sources.is_empty() {
             return Err(ApplicationError::Storage {
                 kind: StorageErrorKind::NoSourceRegistered,
-                message: format!(
-                    "no sources registered in space `{}`",
-                    space.space_id
-                ),
+                message: format!("no sources registered in source `{}`", source.source_id),
             });
         }
-        let src_cfg = space
-            .runtime
+        let src_cfg = source
+            .config
             .sources
             .iter()
             .find(|s| s.id == source_id)
@@ -742,37 +749,32 @@ impl<S: ProjectionStore> ApplicationFacade<S> {
             .ok_or_else(|| ApplicationError::SourceNotFound {
                 source_id: source_id.to_string(),
             })?;
-
-        if src_cfg.read_only {
+        let adapter: Box<dyn crate::source::SourceAdapter> = self
+            .source_registry
+            .build(src_cfg.into_source_config())
+            .map_err(|e| ApplicationError::Storage {
+                kind: StorageErrorKind::InvalidState,
+                message: e.to_string(),
+            })?;
+        // Honesty gate: never report a committed write against a source
+        // whose adapter does not actually support writes.
+        if !adapter.capabilities().can_write {
             return Err(ApplicationError::ReadOnlySource {
                 source_id: source_id.to_string(),
             });
         }
-        let adapter: Box<dyn SourceAdapter> = self
-            .source_registry
-            .build(src_cfg.clone())
-            .map_err(|e| {
-                ApplicationError::Storage {
+        let prep =
+            adapter
+                .prepare_write(target_ref, payload)
+                .map_err(|e| ApplicationError::Storage {
                     kind: StorageErrorKind::InvalidState,
                     message: e.to_string(),
-                }
-            })?;
-
-        let prep = adapter
-            .prepare_write(target_ref, payload)
-            .map_err(|e| {
-                ApplicationError::Storage {
-                    kind: StorageErrorKind::InvalidState,
-                    message: e.to_string(),
-                }
-            })?;
+                })?;
         let commit_res = adapter
             .commit_write(&prep)
-            .map_err(|e| {
-                ApplicationError::Storage {
-                    kind: StorageErrorKind::InvalidState,
-                    message: e.to_string(),
-                }
+            .map_err(|e| ApplicationError::Storage {
+                kind: StorageErrorKind::InvalidState,
+                message: e.to_string(),
             })?;
 
         Ok(crate::application::writeback::WritebackReport {
@@ -780,15 +782,11 @@ impl<S: ProjectionStore> ApplicationFacade<S> {
             committed: commit_res.committed,
         })
     }
-
     pub fn relay_sync(
         &self,
-        _source_id: &str,
-        _space_root: &Path,
     ) -> Result<crate::application::writeback::RelaySyncReport, ApplicationError> {
-        <Self as crate::application::use_cases::SyncUseCase>::relay_sync(self, _source_id, _space_root)
+        <Self as crate::application::use_cases::SyncUseCase>::relay_sync(self)
     }
-
 
     pub fn upsert_resource(&mut self, resource: Resource) -> Result<(), ApplicationError> {
         <Self as crate::application::use_cases::ResourceUseCase>::upsert_resource(self, resource)
@@ -805,8 +803,14 @@ impl<S: ProjectionStore> ApplicationFacade<S> {
     pub fn list_recent(&self, limit: usize) -> Result<Vec<Resource>, ApplicationError> {
         <Self as crate::application::use_cases::ResourceUseCase>::list_recent(self, limit)
     }
-    pub fn list_by_source(&self, source_id: &str, limit: usize) -> Result<Vec<Resource>, ApplicationError> {
-        <Self as crate::application::use_cases::ResourceUseCase>::list_by_source(self, source_id, limit)
+    pub fn list_by_source(
+        &self,
+        source_id: &str,
+        limit: usize,
+    ) -> Result<Vec<Resource>, ApplicationError> {
+        <Self as crate::application::use_cases::ResourceUseCase>::list_by_source(
+            self, source_id, limit,
+        )
     }
     pub fn resolve(&self, query_str: &str) -> Result<ResolveResult, ApplicationError> {
         <Self as crate::application::use_cases::ResourceUseCase>::resolve(self, query_str)
@@ -818,16 +822,11 @@ impl<S: ProjectionStore> ApplicationFacade<S> {
         <Self as crate::application::use_cases::ResourceUseCase>::resolve_address(self, address)
     }
 
-    pub fn rebuild(&mut self, root: &Path) -> Result<ScanReport, ApplicationError> {
-        self.store
-            .clear()
-            .map_err(|e| ApplicationError::Storage {
-                    kind: StorageErrorKind::Sqlite,
-                    message: e.to_string(),
-                })?;
-        self.scan_native(root)
+    pub fn rebuild(&mut self) -> Result<ScanReport, ApplicationError> {
+        self.store.clear().map_err(|e| ApplicationError::Storage {
+            kind: StorageErrorKind::Sqlite,
+            message: e.to_string(),
+        })?;
+        self.scan_native()
     }
 }
-
-
-

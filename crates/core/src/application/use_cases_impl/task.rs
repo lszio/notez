@@ -3,17 +3,22 @@
 //! Method bodies were previously inlined in `service.rs`; this file
 //! is part of the 0.5.x-A1+A3 use-case impl split.
 
-use crate::application::service::{ApplicationError, ApplicationFacade, DocumentErrorKind, StorageErrorKind};
-use crate::application::write_check;
+use crate::application::service::{
+    ApplicationError, ApplicationFacade, DocumentErrorKind, StorageErrorKind,
+};
 use crate::application::task_para::{AgendaItem, AgendaView, ParaNode, ParaOverview};
 use crate::application::use_cases::TaskUseCase;
-use crate::domain::{ProjectionStore, ResourceRef, Selector};
+use crate::application::write_check;
 use crate::document::StateTransition;
+use crate::domain::{ProjectionStore, ResourceRef, Selector};
 use std::path::Path;
 
 impl<S: ProjectionStore> TaskUseCase for ApplicationFacade<S> {
     fn agenda(&self) -> Result<crate::application::task_para::AgendaView, ApplicationError> {
-        let page = <Self as crate::application::use_cases::ResourceUseCase>::query(self, &Selector::new())?;
+        let page = <Self as crate::application::use_cases::ResourceUseCase>::query(
+            self,
+            &Selector::new(),
+        )?;
         let mut items = Vec::new();
 
         for res in page.items {
@@ -65,12 +70,10 @@ impl<S: ProjectionStore> TaskUseCase for ApplicationFacade<S> {
         let profile = crate::document::WorkflowProfile::default();
         let transition = profile
             .transition(&current_todo, to_state, timestamp)
-            .map_err(|e| {
-                ApplicationError::Document {
-                    source: DocumentErrorKind::Org(
-                        crate::document::OrgDocumentError::Other(e.to_string()),
-                    ),
-                }
+            .map_err(|e| ApplicationError::Document {
+                source: DocumentErrorKind::Org(crate::document::OrgDocumentError::Other(
+                    e.to_string(),
+                )),
             })?;
 
         res.properties
@@ -88,7 +91,8 @@ impl<S: ProjectionStore> TaskUseCase for ApplicationFacade<S> {
             "action": "UpdateTaskStatus",
             "to_state": transition.to_state,
             "closed_timestamp": transition.closed_timestamp
-        }).to_string();
+        })
+        .to_string();
 
         self.writeback_resource(&source_id, &res.locator, &payload)?;
 
@@ -96,21 +100,29 @@ impl<S: ProjectionStore> TaskUseCase for ApplicationFacade<S> {
         self.store
             .replace_source(&source_id, vec![res], vec![], vec![])
             .map_err(|e| ApplicationError::Storage {
-                    kind: StorageErrorKind::Sqlite,
-                    message: e.to_string(),
-                })?;
+                kind: StorageErrorKind::Sqlite,
+                message: e.to_string(),
+            })?;
 
         Ok(transition)
     }
 
-    fn para_overview(&self) -> Result<crate::application::task_para::ParaOverview, ApplicationError> {
-        let page = <Self as crate::application::use_cases::ResourceUseCase>::query(self, &Selector::new())?;
+    fn para_overview(
+        &self,
+    ) -> Result<crate::application::task_para::ParaOverview, ApplicationError> {
+        let page = <Self as crate::application::use_cases::ResourceUseCase>::query(
+            self,
+            &Selector::new(),
+        )?;
         let mut projects = Vec::new();
         let mut areas = Vec::new();
         let mut resources = Vec::new();
         let mut archives = Vec::new();
 
-        let mut parent_to_tasks: std::collections::BTreeMap<String, Vec<crate::application::task_para::AgendaItem>> = std::collections::BTreeMap::new();
+        let mut parent_to_tasks: std::collections::BTreeMap<
+            String,
+            Vec<crate::application::task_para::AgendaItem>,
+        > = std::collections::BTreeMap::new();
 
         // First pass: collect all tasks and map them to their parents
         for res in &page.items {
@@ -126,13 +138,19 @@ impl<S: ProjectionStore> TaskUseCase for ApplicationFacade<S> {
                         closed: res.properties.get("CLOSED").cloned(),
                         locator: res.locator.clone(),
                     };
-                    parent_to_tasks.entry(parent_ref.to_string()).or_default().push(item);
+                    parent_to_tasks
+                        .entry(parent_ref.to_string())
+                        .or_default()
+                        .push(item);
                 }
             }
         }
 
         for res in page.items {
-            let inspect_res = <Self as crate::application::use_cases::InspectUseCase>::inspect_rules(self, &res.r#ref)?;
+            let inspect_res =
+                <Self as crate::application::use_cases::InspectUseCase>::inspect_rules(
+                    self, &res.r#ref,
+                )?;
             let para_val = inspect_res
                 .as_ref()
                 .and_then(|i| i.derived_properties.get("para").map(|s| s.to_string()))
@@ -140,8 +158,13 @@ impl<S: ProjectionStore> TaskUseCase for ApplicationFacade<S> {
                 .or_else(|| res.properties.get("TYPE").map(|s| s.to_string()));
 
             if let Some(pv) = para_val {
-                let tasks = parent_to_tasks.remove(&res.r#ref.to_string()).unwrap_or_default();
-                let node = crate::application::task_para::ParaNode { resource: res, tasks };
+                let tasks = parent_to_tasks
+                    .remove(&res.r#ref.to_string())
+                    .unwrap_or_default();
+                let node = crate::application::task_para::ParaNode {
+                    resource: res,
+                    tasks,
+                };
                 match pv.as_str() {
                     "projects" | "project" => projects.push(node),
                     "areas" | "area" => areas.push(node),
@@ -159,5 +182,4 @@ impl<S: ProjectionStore> TaskUseCase for ApplicationFacade<S> {
             archives,
         })
     }
-
 }

@@ -49,9 +49,24 @@ fn writeback_resource_fails_when_source_is_not_registered() {
     let dir = tempdir().unwrap();
     let db_path = dir.path().join("idx.sqlite");
     let store = SqliteProjection::open(&db_path).unwrap();
-    let mut service = ApplicationService::new(store);
+    let config = notez_core::config::model::SourceConfig {
+        version: 2,
+        source: notez_core::config::model::SourceIdentity {
+            name: "test".into(),
+            database: std::path::PathBuf::from(".notez/index.sqlite"),
+        },
+        workflow: Default::default(),
+        sources: vec![],
+        link_overrides: serde_json::Value::Null,
+    };
+    let ctx = notez_core::application::context::SourceContext::new(
+        "test",
+        dir.path().to_path_buf(),
+        config,
+    );
+    let mut service = ApplicationService::with_source(store, ctx);
 
-    let res = service.scan_native(dir.path());
+    let res = service.scan_native();
     assert!(
         res.is_err(),
         "scan_native must fail when no format parsers are registered"
@@ -85,16 +100,16 @@ fn writeback_does_not_fall_back_to_dot_for_source_config() {
     service.register_format_parser(Box::new(orgmode::OrgParser::new()));
     service.register_format_parser(Box::new(markdown::MarkdownParser::new()));
 
-    let r_ref = notez_core::domain::ResourceRef::parse(
-        "heading:01J00000000000000000000999",
-    )
-    .unwrap();
+    let r_ref =
+        notez_core::domain::ResourceRef::parse("heading:01J00000000000000000000999").unwrap();
     let err = service
         .transition_task(&r_ref, "DONE", "2026-08-01")
         .expect_err("transition_task on missing resource must error");
     let msg = err.to_string();
     assert!(
-        msg.contains("not found") || msg.contains("NotFound") || msg.contains("01J00000000000000000000999"),
+        msg.contains("not found")
+            || msg.contains("NotFound")
+            || msg.contains("01J00000000000000000000999"),
         "expected NotFound-style error; got: {msg}",
     );
 }

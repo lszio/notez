@@ -10,12 +10,12 @@
 //! `service.rs` keeps the 44 `pub fn` forwarders and the
 //! `ApplicationFacade` struct + constructors. Each forwarder is a
 //! one-line `<Self as TraitUseCase>::fn(self, ...)` dispatch.
-pub mod scan;
 pub mod artifact;
 pub mod attachment;
 pub mod community;
 pub mod inspect;
 pub mod link;
 pub mod resource;
+pub mod scan;
 pub mod sync;
 pub mod task;

@@ -10,11 +10,11 @@ use axum::response::{IntoResponse, Redirect, Response};
 use axum::routing::{get, post};
 use toml;
 use notez_core::application::{
-    ApplicationError, ApplicationFacade, ApplicationService, SpaceContext, WatchError, WatchService,
+    ApplicationError, ApplicationFacade, ApplicationService, SourceContext, WatchError, WatchService,
 };
 use notez_core::config::{
-    web_space::{resolve_space as core_resolve_space, WebSpaceError},
-    GlobalConfig, SpaceRegistration,
+    web_space::{resolve_source as core_resolve_space, WebSourceError},
+    GlobalConfig, SourceRegistration,
 };
 use notez_core::storage::SqliteProjection;
 use serde::Deserialize;
@@ -34,8 +34,8 @@ pub fn state_snapshot() -> WebState {
     GLOBAL_STATE.clone()
 }
 
-pub fn auto_start_watch(space_root: &std::path::Path) {
-    let canonical = std::fs::canonicalize(space_root).unwrap_or_else(|_| space_root.to_path_buf());
+pub fn auto_start_watch(source_root: &std::path::Path) {
+    let canonical = std::fs::canonicalize(source_root).unwrap_or_else(|_| source_root.to_path_buf());
     let _ = GLOBAL_WATCH.start(&canonical);
 }
 
@@ -53,12 +53,12 @@ impl WebState {
         }
     }
 
-    /// Acquire (or create) an `ApplicationFacade` for `space_root`.
+    /// Acquire (or create) an `ApplicationFacade` for `source_root`.
     pub fn facade_for(
         &self,
-        space_root: &PathBuf,
+        source_root: &PathBuf,
     ) -> Result<Arc<Mutex<ApplicationFacade<SqliteProjection>>>, WebRouteError> {
-        let canonical = std::fs::canonicalize(space_root).unwrap_or_else(|_| space_root.clone());
+        let canonical = std::fs::canonicalize(source_root).unwrap_or_else(|_| source_root.clone());
         auto_start_watch(&canonical);
         {
             let cache = self.facades.lock().expect("facade cache poisoned");
@@ -67,22 +67,9 @@ impl WebState {
             }
         }
         let sel = core_resolve_space(&canonical).map_err(WebRouteError::from)?;
-        let env: std::collections::BTreeMap<String, std::ffi::OsString> =
-            std::env::vars_os().map(|(k, v)| (k.to_string_lossy().into_owned(), v)).collect();
-        let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-        let paths = notez_core::config::ConfigPaths::discover(&env, &cwd)
+        let handle = notez_composition::open_selected(&sel, None)
             .map_err(|e| WebRouteError::Internal(e.to_string()))?;
-        let runtime = notez_core::config::load_runtime_config(&paths, &sel, &env, None)
-            .map_err(|e| WebRouteError::Internal(e.to_string()))?;
-        let db_path = runtime.database.clone();
-        let store =
-            SqliteProjection::open(&db_path).map_err(|e| WebRouteError::Internal(e.to_string()))?;
-        let space =
-            SpaceContext::new(runtime.space_name.clone(), runtime.space_root.clone(), runtime);
-        let mut facade = ApplicationFacade::with_space(store, space);
-        facade.register_format_parser(Box::new(orgmode::OrgParser::new()));
-        facade.register_format_parser(Box::new(markdown::MarkdownParser::new()));
-        let facade = Arc::new(Mutex::new(facade));
+        let facade = Arc::new(Mutex::new(handle.facade));
         self.facades
             .lock()
             .expect("facade cache poisoned")
@@ -108,8 +95,8 @@ impl std::fmt::Display for WebRouteError {
     }
 }
 
-impl From<WebSpaceError> for WebRouteError {
-    fn from(e: WebSpaceError) -> Self {
+impl From<WebSourceError> for WebRouteError {
+    fn from(e: WebSourceError) -> Self {
         Self::Invalid(e.to_string())
     }
 }
@@ -162,16 +149,16 @@ fn do_register(_state: &WebState, form: RegisterForm) -> Result<Redirect, WebRou
         .map_err(|e| WebRouteError::Internal(e.to_string()))?;
     let mut global: GlobalConfig = paths.global_config.clone().unwrap_or(GlobalConfig {
         version: 1,
-        default_space: None,
-        spaces: Default::default(),
+        default_source: None,
+        sources: Default::default(),
         preferences: Default::default(),
     });
-    global.spaces.insert(
+    global.sources.insert(
         name.to_string(),
-        SpaceRegistration { path: path.clone(), config: None },
+        SourceRegistration { path: path.clone(), config: None },
     );
-    if global.default_space.is_none() {
-        global.default_space = Some(name.to_string());
+    if global.default_source.is_none() {
+        global.default_source = Some(name.to_string());
     }
     let text = toml::to_string(&global).map_err(|e| WebRouteError::Internal(e.to_string()))?;
     let cfg_path = paths.global;
@@ -189,12 +176,12 @@ fn do_register(_state: &WebState, form: RegisterForm) -> Result<Redirect, WebRou
 
 #[derive(Debug, Deserialize)]
 pub struct SpaceForm {
-    pub space_root: Option<String>,
+    pub source_root: Option<String>,
     pub encoded: Option<String>,
 }
 
 fn resolve_form_space(form: &SpaceForm) -> Result<PathBuf, WebRouteError> {
-    if let Some(p) = &form.space_root {
+    if let Some(p) = &form.source_root {
         if !p.is_empty() {
             let pb = PathBuf::from(p);
             if !pb.exists() {
@@ -212,46 +199,46 @@ fn resolve_form_space(form: &SpaceForm) -> Result<PathBuf, WebRouteError> {
             }
         }
     }
-    Err(WebRouteError::Invalid("space_root or encoded is required".into()))
+    Err(WebRouteError::Invalid("source_root or encoded is required".into()))
 }
 
 fn do_scan(state: &WebState, form: SpaceForm) -> Result<Redirect, WebRouteError> {
-    let space_root = resolve_form_space(&form)?;
-    let facade = state.facade_for(&space_root)?;
+    let source_root = resolve_form_space(&form)?;
+    let facade = state.facade_for(&source_root)?;
     let report = {
         let mut guard = facade.lock().map_err(|e| WebRouteError::Internal(format!("facade lock: {e}")))?;
-        ApplicationService::scan_native(&mut *guard, &space_root)?
+        ApplicationService::scan_native(&mut *guard)?
     };
     let _ = report;
-    Ok(Redirect::to(&route_for_space_list(&space_root.to_string_lossy())))
+    Ok(Redirect::to(&route_for_space_list(&source_root.to_string_lossy())))
 }
 
 fn do_watch_start(state: &WebState, form: SpaceForm) -> Result<Redirect, WebRouteError> {
-    let space_root = resolve_form_space(&form)?;
-    state.watch.start(&space_root)?;
+    let source_root = resolve_form_space(&form)?;
+    state.watch.start(&source_root)?;
     Ok(Redirect::to(&format!(
         "{}{}",
-        route_for_space_list(&space_root.to_string_lossy()),
+        route_for_space_list(&source_root.to_string_lossy()),
         "?watch=1"
     )))
 }
 
 fn do_watch_stop(state: &WebState, form: SpaceForm) -> Result<Redirect, WebRouteError> {
-    let space_root = resolve_form_space(&form)?;
-    state.watch.stop(&space_root);
-    Ok(Redirect::to(&route_for_space_list(&space_root.to_string_lossy())))
+    let source_root = resolve_form_space(&form)?;
+    state.watch.stop(&source_root);
+    Ok(Redirect::to(&route_for_space_list(&source_root.to_string_lossy())))
 }
 
 #[derive(Debug, Deserialize)]
 pub struct AttachmentRawQuery {
-    pub space_root: String,
+    pub source_root: String,
     pub locator: String,
 }
 
 async fn raw_attachment_get(
     axum::extract::Query(query): axum::extract::Query<AttachmentRawQuery>,
 ) -> Result<impl axum::response::IntoResponse, WebRouteError> {
-    let space_path = PathBuf::from(&query.space_root);
+    let space_path = PathBuf::from(&query.source_root);
     let file_path = space_path.join(&query.locator);
     let canonical_space = std::fs::canonicalize(&space_path).unwrap_or(space_path);
     let canonical_file = match std::fs::canonicalize(&file_path) {
@@ -277,8 +264,8 @@ pub async fn auto_watch_middleware(
     next: axum::middleware::Next,
 ) -> axum::response::Response {
     let path = req.uri().path();
-    if path.starts_with("/space/") {
-        if let Some(rest) = path.strip_prefix("/space/") {
+    if path.starts_with("/source/") {
+        if let Some(rest) = path.strip_prefix("/source/") {
             let encoded = rest.split('/').next().unwrap_or("");
             if !encoded.is_empty() {
                 let space_path = crate::router::decode_space(encoded);
@@ -300,42 +287,42 @@ pub fn build_router(state: WebState) -> axum::Router {
     let state_wg = state.clone();
     axum::Router::new()
         .route(
-            "/api/spaces/register",
+            "/api/sources/register",
             post(move |Form(form): Form<RegisterForm>| {
                 let s = state_r.clone();
                 async move { do_register(&s, form) }
             }),
         )
         .route(
-            "/api/spaces/scan",
+            "/api/sources/scan",
             post(move |Form(form): Form<SpaceForm>| {
                 let s = state_s.clone();
                 async move { do_scan(&s, form) }
             }),
         )
         .route(
-            "/api/spaces/watch/start",
+            "/api/sources/watch/start",
             post(move |Form(form): Form<SpaceForm>| {
                 let s = state_ws.clone();
                 async move { do_watch_start(&s, form) }
             }),
         )
         .route(
-            "/api/spaces/watch/stop",
+            "/api/sources/watch/stop",
             post(move |Form(form): Form<SpaceForm>| {
                 let s = state_wt.clone();
                 async move { do_watch_stop(&s, form) }
             }),
         )
         .route(
-            "/api/spaces/watch/state",
+            "/api/sources/watch/state",
             get(move |axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>| {
                 let s = state_wg.clone();
                 async move { watch_state_get(&s, params).await }
             }),
         )
         .route(
-            "/api/spaces/attachment/raw",
+            "/api/sources/attachment/raw",
             get(move |query| async move { raw_attachment_get(query).await }),
         )
         .layer(axum::middleware::from_fn(auto_watch_middleware))
@@ -357,6 +344,6 @@ async fn watch_state_get(
 }
 
 /// Re-export the encoded-space helper.
-pub fn encoded_for(space_root: &str) -> String {
-    crate::router::encode_space(space_root)
+pub fn encoded_for(source_root: &str) -> String {
+    crate::router::encode_space(source_root)
 }

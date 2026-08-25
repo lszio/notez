@@ -6,7 +6,6 @@
 use crate::application::service::{ApplicationError, ApplicationFacade, StorageErrorKind};
 use crate::application::use_cases::InspectUseCase;
 use crate::domain::{InspectResult, ProjectionStore, ResourceRef};
-use std::path::Path;
 
 impl<S: ProjectionStore> InspectUseCase for ApplicationFacade<S> {
     fn inspect_rules(
@@ -17,34 +16,32 @@ impl<S: ProjectionStore> InspectUseCase for ApplicationFacade<S> {
             .store
             .get(r_ref)
             .map_err(|e| ApplicationError::Storage {
-                    kind: StorageErrorKind::Sqlite,
-                    message: e.to_string(),
-                })?;
+                kind: StorageErrorKind::Sqlite,
+                message: e.to_string(),
+            })?;
         Ok(res.map(|r| self.rule_engine.evaluate(&r)))
     }
 
-    fn space_doctor(
-        &self,
-        _space_root: &Path,
-    ) -> Result<crate::application::doctor::DoctorReport, ApplicationError> {
+    fn source_doctor(&self) -> Result<crate::application::doctor::DoctorReport, ApplicationError> {
+        let _space_root = self.require_space_root()?;
         Err(ApplicationError::UnsupportedCapability {
             capability: "space doctor is not yet implemented",
         })
     }
 
-    fn list_jobs(&self) -> Result<Vec<crate::application::job_manager::JobRecord>, ApplicationError> {
+    fn list_jobs(
+        &self,
+    ) -> Result<Vec<crate::application::job_manager::JobRecord>, ApplicationError> {
         Err(ApplicationError::UnsupportedCapability {
             capability: "job manager is not yet implemented; jobs are tracked via `notez task`",
         })
     }
-
     fn check_artifact_freshness(
         &self,
-        _space_root: &Path,
     ) -> Result<crate::application::job_manager::ArtifactStaleReport, ApplicationError> {
+        let _space_root = self.require_space_root()?;
         Err(ApplicationError::UnsupportedCapability {
             capability: "artifact freshness check is not yet implemented",
         })
     }
-
 }

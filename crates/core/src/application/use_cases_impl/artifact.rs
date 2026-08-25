@@ -3,9 +3,11 @@
 //! Method bodies were previously inlined in `service.rs`; this file
 //! is part of the 0.5.x-A1+A3 use-case impl split.
 
-use crate::application::service::{ApplicationError, ApplicationFacade, DocumentErrorKind, StorageErrorKind};
-use crate::application::write_check;
+use crate::application::service::{
+    ApplicationError, ApplicationFacade, DocumentErrorKind, StorageErrorKind,
+};
 use crate::application::use_cases::{ArtifactUseCase, ResourceUseCase};
+use crate::application::write_check;
 use crate::artifact::{DerivedArtifact, SkillPackage};
 use crate::domain::{ProjectionStore, Resource, Selector};
 use std::path::Path;
@@ -13,13 +15,14 @@ use std::path::Path;
 impl<S: ProjectionStore> ArtifactUseCase for ApplicationFacade<S> {
     fn derive_artifact(
         &self,
-        space_root: &Path,
         community_id: &str,
         recipe_name: &str,
     ) -> Result<crate::artifact::DerivedArtifact, ApplicationError> {
+        let _source_root = self.require_space_root()?;
         write_check::check_capability(self, "artifact")?;
 
-        let communities = <Self as crate::application::use_cases::CommunityUseCase>::list_communities(self, space_root)?;
+        let communities =
+            <Self as crate::application::use_cases::CommunityUseCase>::list_communities(self)?;
         let comm = communities
             .iter()
             .find(|c| c.id == community_id)
@@ -28,7 +31,10 @@ impl<S: ProjectionStore> ArtifactUseCase for ApplicationFacade<S> {
                 message: format!("community {community_id} not found"),
             })?;
 
-        let page = <Self as crate::application::use_cases::ResourceUseCase>::query(self, &Selector::new())?;
+        let page = <Self as crate::application::use_cases::ResourceUseCase>::query(
+            self,
+            &Selector::new(),
+        )?;
         let members: Vec<Resource> = comm
             .filter_members(&page.items)
             .into_iter()
@@ -55,27 +61,29 @@ impl<S: ProjectionStore> ArtifactUseCase for ApplicationFacade<S> {
             token_budget: 4000,
         };
 
-        let derived = crate::artifact::RecipeEvaluator::evaluate(&recipe, &members).map_err(|e| {
-            ApplicationError::Document {
-                source: DocumentErrorKind::Org(
-                    crate::document::OrgDocumentError::Other(e.to_string()),
-                ),
-            }
-        })?;
+        let derived =
+            crate::artifact::RecipeEvaluator::evaluate(&recipe, &members).map_err(|e| {
+                ApplicationError::Document {
+                    source: DocumentErrorKind::Org(crate::document::OrgDocumentError::Other(
+                        e.to_string(),
+                    )),
+                }
+            })?;
 
         Ok(derived)
     }
 
     fn export_skill(
         &self,
-        space_root: &Path,
         community_id: &str,
         description: &str,
         export_path: &Path,
     ) -> Result<crate::artifact::SkillPackage, ApplicationError> {
+        let _source_root = self.require_space_root()?;
         write_check::check_capability(self, "artifact")?;
 
-        let communities = <Self as crate::application::use_cases::CommunityUseCase>::list_communities(self, space_root)?;
+        let communities =
+            <Self as crate::application::use_cases::CommunityUseCase>::list_communities(self)?;
         let comm = communities
             .iter()
             .find(|c| c.id == community_id)
@@ -84,7 +92,10 @@ impl<S: ProjectionStore> ArtifactUseCase for ApplicationFacade<S> {
                 message: format!("community {community_id} not found"),
             })?;
 
-        let page = <Self as crate::application::use_cases::ResourceUseCase>::query(self, &Selector::new())?;
+        let page = <Self as crate::application::use_cases::ResourceUseCase>::query(
+            self,
+            &Selector::new(),
+        )?;
         let members: Vec<Resource> = comm
             .filter_members(&page.items)
             .into_iter()
@@ -93,13 +104,14 @@ impl<S: ProjectionStore> ArtifactUseCase for ApplicationFacade<S> {
 
         let skill_ir = crate::artifact::SkillIr::compile(&comm.name, description, &members);
 
-        let package = crate::artifact::SkillExporter::export(&skill_ir, export_path)
-            .map_err(|e| ApplicationError::Io {
-                path: Some(export_path.to_path_buf()),
-                source: e.kind(),
+        let package =
+            crate::artifact::SkillExporter::export(&skill_ir, export_path).map_err(|e| {
+                ApplicationError::Io {
+                    path: Some(export_path.to_path_buf()),
+                    source: e.kind(),
+                }
             })?;
 
         Ok(package)
     }
-
 }
