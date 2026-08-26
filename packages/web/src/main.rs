@@ -34,9 +34,16 @@ fn main() {
     });
 }
 
-/// Client entry (wasm32): boot the same component tree over the SSR
-/// output to take over events and signals.
+/// Client entry (wasm32). Hydration is explicitly disabled: with the
+/// current split server/client builds the interpreter's hydrate walk
+/// crashes (`hydrate_node` TypeError), killing all element events.
+/// A fresh client mount attaches every handler and renders fully
+/// interactive; once upstream hydration is fixed, flip to
+/// `.hydrate(true)` to resume resuming-from-SSR.
 #[cfg(not(feature = "server"))]
 fn main() {
-    dioxus::launch(app);
+    use dioxus_web::Config;
+    dioxus::LaunchBuilder::new()
+        .with_cfg(Config::new().hydrate(false))
+        .launch(app);
 }

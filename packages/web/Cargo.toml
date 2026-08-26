@@ -38,6 +38,8 @@ toml    = { version = "0.8", optional = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 dioxus       = { workspace = true, features = ["web"] }
+dioxus-web   = { version = "0.7", default-features = false, features = ["document", "mounted"], optional = true }
+
 getrandom_03 = { package = "getrandom", version = "0.3", features = ["wasm_js"] }
 getrandom_04 = { package = "getrandom", version = "0.4", features = ["wasm_js"] }
 
@@ -45,7 +47,7 @@ getrandom_04 = { package = "getrandom", version = "0.4", features = ["wasm_js"] 
 default = ["server"]
 # Client build: dx passes --no-default-features --features web.
 server = ["dioxus/server", "dep:axum", "dep:tokio", "dep:anyhow", "dep:toml"]
-web    = ["dioxus/web"]
+web    = ["dioxus/web", "dep:dioxus-web"]
 
 [dev-dependencies]
 tempfile = "3"

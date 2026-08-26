@@ -1487,5 +1487,111 @@
 </head>
 <body>
   <div id="main"></div>
+<script>
+/* M6 progressive enhancement: live list filtering that works with or
+ * without a hydrated client. Filters rendered .result rows by their
+ * visible text; updates the "showing x / y" counter if present. */
+(function () {
+  function wire() {
+    const q = document.querySelector('input[name="q"]');
+    if (!q || q.dataset.liveFilter) return;
+    q.dataset.liveFilter = '1';
+    const apply = function () {
+      const needle = (q.value || '').trim().toLowerCase();
+      const rows = document.querySelectorAll('.result');
+      let shown = 0;
+      rows.forEach(function (row) {
+        const text = row.textContent.toLowerCase();
+        const hit = !needle || text.indexOf(needle) !== -1;
+        row.style.display = hit ? '' : 'none';
+        if (hit) shown++;
+      });
+      document.querySelectorAll('.mono-sm').forEach(function (el) {
+        if (/^\d+ \/ \d+$/.test(el.textContent.trim()) && rows.length) {
+          el.textContent = shown + ' / ' + rows.length;
+        }
+      });
+    };
+    q.addEventListener('input', apply);
+    q.addEventListener('change', apply);
+    apply();
+  }
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', wire);
+  } else { wire(); }
+  // Re-wire after client-side navigations render new lists.
+  new MutationObserver(function(){ wire(); }).observe(document.documentElement, { childList: true, subtree: true });
+})();
+</script>
+<script>
+/* M6 progressive enhancement: command palette fallback. The hydrated
+ * Dioxus palette remains the primary path; this listener keeps search,
+ * arrow selection, Enter navigation, and Escape usable when the
+ * fullstack hydration event bridge is unavailable. */
+(function () {
+  function wirePalette() {
+    const input = document.querySelector('.palette-input');
+    if (!input || input.dataset.livePalette) return;
+    input.dataset.livePalette = '1';
+    let selected = 0;
+
+    function hits() {
+      const needle = (input.value || '').trim().toLowerCase();
+      return Array.from(document.querySelectorAll('.result'))
+        .filter(row => getComputedStyle(row).display !== 'none')
+        .filter(row => !needle || row.textContent.toLowerCase().includes(needle))
+        .map(row => row.querySelector('a[href]'))
+        .filter(Boolean);
+    }
+
+    function render() {
+      const root = input.closest('[class*=palette]')?.parentElement || document;
+      const results = root.querySelector('.palette-results') || document.querySelector('.palette-results');
+      if (!results) return;
+      const links = hits();
+      selected = Math.max(0, Math.min(selected, links.length - 1));
+      results.replaceChildren();
+      if (!input.value.trim()) return;
+      if (!links.length) {
+        const empty = document.createElement('p');
+        empty.className = 'palette-empty';
+        empty.textContent = 'no matches.';
+        results.append(empty);
+        return;
+      }
+      const list = document.createElement('ul');
+      list.className = 'palette-list';
+      links.forEach((link, index) => {
+        const item = document.createElement('li');
+        item.className = index === selected ? 'palette-hit palette-hit-selected' : 'palette-hit';
+        const clone = link.cloneNode(true);
+        clone.className = 'palette-hit-link';
+        item.append(clone);
+        list.append(item);
+      });
+      results.append(list);
+    }
+
+    input.addEventListener('input', function () { selected = 0; render(); });
+    input.addEventListener('keydown', function (event) {
+      const links = hits();
+      if (event.key === 'ArrowDown' && links.length) {
+        event.preventDefault(); selected = (selected + 1) % links.length; render();
+      } else if (event.key === 'ArrowUp' && links.length) {
+        event.preventDefault(); selected = (selected + links.length - 1) % links.length; render();
+      } else if (event.key === 'Enter' && links[selected]) {
+        event.preventDefault(); links[selected].click();
+      } else if (event.key === 'Escape') {
+        const close = document.querySelector('.palette-close');
+        if (close) close.click();
+      }
+    });
+    render();
+  }
+
+  wirePalette();
+  new MutationObserver(wirePalette).observe(document.documentElement, { childList: true, subtree: true });
+})();
+</script>
 </body>
 </html>
