@@ -1,0 +1,27 @@
+# Notez web SSR server.
+#
+#   docker compose up -d
+#   open http://localhost:3030
+#
+# The server binds 0.0.0.0:3030 inside the container. Mount a host
+# directory to persist the space(s) you register through the web picker;
+# without a mount the space index lives in the container layer and is
+# lost on `docker compose down`.
+services:
+  web:
+    build: .
+    image: notez-web:latest
+    container_name: notez-web
+    ports:
+      - "3030:3030"
+    environment:
+      IP: 0.0.0.0
+      PORT: "3030"
+      # Optional: pin a default space root (created on first start).
+      # NOTEZ_SPACE_ROOT: /data/space
+    volumes:
+      - notez-data:/data
+    restart: unless-stopped
+
+volumes:
+  notez-data:

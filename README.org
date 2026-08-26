@@ -59,6 +59,30 @@ Sub-acceptance scripts:
 - =scripts/acceptance-artifacts.sh=
 - =scripts/acceptance-sync.sh=
 
+* CI & Docker
+
+GitHub Actions workflow: =.github/workflows/ci.yml=. Runs on push/PR to
+=main= / =dev= with three jobs:
+
+- =test= — =cargo build --workspace --all-targets= + =cargo test --workspace=
+- =lint= — =clippy= (warnings reported) and =rustfmt --check= (report-only
+  until a one-shot =cargo fmt --all= normalisation lands)
+- =docker= — builds the web server image and smoke-tests that it responds
+
+Run the web SSR server in Docker:
+
+#+begin_src bash
+docker compose up -d          # build + start, http://localhost:3030
+# or
+docker build -t notez-web:latest .
+docker run --rm -p 3030:3030 notez-web:latest
+#+end_src
+
+The server binds =IP=0.0.0.0= / =PORT=3030= inside the container. Mount a
+volume at =/data= to persist spaces registered through the web picker
+(=docker-compose.yml= does this via the =notez-data= volume). Optional
+=NOTEZ_SPACE_ROOT=/data/space= pins a default space root.
+
 * CLI Usage
 
 ** Space & Resource Management
