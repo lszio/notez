@@ -40,7 +40,9 @@ pub fn ListPage(encoded: String, query: ListQuery) -> Element {
     use_space_layout(&encoded);
     let space = use_context::<Signal<Option<SpaceState>>>();
     let mut resource_ref_ctx = use_context::<Signal<Option<String>>>();
-    resource_ref_ctx.set(None);
+    // Clear selection after mount — never write signals during render
+    // (a render-time set causes rerender storms under hydration).
+    use_effect(move || resource_ref_ctx.set(None));
     let active_path = space().map(|s| s.path.clone());
     let active_path_for_forms = active_path.clone();
 

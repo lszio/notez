@@ -22,7 +22,7 @@ pub fn PreviewPage(encoded: String, encoded_locator: String) -> Element {
     use_space_layout(&encoded);
     let space = use_context::<Signal<Option<SpaceState>>>();
     let mut resource_ref_ctx = use_context::<Signal<Option<String>>>();
-    resource_ref_ctx.set(None);
+    use_effect(move || resource_ref_ctx.set(None));
 
     let active_path = space().map(|s| s.path.clone());
     let current_encoded = space().map(|s| s.encoded.clone()).unwrap_or_default();

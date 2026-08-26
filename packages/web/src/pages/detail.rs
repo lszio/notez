@@ -22,7 +22,8 @@ pub fn DetailPage(encoded: String, encoded_ref: String) -> Element {
 
     // Publish the active ref so the right rail can render.
     let mut resource_ref_ctx = use_context::<Signal<Option<String>>>();
-    resource_ref_ctx.set(Some(decoded_ref.clone()));
+    let decoded_ref_for_effect = decoded_ref.clone();
+    use_effect(move || resource_ref_ctx.set(Some(decoded_ref_for_effect.clone()))); // clone per effect run
 
     let space_snapshot = space().clone();
     let path_for_fetch = space_snapshot.as_ref().map(|s| s.path.clone());
