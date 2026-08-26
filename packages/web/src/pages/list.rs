@@ -74,11 +74,25 @@ pub fn ListPage(encoded: String, query: ListQuery) -> Element {
             query.sort.clone()
         }
     });
+    // Source scope: filter the view to rows from one source. Seeded
+    // from the URL query (`?source=…`) so deep links and the form GET
+    // preserve the choice; the dropdown is populated from the sources
+    // actually present.
+    let mut source_filter = use_signal(move || {
+        if query.source.is_empty() {
+            "all".to_string()
+        } else {
+            query.source.clone()
+        }
+    });
 
     let rows: Vec<ResourceRow> = match resources() {
         Some(Ok(r)) => r,
         _ => Vec::new(),
     };
+    let mut sources: Vec<String> = rows.iter().map(|r| r.source_id.clone()).collect();
+    sources.sort();
+    sources.dedup();
 
     let total = rows.len();
     let q = q_filter().trim().to_lowercase();
@@ -123,6 +137,10 @@ pub fn ListPage(encoded: String, query: ListQuery) -> Element {
                 || r.ref_str.to_lowercase().contains(&q)
                 || r.locator.to_lowercase().contains(&q)
         })
+        .filter(|r| {
+            let sf = source_filter();
+            sf == "all" || r.source_id == sf
+        })
         .collect();
     match sk {
         SortKey::Title => {
@@ -133,8 +151,14 @@ pub fn ListPage(encoded: String, query: ListQuery) -> Element {
     }
 
     let current_encoded = space().map(|s| s.encoded.clone()).unwrap_or_default();
-
-    let (eyebrow, h1, lede) = match space() {
+    // Source coverage of the visible results — how many rows come from
+    // each source, so a filtered view always shows where the data lives.
+    let mut source_counts: std::collections::BTreeMap<String, usize> = std::collections::BTreeMap::new();
+    for r in visible.iter() {
+        *source_counts.entry(r.source_id.clone()).or_insert(0) += 1;
+    }
+ 
+     let (eyebrow, h1, lede) = match space() {
         Some(SpaceState { status: SpaceStatus::Ready(s), .. }) => (
             format!("space · {}", s.name),
             "Index".to_string(),
@@ -216,6 +240,18 @@ pub fn ListPage(encoded: String, query: ListQuery) -> Element {
                             option { value: "locator", selected: sort_key() == "locator", "locator" }
                         }
                     }
+                    div { class: "control",
+                        span { class: "control-label", "source" }
+                        select {
+                            name: "source",
+                            value: "{source_filter}",
+                            onchange: move |e| source_filter.set(e.value()),
+                            option { value: "all", selected: source_filter() == "all", "all" }
+                            for s in sources.iter() {
+                                option { value: "{s}", selected: source_filter() == *s, "{s}" }
+                            }
+                        }
+                    }
                     button {
                         class: "control-action",
                         r#type: "submit",
@@ -265,11 +301,22 @@ pub fn ListPage(encoded: String, query: ListQuery) -> Element {
                 }
             }
 
-            div { class: "results-head",
-                span { class: "col-ref", "ref" }
-                span { class: "col-title", "title" }
-                span { class: "col-loc", "locator" }
-            }
+                         div { class: "results-head",
+                 span { class: "col-ref", "ref" }
+                 span { class: "col-title", "title" }
+                 span { class: "col-loc", "locator" }
+             }
+             div { class: "source-coverage",
+                 span { class: "source-coverage-label", "sources" }
+                 for (sid, n) in source_counts.iter() {
+                     span { class: "source-coverage-item",
+                         "{sid}: {n}"
+                     }
+                 }
+                 if source_counts.is_empty() {
+                     span { class: "source-coverage-item dim", "none" }
+                 }
+             }
             div { class: "results-list",
                 match resources() {
                     None => rsx! { p { class: "results-empty skel", "loading…" } },
@@ -338,6 +385,7 @@ fn ResultRow(row: ResourceRow, current: String) -> Element {
         current,
         encode_space(&row.ref_str)
     );
+    let editable = row.kind == "document";
     rsx! {
         div { class: "result",
             span { class: "col-ref",
@@ -346,7 +394,11 @@ fn ResultRow(row: ResourceRow, current: String) -> Element {
             }
             span { class: "col-title",
                 a { href: "{ref_link}", "{row.title}" }
-                span { class: "meta", "— {row.source_id}" }
+                span { class: "source-badge",
+                    class: if editable { "source-badge-editable" } else { "source-badge-readonly" },
+                    if editable { "✎ " } else { "· " }
+                    "{row.source_id}"
+                }
             }
             span { class: "col-loc", "{row.locator}" }
         }

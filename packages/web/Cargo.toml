@@ -18,23 +18,26 @@ notez-preview = { path = "../../crates/preview" }
 composition = { path = "../../crates/composition" }
 orgmode     = { path = "../../crates/adapters/orgmode" }
 markdown    = { path = "../../crates/adapters/markdown" }
-serde       = { workspace = true }
-serde_json  = { workspace = true }
-pulldown-cmark = { version = "0.10", default-features = false }
-urlencoding = "2"
-base64      = "0.22"
-mime_guess  = "2.0"
-html-escape = "0.2"
-bytes       = "1.0"
-ulid        = "1.0"
-dioxus      = { workspace = true, features = ["router", "fullstack"] }
-
+serde           = { workspace = true }
+serde_json      = { workspace = true }
+pulldown-cmark  = { version = "0.10", default-features = false }
+urlencoding     = "2"
+base64          = "0.22"
+mime_guess      = "2.0"
+html-escape     = "0.2"
+bytes           = "1.0"
+ulid            = "1.0"
+dioxus          = { workspace = true, features = ["router", "fullstack"] }
+sha2            = "0.10"
 # Server-only stack (axum SSR host + custom API routes). Compiled out
 # of the wasm client via the `server` feature gate.
 axum    = { version = "0.8", features = ["form"], optional = true }
 tokio   = { version = "1", features = ["rt-multi-thread", "macros", "net"], optional = true }
 anyhow  = { version = "1", optional = true }
 toml    = { version = "0.8", optional = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+janetrs = "0.8"
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 dioxus       = { workspace = true, features = ["web"] }

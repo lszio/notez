@@ -16,6 +16,7 @@
 use dioxus::prelude::*;
 pub use crate::router::Route;
 pub mod layout;
+pub mod janet;
 pub mod body;
 pub mod model;
 pub mod pages;

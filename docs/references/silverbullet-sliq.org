@@ -1,0 +1,154 @@
+#+TITLE: SilverBullet 查询语言（SLIQ）
+#+AUTHOR: Zef Hemel 与 SilverBullet 社区
+#+LANGUAGE: zh-CN
+
+* 概述
+SLIQ（Space Lua Integrated Query）是 SilverBullet 内嵌的查询语言。它是 SilverBullet 自研 Lua 方言 Space Lua 的一个扩展，用 SQL 与 LINQ 启发的语法对对象集合进行筛选、分组、排序与投影，是 SilverBullet "纯 Markdown 即数据库"能力的核心。
+
+** 设计定位（ADR-006）
+- 背景：有了对象索引后，用户最常做的是"选择与转换对象"（索引、任务汇总、仪表盘）；纯命令式 Lua 循环可读性差，而独立的第二门查询语言又会重新引入"多语言接缝"。
+- 决策：在 Lua *内部*嵌入查询语法，而非独立 DSL 或纯函数 API。=query[[...]]= 只是 Lua 的"长字符串调用"语法糖（等价于 =query("...")=），因此使用 SLIQ 的程序*仍然是语法合法的 Lua*，只是 Space Lua 会把该字符串解释为查询。
+- 结果：一门语言、无接缝；=from= 接受任意 Lua 表达式，同一语法既能查询对象索引，也能查询任意内存表；查询可直接在 =select= 中调用模板与 Lua 函数。
+
+* 基本语法
+#+begin_src lua
+query[[
+    from <<expression>>
+    [ where <<expression>> ]
+    [ group by <<expression>> [, ...] ]
+    [ having <<expression>> ]
+    [ order by <<sort_expression>> [, ...] ]
+    [ limit <<expression>> [, <<expression>>] ]
+    [ offset <<expression>> ]
+    [ select <<expression>> ]
+]]
+#+end_src
+
+- 唯一必需子句是 =from=；其余子句*可以任意顺序*书写（与 SQL 的固定顺序不同）。
+- 每个子句体都是 Lua 表达式，因此可调用函数、做算术、引用变量。
+- 查询返回普通 Lua 表（table），可以嵌套在更大的表达式里，例如 =some(query[[...]]) or "fallback"=。
+- 历史沿革：早期 SilverBullet 有独立的 ```query 块语言（v1）；2025 年起改为嵌入 Lua 的语法，先称 "Lua Integrated Query"（PR 1205），后更名为 SLIQ。
+
+* 数据来源（from）
+=from= 指定数据来源，两种写法：
+- *显式绑定（推荐）*：=from p = <<expression>>=，把每个元素绑定到变量 =p=。性能更好，且不污染全局命名空间。
+- *隐式绑定*：=from <<expression>>=，元素绑定到 =_=，同时所有属性直接成为裸变量。更短但性能差，且对象的属性会遮蔽同名全局变量（例如对象带 =table= 属性时，=table= 库在查询内不可用）——官方建议始终用显式绑定。
+
+典型来源是 =index= API 提供的查询集合（详见 *索引 API* 一节）：
+#+begin_src lua
+query[[from p = index.pages() order by p.lastModified desc select p.name limit 3]]
+query[[from n = {1, 2, 3, 4, 5} where n > 2]]  -- 任意 Lua 表也行
+#+end_src
+
+* where（过滤）
+表达式为真则保留该行：
+#+begin_src lua
+query[[from p = index.pages() where table.includes(p.tags, "meta") limit 5]]
+query[[from p = index.pages() where p.name:startsWith("Person")]]
+#+end_src
+
+比较与逻辑直接复用 Lua 语义：= = =、= ~= =、= < =、= > = 等，以及 =and=、=or=、=not=；字符串方法（如 =p.name:startsWith(...)=）与 Lua 标准库函数均可使用。
+
+* order by（排序）
+=order by= 支持一个或多个排序键，从左到右依次比较；每个键可独立指定方向：
+#+begin_src lua
+query[[from p = index.pages() order by p.lastModified desc, p.name select p.name limit 3]]
+query[[from p = data order by p.category asc, p.priority desc]]
+#+end_src
+
+- *nulls first / nulls last*：默认按 SQL 惯例（升序时 nil 排最后，降序时排最前），可逐键覆盖：=order by p.priority desc nulls last=。
+- *using 自定义比较器*：=order by p.name using byLength=，比较器接受两个参数，第一个严格小于第二个时返回 true（须满足严格弱序 SWO，不能返回 =<= =、=>= =）。运行时校验 SWO，违规报错。可用命名函数或内联匿名函数；=using= 是 Space Lua 保留字，不能作变量名。
+- *字符串排序规则*：可用 =queryCollation= 配置调整。
+- *实现*：稳定归并排序，相等元素保持原序；无效比较器不会死循环，而是检测并报错。
+
+* limit / offset（分页）
+#+begin_src lua
+query[[from {1, 2, 3, 4, 5} limit 3]]        -- 前 3 条
+query[[from {1, 2, 3, 4, 5} limit 3, 2]]     -- 跳过 2 条再取 3 条（内联 offset）
+query[[from {1, 2, 3, 4, 5} offset 2]]       -- 独立 offset
+query[[from {1, 2, 3, 4, 5} offset 2 limit 3]]
+#+end_src
+
+offset 超过可用行数时结果为空（非错误，与 PostgreSQL 语义一致）；内联 offset 与独立 =offset= 子句同时出现时，后出现者生效。
+
+* select（投影与转换）
+对结果集的每一行做变换；省略时默认返回元素本身：
+#+begin_src lua
+query[[from n = {1, 2, 3} select n * 2]]                          -- 表达式变换
+query[[from p = index.pages() select table.select(p, "name", "lastModified") limit 3]]
+query[[from p = index.pages() order by p.lastModified desc limit 3 select templates.pageItem(p)]]
+#+end_src
+
+常用模式：在 =select= 中调用模板渲染每行（=templates.pageItem=、=templates.fullPageItem=、=templates.taskItem= 等），或构造表 ={ name = p.name, priority = p.priority }=。
+
+* group by（分组）
+按一个或多个键表达式分组，每行结果含：
+- =key=：分组键值（单键为值本身，多键为表）。
+- =group=：该组全部原始元素的 Lua 表（数组）。
+- 分组字段名在 =having=、=select=、=order by= 中可作为裸变量使用；=#group= 取组内数量。
+
+#+begin_src lua
+query[[
+  from p = index.objects("tag")
+  group by p.name
+  select { name = name, count = #group }
+  limit 5
+]]
+#+end_src
+
+* having（组过滤）
+在 =group by= *之后*过滤组，遵循 SQL 语义：只能引用分组键字段、=key=、=group= 与聚合表达式（如 =#group=、=count()=）；过滤单行请用 =where=。
+#+begin_src lua
+query[[
+  from p = index.tags()
+  group by p.name
+  having #group > 2
+  select { name = name, count = #group }
+  order by count desc
+  limit 5
+]]
+#+end_src
+
+* 聚合函数
+聚合用于 =select= 与 =having=，作用于整个结果集或每个组：
+- 内置：=count=、=sum=、=min=、=max=、=avg=、=array_agg=；有序集合聚合 =quantile=、=percentile_cont=、=percentile_disc=（需配合聚合内 =order by= 才有确定结果）。
+- 无 =group by= 时整个结果集视为单一隐式组，至多返回一行，=key= 为 nil：
+#+begin_src lua
+query[[from p = index.pages() select { total = count(p.name), biggest = max(p.size) }]]
+#+end_src
+
+- *per-aggregate 过滤*：=count(p.name) filter(where p.size > 10)=——只对该聚合生效，与 =where=（分组前行过滤）和 =having=（组级过滤）不同维度；无匹配行时返回空组值（count 为 0，sum/min/max/avg 为 nil，array_agg 为空表）。
+- *聚合内 order by*：=array_agg(p.name order by p.name asc)= 控制值处理顺序；对 sum/count/min/max/avg 无影响，对 =array_agg= 与分位数类聚合有意义；可与 =filter(where ...)= 组合，先过滤后排序。
+- *自定义聚合*：可用 Aggregate API 注册自定义聚合函数与别名，全部聚合可通过 =index.aggregates()= 列出。
+- 注意：分组查询中，与已注册聚合同名的裸函数会被当作聚合调用；想调用同名全局函数需用限定访问（如 =_G.sum(x)=）。
+- 分组后未聚合的字段引用（如 =select { first_page = p.name }=）指向组内第一个元素，与常见 SQL 语义一致。
+
+* 索引 API（数据源全集）
+=index= 系统调用暴露对象索引，返回可直接用于 =from= 的查询集合：
+- =index.objects(tag)=：指定标签的对象（最通用）；便捷封装有 =index.pages(tag?)=、=index.tasks(tag?)=、=index.items(tag?)=、=index.headers(tag?)=、=index.paragraphs(tag?)=、=index.tables(tag?)=、=index.tags()=、=index.links()=、=index.relations(kind?)=、=index.documents()=。
+- 特殊集合：=index.subPages(name)=（某页下的子页面）、=index.aspiringPages()=、=index.metaPages()=、=index.contentPages()=。
+- 内存索引：=index.markdown(text)= 直接对一段 Markdown 文本建索引并返回对象（可用于临时分析）。
+- 对象操作：=index.getObjectByRef=、=index.deleteObject=、=index.indexObjects=、=index.validateObjects=、=index.reindexSpace= 等。
+- 可用性判断：=index.isAvailable()= 指示完整索引是否已完成（新客户端首次索引期间为 false）。
+
+* 渲染输出
+- 查询返回普通 Lua 表，可直接作为表达式结果、存入变量或交给其他 Lua 代码处理。
+- 配合模板渲染（推荐在 =select= 内逐行调用模板），可把查询结果变成任意形式的动态内容；标准库提供 =templates.pageItem= / =fullPageItem= / =taskItem= / =itemItem= / =paragraphItem= / =tagItem= 等常用模板。
+- 在页面上，${query[[...]]} 或 ```query 围栏块会实时预览结果（悬停/Alt-click 可查看并编辑底层查询）。
+
+* 注意事项与陷阱
+- 尽量用 =from v = expr= 显式绑定；隐式绑定会遮蔽全局变量并阻塞未来优化。
+- =using= 是保留字；自定义比较器必须满足严格弱序。
+- SLIQ 子句可重排、"长得像 SQL 但不是 SQL"，严格 SQL 语义预期（如子句顺序、隐式单组聚合）可能带来意外，这是设计取舍（见 ADR-006）。
+- 分组查询中裸聚合名会被当作聚合函数处理。
+
+* 官方资源
+- SLIQ 完整参考（官网，在线可交互示例）：https://silverbullet.md/Space%20Lua/Integrated%20Query
+- 聚合进阶：https://silverbullet.md/Space%20Lua/Integrated%20Query/Aggregating
+- 分组进阶：https://silverbullet.md/Space%20Lua/Integrated%20Query/Grouping
+- Space Lua 总览：https://silverbullet.md/Space%20Lua
+- index API 参考：https://silverbullet.md/API/index
+- 设计决策 ADR-006：https://github.com/silverbulletmd/silverbullet/blob/main/docs/ADR/006%20Space%20Lua%20Integrated%20Query.md
+
+* 资料状态
+本文按 2026-08-26 可访问的官方文档与仓库源码（v2.10.0）整理。SLIQ 为活跃演进中的语法，聚合与分组能力标记为实验性（maturity/experimental）；子句与函数细节以官方文档为准。SilverBullet 总体架构见 [[./silverbullet.org][SilverBullet]]。

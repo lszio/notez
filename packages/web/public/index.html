@@ -4,6 +4,26 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Notez</title>
+  <script>
+    (function () {
+      var stored = localStorage.getItem('notez-theme') || 'system';
+      document.documentElement.dataset.theme = stored;
+    })();
+  </script>
+  <script>
+    (function () {
+      document.addEventListener('click', function (event) {
+        var toggle = event.target.closest && event.target.closest('[data-theme-toggle]');
+        if (!toggle) return;
+        var current = document.documentElement.dataset.theme || 'system';
+        var next = current === 'light' ? 'dark' : current === 'dark' ? 'system' : 'light';
+        document.documentElement.dataset.theme = next;
+        localStorage.setItem('notez-theme', next);
+        toggle.setAttribute('aria-label', 'Theme: ' + next);
+        toggle.title = 'Theme: ' + next;
+      });
+    })();
+  </script>
   <style>
     /* Paper-terminal palette.
      * The visual identity is "old notebook meets terminal": warm
@@ -1479,6 +1499,233 @@
     .welcome-files-ext.kind-attachment { background: var(--warn); }
     .welcome-files-name { flex: 1; font-family: var(--mono); font-size: 0.82rem; }
     .welcome-files-title { width: 40%; text-align: right; }
+    .theme-toggle {
+      display: inline-grid;
+      place-items: center;
+      width: 2rem;
+      height: 2rem;
+      padding: 0;
+      border: 1px solid var(--ink-rule);
+      border-radius: var(--r-sm);
+      background: transparent;
+      color: var(--ink-2);
+      cursor: pointer;
+      font-family: var(--mono);
+      font-size: 1rem;
+      line-height: 1;
+    }
+    .theme-toggle:hover,
+    .theme-toggle:focus-visible {
+      color: var(--ink);
+      border-color: var(--accent);
+    }
+    .theme-toggle:focus-visible,
+    button:focus-visible,
+    a:focus-visible,
+    input:focus-visible,
+    textarea:focus-visible,
+    select:focus-visible {
+      outline: 2px solid var(--accent);
+      outline-offset: 2px;
+    }
+    /* Document status + source editing (UI-1 document workbench) */
+    .doc-status {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.5rem;
+      align-items: baseline;
+      margin: 0.25rem 0 1.25rem;
+      font-family: var(--mono);
+      font-size: 0.78rem;
+      color: var(--ink-2);
+    }
+    .doc-status-source { color: var(--ink-3); }
+    .doc-status-editable {
+      color: var(--ok);
+      border: 1px solid currentColor;
+      border-radius: var(--r-sm);
+      padding: 0.05rem 0.4rem;
+    }
+    .doc-status-readonly {
+      color: var(--warn);
+      border: 1px solid currentColor;
+      border-radius: var(--r-sm);
+      padding: 0.05rem 0.4rem;
+    }
+    .doc-status-rev { color: var(--ink-3); }
+    .edit-banner {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.6rem;
+      align-items: baseline;
+      padding: 0.5rem 0.8rem;
+      margin-bottom: 1rem;
+      border: 1px solid var(--err);
+      background: var(--paper-2);
+      border-radius: var(--r-sm);
+      font-family: var(--mono);
+      font-size: 0.8rem;
+    }
+    .edit-banner-kind { color: var(--err); text-transform: uppercase; letter-spacing: 0.05em; }
+    .edit-banner-msg { color: var(--ink-2); }
+    .edit-source {
+      margin: 1.25rem 0;
+      border: 1px solid var(--ink-rule);
+      border-radius: var(--r-md);
+      background: var(--paper);
+    }
+    .edit-source > summary {
+      cursor: pointer;
+      padding: 0.5rem 0.9rem;
+      font-family: var(--mono);
+      font-size: 0.78rem;
+      color: var(--ink-2);
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+    }
+    .edit-source > summary:hover { color: var(--ink); }
+    .edit-source-body {
+      border-top: 1px solid var(--ink-rule);
+      padding: 0.9rem;
+    }
+    .edit-source-textarea {
+      width: 100%;
+      min-height: 14rem;
+      resize: vertical;
+      font-family: var(--mono);
+      font-size: 0.85rem;
+      line-height: 1.55;
+      color: var(--ink);
+      background: var(--paper-2);
+      border: 1px solid var(--ink-rule);
+      border-radius: var(--r-sm);
+      padding: 0.7rem 0.8rem;
+    }
+    .edit-source-textarea:focus-visible {
+      outline: 2px solid var(--accent);
+      outline-offset: 1px;
+      border-color: var(--accent);
+    }
+    .edit-source-actions {
+      display: flex;
+      gap: 0.6rem;
+      align-items: center;
+      margin-top: 0.75rem;
+    }
+    .edit-source-save {
+      font-family: var(--mono);
+      font-size: 0.78rem;
+      color: var(--paper);
+      background: var(--accent);
+      border: 1px solid var(--accent);
+      border-radius: var(--r-sm);
+      padding: 0.35rem 0.9rem;
+      cursor: pointer;
+    }
+    .edit-source-save:hover { filter: brightness(0.95); }
+    .edit-source-cancel {
+      font-family: var(--mono);
+      font-size: 0.78rem;
+      color: var(--ink-2);
+      border: 1px solid var(--ink-rule);
+      border-radius: var(--r-sm);
+      padding: 0.35rem 0.9rem;
+      text-decoration: none;
+    }
+    /* Source badge + coverage (list/query view) */
+    .source-badge {
+      font-family: var(--mono);
+      font-size: 0.66rem;
+      letter-spacing: 0.03em;
+      border-radius: var(--r-sm);
+      padding: 0.05rem 0.4rem;
+      margin-left: 0.5rem;
+      white-space: nowrap;
+    }
+    .source-badge-editable { color: var(--ok); border: 1px solid currentColor; }
+    .source-badge-readonly { color: var(--warn); border: 1px solid currentColor; }
+    .source-coverage {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.5rem;
+      align-items: baseline;
+      padding: 0.35rem 0;
+      border-bottom: 1px solid var(--ink-rule);
+      font-family: var(--mono);
+      font-size: 0.72rem;
+      color: var(--ink-2);
+    }
+    .source-coverage-label { color: var(--ink-3); text-transform: uppercase; letter-spacing: 0.08em; }
+    .source-coverage-item { color: var(--ink-2); }
+    .source-coverage-item.dim { color: var(--ink-3); }
+    @media (min-width: 640px) and (max-width: 1023px) {
+      .col-right { display: none; }
+      .shell-body { grid-template-columns: 15rem minmax(0, 1fr); }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after {
+        scroll-behavior: auto !important;
+        transition-duration: 0.01ms !important;
+        animation-duration: 0.01ms !important;
+      }
+    }
+
+    .banner-err-kind {
+      font-family: var(--mono);
+      font-size: 0.7rem;
+      color: var(--err);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      border: 1px solid var(--err);
+      border-radius: var(--r-sm);
+      padding: 0.02rem 0.4rem;
+    }
+
+    .edit-banner-ok {
+      border-color: var(--ok);
+      background: var(--paper-2);
+    }
+    .edit-banner-ok .edit-banner-kind { color: var(--ok); }
+
+    .janet-panel {
+      margin: 1.25rem 0;
+      border: 1px solid var(--ink-rule);
+      border-radius: var(--r-md);
+      background: var(--paper);
+    }
+    .janet-panel > summary {
+      cursor: pointer;
+      padding: 0.5rem 0.9rem;
+      font-family: var(--mono);
+      font-size: 0.78rem;
+      color: var(--ink-2);
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+    }
+    .janet-panel > summary:hover { color: var(--ink); }
+    .janet-panel-body {
+      border-top: 1px solid var(--ink-rule);
+      padding: 0.9rem;
+    }
+    .janet-panel-hint { color: var(--ink-3); font-size: 0.78rem; margin: 0 0 0.6rem; }
+    .janet-input {
+      width: 100%;
+      font-family: var(--mono);
+      font-size: 0.85rem;
+      line-height: 1.55;
+      color: var(--ink);
+      background: var(--paper-2);
+      border: 1px solid var(--ink-rule);
+      border-radius: var(--r-sm);
+      padding: 0.6rem 0.7rem;
+      resize: vertical;
+    }
+    .janet-input:focus-visible {
+      outline: 2px solid var(--accent);
+      border-color: var(--accent);
+    }
+    .janet-actions { margin-top: 0.6rem; }
+
   </style>
     <!-- M6: hydrated Dioxus client. Served from /wasm/* by the
          server when built with `dx build --platform web`; harmless

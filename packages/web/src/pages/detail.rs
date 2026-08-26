@@ -9,12 +9,12 @@ use dioxus::prelude::*;
 
 use crate::pages::ui::{Breadcrumb, BreadcrumbSegment, KindIcon};
 use crate::pages::use_space_layout;
-use crate::router::{route_for_space_list, route_for_space_home};
+use crate::router::{DetailQuery, route_for_space_list, route_for_space_home};
 use crate::server::get_resource;
 use crate::space_ctx::{SpaceState, SpaceStatus};
 
 #[component]
-pub fn DetailPage(encoded: String, encoded_ref: String) -> Element {
+pub fn DetailPage(encoded: String, encoded_ref: String, query: DetailQuery) -> Element {
     use_space_layout(&encoded);
     let space = use_context::<Signal<Option<SpaceState>>>();
 
@@ -113,6 +113,7 @@ pub fn DetailPage(encoded: String, encoded_ref: String) -> Element {
                         row: row.clone(),
                         list_href: list_href.clone(),
                         current_encoded: current_encoded.clone(),
+                        query: query.clone(),
                     }
                 },
                 (_, None) => rsx! {
@@ -126,10 +127,34 @@ pub fn DetailPage(encoded: String, encoded_ref: String) -> Element {
 }
 
 #[component]
-fn DetailBody(row: crate::model::ResourceRow, list_href: String, current_encoded: String) -> Element {
+fn DetailBody(
+    row: crate::model::ResourceRow,
+    list_href: String,
+    current_encoded: String,
+    query: DetailQuery,
+) -> Element {
     let decoded_space = crate::router::decode_space(&current_encoded);
+    let is_doc = row.kind == "document";
+    let editable = is_doc;
     rsx! {
         div { class: "detail-main",
+            // Save-result banner (StaleRevision / ReadOnly / …). Rendered
+            // only when the edit route redirected back with a failure.
+            if !query.edit_err.is_empty() {
+                div { class: "edit-banner edit-banner-err",
+                    span { class: "edit-banner-kind", "{query.edit_err}" }
+                    if !query.edit_msg.is_empty() {
+                        span { class: "edit-banner-msg", "{query.edit_msg}" }
+                    }
+                }
+            }
+            if query.edited == "1" && query.edit_err.is_empty() {
+                div { class: "edit-banner edit-banner-ok",
+                    span { class: "edit-banner-kind", "saved" }
+                    span { class: "edit-banner-msg", "changes written to the source file." }
+                }
+            }
+
             h1 { "{row.title}" }
             p { class: "ref-line",
                 "{row.ref_str}"
@@ -138,9 +163,68 @@ fn DetailBody(row: crate::model::ResourceRow, list_href: String, current_encoded
                 a { href: "{list_href}", "back to index" }
             }
 
+            p { class: "doc-status",
+                span { class: "doc-status-source", "{row.source_id}" }
+                if editable {
+                    span { class: "doc-status-editable", "editable" }
+                } else {
+                    span { class: "doc-status-readonly", "read-only" }
+                }
+                span { class: "doc-status-rev", "rev {row.revision}" }
+            }
+
             if !row.body_html.is_empty() {
                 div { class: "detail-body",
                     div { dangerous_inner_html: "{row.body_html}" }
+                }
+            }
+
+            // Raw source editing. Progressive-enhancement: a native
+            // <details> + <form POST> so it works without hydration.
+            if editable {
+                details { class: "edit-source",
+                    summary { "edit source" }
+                    div { class: "edit-source-body",
+                        form {
+                            method: "post",
+                            action: "/api/sources/document/edit",
+                            input { r#type: "hidden", name: "source_root", value: "{decoded_space}" }
+                            input { r#type: "hidden", name: "ref_str", value: "{row.ref_str}" }
+                            input { r#type: "hidden", name: "expected_revision", value: "{row.revision}" }
+                            textarea {
+                                name: "content",
+                                class: "edit-source-textarea",
+                                rows: "20",
+                                dangerous_inner_html: "{html_escape::encode_text(&row.raw_content)}"
+                            }
+                            div { class: "edit-source-actions",
+                                button { class: "edit-source-save", r#type: "submit", "save changes" }
+                                a { class: "edit-source-cancel", href: "{crate::router::route_for_space_resource(&decoded_space, &row.ref_str)}", "cancel" }
+                            }
+                        }
+                    }
+                }
+            }
+
+            details { class: "janet-panel",
+                summary { "janet" }
+                div { class: "janet-panel-body",
+                    p { class: "janet-panel-hint", "run a Janet expression against the notez runtime." }
+                    form {
+                        action: "/api/janet/eval",
+                        method: "post",
+                        target: "_blank",
+                        textarea {
+                            name: "script",
+                            class: "janet-input",
+                            rows: "4",
+                            placeholder: "(+ 1 2)",
+                            "(+ 1 2)"
+                        }
+                        div { class: "janet-actions",
+                            button { class: "edit-source-save", r#type: "submit", "run janet" }
+                        }
+                    }
                 }
             }
 

@@ -226,11 +226,10 @@ fn PaletteBody() -> Element {
                                                         class: "palette-hit-link",
                                                         id: "{id}",
                                                         href: "{href}",
-                                                        div { class: "palette-hit-head",
-                                                            span { class: "palette-hit-kind kind-{h.kind}", "{kind_label}" }
-                                                            span { class: "palette-hit-title", "{h.title}" }
-                                                        }
-                                                        div { class: "palette-hit-loc mono-sm", "{h.locator}" }
+                                                         div { class: "palette-hit-head",
+                                                             span { class: "palette-hit-kind kind-{h.kind}", "{kind_label}" }
+                                                             span { class: "palette-hit-title", "{h.title}" }
+                                                         }
                                                         if !h.snippet.is_empty() {
                                                             div { class: "palette-hit-snippet mono-sm", "{h.snippet}" }
                                                         }

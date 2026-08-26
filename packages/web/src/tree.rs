@@ -62,15 +62,14 @@ pub struct SourceFileRow {
 
 /// One hit for the command-palette search.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub struct SearchHit {
-    pub ref_str: String,
-    pub kind: String,
-    pub title: String,
-    pub locator: String,
-    pub snippet: String,
+ pub struct SearchHit {
+     pub ref_str: String,
+     pub kind: String,
+     pub title: String,
+     pub locator: String,
+     pub snippet: String,
     pub match_field: String,
 }
-
 /// `index.org`-style landing entry.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct IndexEntryDto {

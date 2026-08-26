@@ -82,7 +82,7 @@ pub fn FilesPanel(active_encoded: Option<String>) -> Element {
                     {
                         let active_path_pill = active_path_for_pills.clone().unwrap_or_default();
                         let count = counts.get(key).copied().unwrap_or(0);
-                        let query = ListQuery { q: String::new(), kind: if *key == "all" { String::new() } else { key.to_string() }, sort: String::new() };
+                        let query = ListQuery { q: String::new(), kind: if *key == "all" { String::new() } else { key.to_string() }, sort: String::new(), source: String::new() };
                         let href = crate::router::route_for_space_list_with_query(&active_path_pill, &query);
                         rsx! {
                             a {

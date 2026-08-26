@@ -17,6 +17,7 @@ pub struct ListQuery {
     pub q: String,
     pub kind: String,
     pub sort: String,
+    pub source: String,
 }
 
 impl std::fmt::Display for ListQuery {
@@ -30,6 +31,9 @@ impl std::fmt::Display for ListQuery {
         }
         if !self.sort.is_empty() {
             parts.push(format!("sort={}", url_encode(&self.sort)));
+        }
+        if !self.source.is_empty() {
+            parts.push(format!("source={}", url_encode(&self.source)));
         }
         if parts.is_empty() {
             Ok(())
@@ -56,6 +60,60 @@ impl From<&str> for ListQuery {
                 "q" => out.q = v,
                 "kind" => out.kind = v,
                 "sort" => out.sort = v,
+                "source" => out.source = v,
+                _ => {}
+            }
+        }
+        out
+    }
+}
+
+/// Query string for the resource detail page. Currently carries the
+/// result of a save attempt so the read view can surface a structured
+/// error banner (StaleRevision / ReadOnly / NotFound / Unsupported)
+/// without needing a client-side event bridge.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct DetailQuery {
+    pub edit_err: String,
+    pub edit_msg: String,
+    /// Set to "1" after a successful save, so the read view can show
+    /// a confirmation banner instead of silently re-rendering.
+    pub edited: String,
+}
+
+impl std::fmt::Display for DetailQuery {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut parts: Vec<String> = Vec::new();
+        if !self.edit_err.is_empty() {
+            parts.push(format!("edit_err={}", url_encode(&self.edit_err)));
+        }
+        if !self.edit_msg.is_empty() {
+            parts.push(format!("edit_msg={}", url_encode(&self.edit_msg)));
+        }
+        if self.edited == "1" {
+            parts.push("edited=1".to_string());
+        }
+        if parts.is_empty() {
+            Ok(())
+        } else {
+            write!(f, "?{}", parts.join("&"))
+        }
+    }
+}
+
+impl From<&str> for DetailQuery {
+    fn from(query: &str) -> Self {
+        let query = query.trim_start_matches('?');
+        let mut out = DetailQuery::default();
+        for pair in query.split('&').filter(|s| !s.is_empty()) {
+            let (k, v) = match pair.split_once('=') {
+                Some((k, v)) => (k, url_decode(v)),
+                None => (pair, String::new()),
+            };
+            match k {
+                "edit_err" => out.edit_err = v,
+                "edit_msg" => out.edit_msg = v,
+                "edited" => out.edited = v,
                 _ => {}
             }
         }
@@ -83,8 +141,8 @@ pub enum Route {
     Space { encoded: String },
     #[route("/source/:encoded/list?:..query", ListPage)]
     List { encoded: String, query: ListQuery },
-    #[route("/source/:encoded/resource/:encoded_ref", DetailPage)]
-    Resource { encoded: String, encoded_ref: String },
+    #[route("/source/:encoded/resource/:encoded_ref?:..query", DetailPage)]
+    Resource { encoded: String, encoded_ref: String, query: DetailQuery },
     #[route("/source/:encoded/graph", GraphPage)]
     Graph { encoded: String },
     #[route("/source/:encoded/preview/:encoded_locator", PreviewPage)]

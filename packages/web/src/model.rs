@@ -23,6 +23,10 @@ pub struct ResourceRow {
     /// Rendered preview HTML for the resource body. Empty for
     /// kinds that don't have inline content (attachments).
     pub body_html: String,
+    /// Raw source text for the edit textarea. Populated only in the
+    /// document detail path; empty for list rows and non-documents.
+    #[serde(default)]
+    pub raw_content: String,
 }
 
 impl ResourceRow {
@@ -48,6 +52,7 @@ impl ResourceRow {
             revision,
             properties,
             body_html,
+            raw_content: String::new(),
         }
     }
 }

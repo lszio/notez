@@ -1,0 +1,1099 @@
+#+title: Notez 第一版界面重构设计
+#+date: 2026-08-26
+#+STARTUP: showeverything
+
+本文承接 [[file:refactoring-v1.org][Notez 第一版可用化重构设计]]，定义第一版 Web / Desktop / Mobile 客户端的界面信息架构、交互模型、自适应布局、主题系统和实施顺序。
+
+设计目标不是先做一个漂亮的资源列表，而是建立一个可以承载未来 Source 聚合、文档编辑、Janet 动态内容、查询视图、权限、同步和 Agent 审计的文档工作台。
+
+* 1. 设计结论
+
+** 1.1 核心形态
+
+> Notez 是一个可切换上下文的文档工作台。
+
+用户的主流程是：
+
+#+begin_src text
+选择 Workspace / Source
+        |
+        v
+找到文档或保存查询
+        |
+        v
+阅读 / 原文编辑 / 结构化编辑
+        |
+        +--> 查看属性、关系、来源和 revision
+        |
+        +--> 执行查询或 Janet 动态块
+        |
+        +--> 生成标准变更并保存
+#+end_src
+
+默认界面采用「文档工作台」模型，吸收：
+
+- Notion / Craft 的文档中心和阅读编辑一体；
+- Obsidian 的本地文件主权、链接和反向链接；
+- Linear 的状态透明、密度和快捷键；
+- Raycast 的命令中心；
+- VS Code 的 Explorer / Editor / Inspector 分区；
+- GitHub 的 revision、diff、权限和活动记录。
+
+不采用纯资源管理后台、纯知识图谱首页或纯数据库表格作为默认界面。
+
+** 1.2 信息架构
+
+#+begin_src text
+Workspace
+├── Home              最近文档、保存查询、Source 状态
+├── Documents         文档浏览和搜索
+├── Views             保存查询、列表、表格、卡片、看板
+├── Graph             关系和反向链接探索
+├── Activity          变更、冲突、Agent、Janet 执行
+└── Sources           Source 配置、能力和状态
+#+end_src
+
+这些不是互相割裂的应用。它们围绕同一个当前上下文工作：
+
+#+begin_src text
+CurrentContext
+├── workspace
+├── source scope
+├── document or view
+├── selected object
+├── revision
+├── pending action
+└── error / status
+#+end_src
+
+** 1.3 方案组合
+
+界面采用四种设计方向的组合，而非四选一：
+
+| 方向 | 在 Notez 中的职责 | 是否默认 |
+|-------+------------------+----------|
+| 文档工作台 | 阅读、编辑、Janet block | 是 |
+| 命令中心 | 搜索、创建、执行动作和快捷键 | 是，作为操作层 |
+| 数据工作台 | 保存查询、表格、列表、看板 | 否，作为 View |
+| 知识图谱 | 关系、反向链接和对象探索 | 否，作为专业工作区 |
+
+* 2. 用户工作流
+
+** 2.1 首次进入
+
+用户进入 Notez 后，首页应帮助其立刻开始工作：
+
+1. 选择或打开一个 Workspace；
+2. 查看已配置的 Source；
+3. 继续最近文档；
+4. 打开保存查询；
+5. 发现 Source 错误或未完成扫描；
+6. 通过命令中心搜索全局文档。
+
+首页不是纯文件树，也不是营销 Landing Page。
+
+** 2.2 阅读和编辑
+
+文档阅读、编辑和原文查看属于同一个页面上下文：
+
+#+begin_src text
+Read  <->  Edit  <->  Source
+#+end_src
+
+三种模式共享：
+
+- DocumentKey；
+- 当前 revision；
+- 保存状态；
+- Janet block 状态；
+- 属性和关系；
+- 错误和冲突信息。
+
+不采用「阅读页跳转到另一套编辑页」的模式。
+
+** 2.3 查询和动态内容
+
+查询结果和 Janet 输出是文档中的动态 Block，也可以作为独立 View 展示：
+
+#+begin_src text
+Static Markdown / Org block
+Query block
+Janet block
+Embed block
+Error block
+#+end_src
+
+动态块必须显示：
+
+- 执行状态；
+- 数据来源；
+- 结果数量；
+- 最后执行时间；
+- 输入 revision；
+- 是否部分结果；
+- 错误或超时原因；
+- 打开源码或重新执行入口。
+
+** 2.4 远程 Source
+
+远程 Source 是上下文的一部分，而不是一个隐藏的后台配置：
+
+#+begin_src text
+Sources
+├── ● Local notes       Markdown / Org · writable
+├── ◌ Team archive      Notez REST · read-only
+└── ! Notion import     unavailable
+#+end_src
+
+文档列表、文档标题、Inspector 和编辑器都应显示 Source 标记。远程不可用不能显示成空列表。
+
+* 3. 桌面端布局
+
+** 3.1 默认三栏
+
+#+begin_src text
+┌──────────────────────────────────────────────────────────────┐
+│ Notez  [Search / Command]                 +  Sync  Account  │
+├───────────────┬──────────────────────────────┬───────────────┤
+│ LEFT          │ MAIN                         │ RIGHT         │
+│               │                              │               │
+│ Workspace     │ Breadcrumb                   │ Inspector     │
+│ Home          │                              │ Properties    │
+│ Documents     │ Document / View              │ Relations     │
+│ Views         │ Reader / Editor              │ Source        │
+│ Graph         │ Query / Janet blocks         │ Revision      │
+│ Activity      │                              │ Activity      │
+│               │                              │               │
+│ SOURCES       │                              │               │
+│ ● local       │                              │               │
+│ ◌ upstream    │                              │               │
+│               │                              │               │
+│ + Add source  │                              │               │
+├───────────────┴──────────────────────────────┴───────────────┤
+│ local · 128 documents · last scan 10:42 · watch on          │
+└──────────────────────────────────────────────────────────────┘
+#+end_src
+
+** 3.2 左栏
+
+左栏负责持久导航和上下文切换：
+
+- Workspace 导航；
+- Source 列表；
+- Source namespace；
+- 收藏文档；
+- 保存查询；
+- 最近访问。
+
+左栏不负责承载所有诊断、日志和调试信息。Source 状态可以显示摘要，完整详情进入 Sources 或 Activity。
+
+默认尺寸：
+
+#+begin_src css
+--sidebar-width: 264px;
+--sidebar-width-wide: 320px;
+#+end_src
+
+** 3.3 中栏
+
+中栏是当前任务的主要工作区：
+
+- 文档阅读；
+- 原文编辑；
+- 结构化编辑；
+- 查询结果；
+- Janet 动态内容；
+- 关系视图。
+
+长文阅读宽度建议限制在 =720px–820px=；宽屏空间留给左右上下文，而不是无限拉伸正文。
+
+#+begin_src css
+--content-readable-max: 820px;
+--content-wide-max: 1120px;
+#+end_src
+
+** 3.4 右栏
+
+右栏是当前对象的上下文解释器：
+
+- Properties；
+- Relations / Backlinks；
+- Source capability；
+- Revision；
+- Recent activity；
+- Janet execution details。
+
+右栏可关闭、可调整宽度。关闭后不能丢失信息，只是暂时收起。
+
+默认尺寸：
+
+#+begin_src css
+--inspector-width: 300px;
+#+end_src
+
+* 4. 页面设计
+
+** 4.1 Home
+
+首页内容：
+
+#+begin_src text
+Continue working
+  最近文档、未完成编辑、冲突文档
+
+Saved views
+  Open tasks / Recently changed / Upstream documents
+
+Source health
+  可写、只读、不可用、扫描中
+
+Recent activity
+  本地修改、Agent 操作、Janet 错误
+#+end_src
+
+首页首要行动是「继续工作」「打开文档」「搜索」，不是「配置数据库」或「查看内部投影」。
+
+** 4.2 Source view
+
+Source 页面显示：
+
+- Source 名称和类型；
+- 文档数量；
+- 可用能力；
+- 读写状态；
+- 搜索和分页状态；
+- 最后访问或同步时间；
+- 错误和重试入口；
+- 文档列表。
+
+列表行示例：
+
+#+begin_src text
+Architecture Decision Records
+local · editable · updated 4m ago
+
+Team roadmap
+upstream · read-only · updated yesterday
+#+end_src
+
+** 4.3 Document view
+
+文档头部：
+
+#+begin_src text
+← Documents   local / docs / architecture.md
+
+Architecture
+Markdown · editable · Saved
+
+[Read] [Edit] [Source]                    [···]
+#+end_src
+
+头部必须显示：
+
+- 当前 Source；
+- 文档格式；
+- 编辑能力；
+- 保存状态；
+- revision 摘要；
+- 当前模式。
+
+** 4.4 Search / Query view
+
+#+begin_src text
+Open tasks                         Saved view
+23 results · 2 sources             [Refresh] [Edit query] [···]
+
+Filters: tag:project  status:open  source:any
+
+[Result list / Table / Cards / Stream]
+
+local: 18 · upstream: 5 · 1 source unavailable
+#+end_src
+
+查询头部需要透明表达：
+
+- 查询名称；
+- Source 范围；
+- 结果数量；
+- 是否部分结果；
+- 是否为保存查询；
+- 是否由 Janet 渲染；
+- 最后更新时间。
+
+第一版 View 类型：
+
+- List；
+- Table；
+- Cards；
+- Document stream。
+
+Kanban、Calendar、Graph Canvas 和自定义 Janet renderer 后续加入。
+
+** 4.5 Graph view
+
+第一版不要求复杂力导向画布。先提供可靠的关系探索：
+
+#+begin_src text
+Related documents
+Outgoing links
+Backlinks
+Relation evidence
+Source / revision
+#+end_src
+
+稳定的对象和关系数据先于视觉化效果。Canvas 属于后续增强。
+
+** 4.6 Activity view
+
+Activity 统一展示：
+
+- 本地编辑；
+- 外部文件变化；
+- Agent 操作；
+- Janet 执行和错误；
+- revision 冲突；
+- Source 不可用；
+- watch 状态；
+- 后续同步状态。
+
+活动条目必须能够定位到 Source、Document、Change 或 Janet block。
+
+* 5. 编辑器设计
+
+** 5.1 三种编辑模式
+
+=Read=：渲染后的文档和动态内容。
+
+=Edit=：面向文档的编辑体验，允许结构化字段操作和保存。
+
+=Source=：原始 Markdown / Org 文本、行号和源码格式。
+
+模式切换不应刷新到另一个独立路由；如果实现上需要独立组件，仍必须共享同一个 Client Store。
+
+** 5.2 保存状态
+
+界面使用明确文本状态：
+
+#+begin_src text
+Saved
+Saving…
+Unsaved changes
+Changed externally
+Conflict
+Read-only
+Unavailable
+#+end_src
+
+不使用无法解释的单一绿色圆点替代状态文本。
+
+** 5.3 外部修改
+
+编辑期间检测到 Source revision 变化时显示：
+
+#+begin_src text
+This document changed outside Notez.
+
+[View external version] [Keep my changes] [Reload]
+#+end_src
+
+默认不静默覆盖，不自动丢弃用户草稿。
+
+** 5.4 Org 编辑边界
+
+Org 的结构化编辑入口必须标记支持范围。第一版支持的字段：
+
+- headline title；
+- TODO keyword；
+- priority；
+- 已识别 property；
+- planning date。
+
+不支持安全写回时，界面显示：
+
+#+begin_src text
+This field cannot be edited safely in the current document.
+The original text is preserved.
+#+end_src
+
+拒绝写回优于把复杂 Org 文档重序列化后破坏原文。
+
+* 6. Janet Block 设计
+
+** 6.1 视觉结构
+
+#+begin_src text
+┌─────────────────────────────────────────────┐
+│ Janet · read-only · local + upstream         │
+├─────────────────────────────────────────────┤
+│ (def rows (notez/search {...}))              │
+│ (notez/render-list rows)                     │
+├─────────────────────────────────────────────┤
+│ 12 results · 2 sources · 84ms                │
+│                                             │
+│  • Project A                                 │
+│  • Project B                                 │
+└─────────────────────────────────────────────┘
+#+end_src
+
+Janet block显示：
+
+- =Janet= 标签；
+- read-only 或可申请写入状态；
+- Source 范围；
+- 执行时间；
+- 输入 revision；
+- 结果数量；
+- [Run]、[Open block]、[Show details] 操作。
+
+** 6.2 Janet 状态
+
+#+begin_src text
+Idle
+Running
+Rendered
+Partial result
+Timeout
+Execution error
+Permission denied
+Source unavailable
+#+end_src
+
+错误只影响该 Janet block，不让整个文档退化成空白页或无上下文 =Internal=。
+
+** 6.3 Janet 输出
+
+第一版允许：
+
+- scalar；
+- JSON-compatible map / array；
+- Markdown fragment；
+- structured view；
+- structured error。
+
+Web 不默认接受 Janet 直接返回任意 HTML。需要 HTML 时经过统一净化出口，优先使用结构化渲染树。
+
+* 7. 命令中心与搜索
+
+** 7.1 全局入口
+
+顶部提供显式搜索按钮和快捷键：
+
+#+begin_src text
+[Search documents, commands, views…  ⌘K]
+#+end_src
+
+支持：
+
+- 文档搜索；
+- Source 搜索；
+- 保存查询；
+- 命令；
+- 最近文档；
+- Janet block；
+- Activity；
+- 路由跳转。
+
+** 7.2 命令分组
+
+#+begin_src text
+Documents
+  Open document
+  Create document
+  Edit source
+
+Sources
+  Switch source
+  Refresh source
+  Show capabilities
+
+Views
+  Open saved view
+  Run query
+
+Automation
+  Run Janet block
+  Show execution details
+
+System
+  Toggle theme
+  Open settings
+#+end_src
+
+命令中心只负责选择动作和收集参数，实际操作仍通过统一 Protocol / Dispatcher 执行。
+
+** 7.3 搜索结果
+
+结果行至少显示：
+
+#+begin_src text
+[kind] title
+       source · locator · updated time
+#+end_src
+
+远程文档、只读文档、附件和动态 View 使用清晰但克制的 badge。搜索结果中的 Source 不可用状态不能被隐藏。
+
+* 8. 自适应布局
+
+** 8.1 设计原则
+
+自适应不是简单地把三栏压缩成一栏。每个断点需要重新决定信息优先级：
+
+- 桌面：同时呈现导航、文档和 Inspector；
+- 平板：保留文档和一个可切换侧栏；
+- 手机：优先阅读、搜索、编辑和保存；
+- 动态内容和错误在所有尺寸都必须可见；
+- 不依赖 hover 才能发现关键操作；
+- 键盘焦点和触摸目标均可用。
+
+** 8.2 断点
+
+建议使用内容驱动断点，而不是绑定具体设备：
+
+#+begin_src css
+--bp-mobile: 0–639px;
+--bp-tablet: 640–1023px;
+--bp-desktop: 1024–1439px;
+--bp-wide: 1440px and above;
+#+end_src
+
+建议实际 CSS 使用：
+
+#+begin_src css
+@media (max-width: 639px)  { /* mobile */ }
+@media (min-width: 640px) and (max-width: 1023px) { /* tablet */ }
+@media (min-width: 1024px) { /* desktop */ }
+@media (min-width: 1440px) { /* wide */ }
+#+end_src
+
+** 8.3 手机布局
+
+手机端为单栏：
+
+#+begin_src text
+┌──────────────────────────┐
+│ ← Document       ···      │
+├──────────────────────────┤
+│ Source · editable         │
+│                           │
+│ Document content          │
+│                           │
+│ Janet result              │
+│                           │
+├──────────────────────────┤
+│ Home Search Docs Views …  │
+└──────────────────────────┘
+#+end_src
+
+底部导航：
+
+- Home；
+- Search；
+- Documents；
+- Views；
+- More。
+
+Source、Inspector、关系、revision 和执行详情采用 drawer / sheet 展示。
+
+手机第一版优先支持：
+
+- 阅读；
+- 搜索；
+- 原文编辑；
+- 保存；
+- 查看 Janet 结果；
+- 查看错误和 revision 状态。
+
+不强行复刻桌面端三栏。
+
+** 8.4 平板布局
+
+平板默认采用两栏：
+
+#+begin_src text
+Navigation / Source drawer  |  Document / View
+#+end_src
+
+Inspector 变为右侧抽屉。用户可以保持文档打开，再查看 Source、关系或 revision。
+
+** 8.5 桌面和宽屏
+
+桌面采用三栏，宽屏允许：
+
+- 增加左右栏留白；
+- 扩展查询表格宽度；
+- 保持文档正文可读宽度；
+- 将 Graph / Inspector 放在额外空间，而不是拉宽正文。
+
+** 8.6 可访问性
+
+所有尺寸必须满足：
+
+- 键盘可完成搜索、打开、编辑、保存、执行 Janet；
+- focus-visible 清晰；
+- 触摸目标至少约 44px；
+- 颜色不是唯一状态载体；
+- 支持 `prefers-reduced-motion`；
+- 支持系统字体放大；
+- dialog、drawer 和 palette 有正确焦点管理；
+- 错误通过可读文本和适当的 aria 状态暴露。
+
+* 9. 主题系统
+
+** 9.1 主题选择
+
+第一版支持三种用户选择：
+
+#+begin_src text
+Light
+Dark
+System
+#+end_src
+
+默认值为 =System=。用户选择持久化到用户级配置或浏览器本地设置；服务端 SSR 首屏在没有显式选择时尊重系统偏好，避免首屏闪烁。
+
+主题切换必须是即时的，不需要刷新页面，不改变当前文档、查询或编辑状态。
+
+** 9.2 主题结构
+
+主题分为三层：
+
+#+begin_src text
+Semantic tokens
+  --color-bg
+  --color-surface
+  --color-text
+  --color-muted
+  --color-border
+  --color-accent
+  --color-danger
+  --color-warning
+  --color-success
+
+Component tokens
+  --button-bg
+  --editor-bg
+  --panel-border
+  --badge-bg
+  --code-bg
+
+Theme skin
+  light / dark / high-contrast future
+#+end_src
+
+组件只使用语义 token，不直接写死颜色。主题切换只替换 token 值。
+
+** 9.3 Light 主题
+
+推荐视觉方向：=Quiet Technical Workspace=。
+
+#+begin_src css
+:root,
+[data-theme="light"] {
+  --color-bg: #F7F8FA;
+  --color-surface: #FFFFFF;
+  --color-surface-raised: #FFFFFF;
+  --color-text: #17202A;
+  --color-muted: #667085;
+  --color-border: #E4E7EC;
+  --color-accent: #356AE6;
+  --color-janet: #7657D9;
+  --color-warning: #B7791F;
+  --color-danger: #C2413B;
+  --color-success: #2F855A;
+  --color-code-bg: #F1F3F5;
+}
+#+end_src
+
+** 9.4 Dark 主题
+
+#+begin_src css
+[data-theme="dark"] {
+  --color-bg: #111318;
+  --color-surface: #181B22;
+  --color-surface-raised: #20242D;
+  --color-text: #E8EAF0;
+  --color-muted: #9AA1AF;
+  --color-border: #2A2F3A;
+  --color-accent: #78A6FF;
+  --color-janet: #A995FF;
+  --color-warning: #E2B35A;
+  --color-danger: #F07C75;
+  --color-success: #66C28A;
+  --color-code-bg: #101217;
+}
+#+end_src
+
+暗色主题不是把所有颜色变成黑底白字。正文、编辑器、代码、侧栏和浮层需要不同的 surface 层级，保持内容和交互层次。
+
+** 9.5 System 主题
+
+#+begin_src css
+@media (prefers-color-scheme: dark) {
+  :root[data-theme="system"] {
+    /* dark semantic tokens */
+  }
+}
+#+end_src
+
+系统主题需要监听 `prefers-color-scheme` 变化。用户切换系统主题时，Notez 在 =System= 模式下实时跟随。
+
+** 9.6 主题切换控件
+
+设置入口和命令中心均提供：
+
+#+begin_src text
+Theme
+  ○ Light
+  ○ Dark
+  ● System
+#+end_src
+
+顶部可提供紧凑的主题切换按钮，但按钮必须有可读的 aria-label 和 tooltip，不只显示太阳/月亮图标。
+
+** 9.7 对比度和状态颜色
+
+- 普通文本满足 WCAG AA 对比度；
+- warning、danger、success 不只靠颜色区分；
+- Source badge 同时显示文字；
+- Janet 状态同时显示标签和图标；
+- dark theme 中避免纯黑背景和纯白正文；
+- focus ring 在两种主题中均清晰可见。
+
+* 10. 视觉令牌与排版
+
+** 10.1 字体角色
+
+#+begin_src text
+UI / Body       Inter 或 IBM Plex Sans
+Document        系统衬线或 Source Serif 4，可选
+Code / Janet    IBM Plex Mono 或 JetBrains Mono
+#+end_src
+
+文档正文默认使用可读的 sans 或用户选择的 serif；Janet 和代码始终使用等宽字体。
+
+** 10.2 尺寸令牌
+
+#+begin_src css
+--space-1: 4px;
+--space-2: 8px;
+--space-3: 12px;
+--space-4: 16px;
+--space-5: 20px;
+--space-6: 24px;
+--space-8: 32px;
+--space-10: 40px;
+
+--radius-sm: 6px;
+--radius-md: 8px;
+--radius-lg: 12px;
+
+--text-xs: 12px;
+--text-sm: 13px;
+--text-md: 15px;
+--text-lg: 18px;
+--text-xl: 24px;
+--text-2xl: 32px;
+#+end_src
+
+整体比普通文档应用更紧凑，但正文行高保持 =1.6–1.7=，避免高密度牺牲长文阅读。
+
+** 10.3 视觉克制
+
+不使用以下默认装饰作为主视觉：
+
+- 大面积渐变；
+- 玻璃拟态；
+- 到处胶囊形按钮；
+- 每个模块不同颜色；
+- 仿终端绿字；
+- 过大的营销 Hero。
+
+唯一有识别度的视觉重点是：
+
+> **文档内容、动态块和 Source 状态在同一工作区中清晰共存。**
+
+* 11. 组件体系
+
+** 11.1 基础组件
+
+#+begin_src text
+Button
+IconButton
+Input
+Select
+Badge
+Tooltip
+Menu
+Dialog
+Drawer
+Tabs
+Toast
+Spinner
+EmptyState
+ErrorState
+#+end_src
+
+** 11.2 工作台组件
+
+#+begin_src text
+WorkspaceShell
+Sidebar
+SourceList
+SourceBadge
+DocumentList
+DocumentHeader
+Inspector
+ActivityPanel
+CommandPalette
+StatusBar
+#+end_src
+
+** 11.3 文档组件
+
+#+begin_src text
+DocumentRenderer
+MarkdownBlock
+OrgBlock
+CodeBlock
+QueryBlock
+JanetBlock
+EditableBlock
+RevisionBanner
+ConflictBanner
+#+end_src
+
+** 11.4 查询组件
+
+#+begin_src text
+QueryBar
+FilterChip
+ResultList
+ResultTable
+ResultCard
+SourceCoverage
+SavedViewHeader
+#+end_src
+
+组件位于 `packages/ui`，Web、Desktop、Mobile 共享组件和 token。平台差异只进入平台壳、输入法、文件访问、通知和后台同步。
+
+* 12. 状态、错误与反馈
+
+** 12.1 状态优先级
+
+状态显示优先顺序：
+
+1. 当前操作能否继续；
+2. 数据是否已经保存；
+3. Source 是否可用；
+4. 内容是否为部分结果；
+5. 是否需要用户采取动作；
+6. 诊断详情。
+
+** 12.2 空状态
+
+空状态必须指向下一步：
+
+#+begin_src text
+No documents yet
+Add a Markdown or Org file to this Source.
+
+[Open Source folder] [Add source]
+#+end_src
+
+** 12.3 错误状态
+
+统一使用结构化错误：
+
+#+begin_src text
+Not found
+Unavailable
+Unauthorized
+Unsupported capability
+Stale revision
+Invalid patch
+Script error
+Script timeout
+Conflict
+#+end_src
+
+每个错误显示：
+
+- 发生了什么；
+- 影响哪个 Source / Document；
+- 用户能做什么；
+- 详情入口；
+- 重试或恢复入口（如果适用）。
+
+* 13. 路由和状态
+
+界面 URL 表达当前上下文，不暴露内部数据库实现：
+
+#+begin_src text
+/workspace
+/source/<source-id>
+/doc/<encoded-document-key>
+/view/<saved-query-id>
+/graph
+/activity
+#+end_src
+
+动态 block 可以使用文档内定位：
+
+#+begin_src text
+/doc/<encoded-document-key>#block-<object-id>
+#+end_src
+
+Source-local path、远程 page id 和 URL 必须经过统一编码，不能直接把带 `/` 的 locator 拼入路由。
+
+浏览器状态分为：
+
+#+begin_src text
+URL state
+  当前页面、Source、Document、View
+
+Client Store
+  当前文档缓存、编辑草稿、执行状态、drawer、palette
+
+Server state
+  Source 数据、revision、projection、journal、权限
+#+end_src
+
+UI signal 只承载本地交互状态，不成为跨组件隐式事实来源。
+
+* 14. 实施阶段
+
+** UI-0：设计系统基础
+
+- 建立 tokens.css；
+- 支持 Light / Dark / System；
+- 建立 focus、spacing、type 和状态规范；
+- 将长内嵌 CSS 迁移到组件样式；
+- 让 `packages/ui` 成为真实共享组件来源。
+
+验收：主题切换无需刷新；所有关键状态在两种主题下可读；移动端基础布局可用。
+
+** UI-1：文档工作台
+
+- 实现三栏 Shell；
+- SourceList；
+- DocumentList；
+- DocumentHeader；
+- Read / Edit / Source 模式；
+- Inspector；
+- Saved / Unsaved / Read-only / Conflict 状态。
+
+验收：用户可以在真实本地 Workspace 中打开、编辑和保存 Markdown。
+
+** UI-2：命令中心与查询 View
+
+- 全局搜索按钮和快捷键；
+- 文档、Source、View、Command 结果；
+- List / Table / Cards / Stream；
+- Source coverage 和部分结果状态；
+- 键盘导航和可访问性焦点管理。
+
+验收：可以从任意页面找到文档、打开保存查询并查看跨 Source 结果。
+
+** UI-3：Janet 动态块
+
+- JanetBlock；
+- 代码编辑和执行；
+- Running / Rendered / Timeout / Error 状态；
+- 结果详情和 trace 入口；
+- 文档内动态块定位；
+- 结构化渲染结果。
+
+验收：同一 Janet 请求可由 Web、CLI、MCP 后端执行，错误只影响局部 block。
+
+** UI-4：关系与活动
+
+- Backlinks；
+- Related documents；
+- Activity；
+- Change / revision 详情；
+- Agent 操作和审计；
+- Source health。
+
+验收：用户可以解释文档来自哪里、与什么相关、何时发生了什么变化。
+
+** UI-5：响应式客户端
+
+- 手机单栏和底部导航；
+- 平板 drawer；
+- 触摸目标和手势；
+- 移动端编辑和保存；
+- 桌面 / Mobile 共享组件和协议。
+
+验收：不依赖桌面三栏，手机可以阅读、搜索、编辑和执行 Janet。
+
+** UI-6：高级 View
+
+- Kanban；
+- Calendar；
+- Graph Canvas；
+- 自定义 Janet renderer；
+- 更丰富的附件和嵌入预览。
+
+这些功能建立在 UI-1 到 UI-4 的状态模型上，不提前制造独立的运行时。
+
+* 15. 验收与测试
+
+** 15.1 视觉验收
+
+使用真实 Web 页面检查：
+
+- 桌面三栏；
+- 平板两栏和 drawer；
+- 手机单栏；
+- Light / Dark / System 切换；
+- 长文阅读宽度；
+- Janet block 成功、超时和错误；
+- 本地可写与远程只读；
+- Source 不可用与空 Source 的区别；
+- 外部修改和 conflict banner；
+- 键盘焦点、palette 和 dialog。
+
+** 15.2 交互验收
+
+至少验证：
+
+1. Home 打开本地文档；
+2. Document 在 Read / Edit / Source 间切换；
+3. 编辑并保存 Markdown；
+4. revision 变化后拒绝静默覆盖；
+5. 搜索 local + upstream；
+6. 上游不可用时显示明确状态；
+7. Janet block 执行并展示结果；
+8. Janet 超时后只显示局部错误；
+9. Theme 切换不丢失编辑状态；
+10. 手机端完成阅读、编辑和保存。
+
+** 15.3 无障碍验收
+
+- 键盘完成主要流程；
+- focus-visible 可见；
+- screen reader 能读出 Source、可写状态、revision 和错误；
+- 状态不只使用颜色；
+- 触摸目标足够大；
+- reduced motion 生效；
+- Light / Dark 对比度通过检查。
+
+* 16. 完成定义
+
+界面重构完成的标准：
+
+- 默认首页以最近工作和 Source 状态为中心；
+- 文档阅读、编辑和原文查看属于同一上下文；
+- Markdown 编辑可靠可见；
+- Org 受限编辑边界清楚；
+- Janet block 在文档中是一等动态内容；
+- 查询结果可以在 List / Table / Cards / Stream 中展示；
+- Source、只读、不可用、部分结果和 revision 状态明确可见；
+- Web、Desktop、Mobile 使用同一协议和组件语义；
+- Light、Dark、System 主题切换即时且不丢失状态；
+- 桌面、平板、手机均可完成核心阅读、搜索、编辑流程；
+- 关键操作具备键盘、触摸和辅助技术支持；
+- 视觉验证覆盖真实 Web 页面，而不是只检查静态 HTML；
+- UI 不直接访问 SQLite、文件系统或 Janet VM；
+- 动态错误不会被压缩成无上下文的 Internal。

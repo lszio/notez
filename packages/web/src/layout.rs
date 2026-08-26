@@ -91,12 +91,14 @@ pub fn Layout(children: Element) -> Element {
                 if let Some(SpaceState { status: SpaceStatus::Error(e), path, .. }) = s.clone() {
                     rsx! {
                         div { class: "banner-err",
-                            div { class: "banner-err-inner",
-                                span { class: "label", "space error →" }
-                                span { class: "mono-sm", "{path}" }
-                                span { class: "label", "—" }
-                                span { "{e}" }
-                            }
+                                                    div { class: "banner-err-inner",
+                            span { class: "label", "space error →" }
+                            span { class: "banner-err-kind", "{e.kind()}" }
+                            span { class: "label", "—" }
+                            span { class: "mono-sm", "{path}" }
+                            span { class: "label", "—" }
+                            span { "{e}" }
+                        }
                         }
                     }
                 } else {
@@ -172,6 +174,7 @@ fn SpaceSwitcher(active_path: Option<String>, active_encoded: Option<String>) ->
 fn TopNavActions(active_path: Option<String>, active_encoded: Option<String>) -> Element {
     rsx! {
         div { class: "topnav-actions",
+            ThemeToggle {}
             if let (Some(p), Some(enc)) = (active_path.clone(), active_encoded.clone()) {
                 form {
                     class: "topnav-form",
@@ -204,6 +207,20 @@ fn TopNavActions(active_path: Option<String>, active_encoded: Option<String>) ->
             } else {
                 a { class: "topnav-action", href: "/", "home" }
             }
+        }
+    }
+}
+
+#[component]
+fn ThemeToggle() -> Element {
+    rsx! {
+        button {
+            class: "theme-toggle",
+            r#type: "button",
+            title: "Toggle theme",
+            "aria-label": "Toggle theme",
+            "data-theme-toggle": "true",
+            "☼"
         }
     }
 }

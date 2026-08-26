@@ -16,11 +16,11 @@ use notez_core::config::{
     web_space::{resolve_source as core_resolve_space, WebSourceError},
     GlobalConfig, SourceRegistration,
 };
-use notez_core::storage::SqliteProjection;
-use serde::Deserialize;
+ use notez_core::storage::SqliteProjection;
+ use serde::Deserialize;
 
+use crate::server::{SaveFailure, SaveOutcome};
 use crate::router::{decode_space, route_for_space_list};
-
 /// Process-global watch service.
 pub static GLOBAL_WATCH: std::sync::LazyLock<Arc<WatchService>> =
     std::sync::LazyLock::new(|| WatchService::new());
@@ -231,8 +231,81 @@ fn do_watch_start(state: &WebState, form: SpaceForm) -> Result<Redirect, WebRout
 
 fn do_watch_stop(state: &WebState, form: SpaceForm) -> Result<Redirect, WebRouteError> {
     let source_root = resolve_form_space(&form)?;
-    state.watch.stop(&source_root);
-    Ok(Redirect::to(&route_for_space_list(&source_root.to_string_lossy())))
+         state.watch.stop(&source_root);
+     Ok(Redirect::to(&route_for_space_list(&source_root.to_string_lossy())))
+ }
+
+#[derive(Debug, Deserialize)]
+pub struct DocumentEditForm {
+    pub source_root: String,
+    pub ref_str: String,
+    pub expected_revision: String,
+    pub content: String,
+}
+
+fn save_failure_parts(f: &SaveFailure) -> (String, String) {
+    match f {
+        SaveFailure::StaleRevision { expected, actual } => (
+            "stale_revision".to_string(),
+            format!("the file changed while editing (expected {expected}, found {actual})"),
+        ),
+        SaveFailure::ReadOnly { reason } => ("read_only".to_string(), reason.clone()),
+        SaveFailure::NotFound { path } => ("not_found".to_string(), format!("file not found: {path}")),
+        SaveFailure::Unsupported { reason } => ("unsupported".to_string(), reason.clone()),
+        SaveFailure::Internal { message } => ("internal".to_string(), message.clone()),
+    }
+}
+
+fn do_edit_document(_state: &WebState, form: DocumentEditForm) -> Result<Redirect, WebRouteError> {
+    let space_path = PathBuf::from(&form.source_root);
+    let r_ref = match notez_core::domain::ResourceRef::parse(&form.ref_str) {
+        Ok(r) => r,
+        Err(e) => {
+            let base = crate::router::route_for_space_resource(&form.source_root, &form.ref_str);
+            let err = e.to_string();
+            let msg = urlencoding::encode(&err);
+            return Ok(Redirect::to(&format!("{base}?edit_err=invalid_ref&edit_msg={msg}")));
+        }
+    };
+    let outcome = crate::server::update_document_impl(&space_path, &r_ref, &form.expected_revision, &form.content)
+        .unwrap_or_else(|e| SaveOutcome::Failed(SaveFailure::Internal { message: e }));
+    let base = crate::router::route_for_space_resource(&form.source_root, &form.ref_str);
+    match outcome {
+        SaveOutcome::Saved { .. } => Ok(Redirect::to(&format!("{base}?edited=1"))),
+        SaveOutcome::Failed(f) => {
+            let (kind, msg) = save_failure_parts(&f);
+            let enc = urlencoding::encode(&msg);
+            Ok(Redirect::to(&format!("{base}?edit_err={kind}&edit_msg={enc}")))
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct JanetEvalForm {
+    pub script: String,
+}
+
+fn do_janet_eval(form: JanetEvalForm) -> Result<axum::response::Response, WebRouteError> {
+    let (status, body) = match crate::janet::eval_janet(&form.script) {
+        Ok(v) => {
+            let json = serde_json::to_string_pretty(&v).unwrap_or_default();
+            (
+                StatusCode::OK,
+                format!(
+                    "<!doctype html><html><head><meta charset='utf-8'><title>Notez · janet</title></head><body style='font-family:monospace'><h1>janet result</h1><pre class='janet-result'>{}</pre></body></html>",
+                    html_escape::encode_text(&json)
+                ),
+            )
+        }
+        Err(e) => (
+            StatusCode::BAD_REQUEST,
+            format!(
+                "<!doctype html><html><head><meta charset='utf-8'><title>Notez · janet error</title></head><body style='font-family:monospace'><h1>janet error</h1><pre class='janet-error'>{}</pre></body></html>",
+                html_escape::encode_text(&e)
+            ),
+        ),
+    };
+    Ok((status, axum::response::Html(body)).into_response())
 }
 
 #[derive(Debug, Deserialize)]
@@ -288,6 +361,7 @@ pub async fn auto_watch_middleware(
 pub fn build_router(state: WebState) -> axum::Router {
     let state_r = state.clone();
     let state_s = state.clone();
+    let state_ed = state.clone();
     let state_ws = state.clone();
     let state_wt = state.clone();
     let state_wg = state.clone();
@@ -304,6 +378,13 @@ pub fn build_router(state: WebState) -> axum::Router {
             post(move |Form(form): Form<SpaceForm>| {
                 let s = state_s.clone();
                 async move { do_scan(&s, form) }
+            }),
+        )
+        .route(
+            "/api/sources/document/edit",
+            post(move |Form(form): Form<DocumentEditForm>| {
+                let s = state_ed.clone();
+                async move { do_edit_document(&s, form) }
             }),
         )
         .route(
@@ -330,6 +411,12 @@ pub fn build_router(state: WebState) -> axum::Router {
         .route(
             "/api/sources/attachment/raw",
             get(move |query| async move { raw_attachment_get(query).await }),
+        )
+        .route(
+            "/api/janet/eval",
+            post(move |Form(form): Form<JanetEvalForm>| {
+                async move { do_janet_eval(form) }
+            }),
         )
         .layer(axum::middleware::from_fn(auto_watch_middleware))
 }

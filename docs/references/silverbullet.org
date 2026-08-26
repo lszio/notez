@@ -1,0 +1,144 @@
+#+TITLE: SilverBullet
+#+AUTHOR: Zef Hemel 与 SilverBullet 社区
+#+LANGUAGE: zh-CN
+
+* 项目定位
+SilverBullet 是一个"可编程、私密、基于浏览器、开源、自托管、个人"的知识数据库（Personal Knowledge Database），官方自称 "notes app on steroids"。它以浏览器端 Markdown 编辑器为核心，叠加 wiki 式双向链接、内置数据库与查询语言，以及完全集成的 Space Lua 脚本环境，把笔记变成一个可编程、可随使用持续成长的系统。
+
+SilverBullet 与主流笔记软件的关键差异：
+- 内容以纯 Markdown 文件（称为 =Space=）存放，文件即数据，不锁定在专有数据库里。
+- 采用自托管 Web 应用形态（单二进制 / Docker 容器），数据主权归用户。
+- 在浏览器中完成 90% 以上的逻辑（编辑、索引、查询、脚本），服务端只是一个"哑文件存储"。
+- 内置对象索引（Object Index）与查询语言 SLIQ，让纯 Markdown 拥有数据库能力。
+
+* 核心特性
+- *Live Preview 编辑器*：基于 CodeMirror 6，输入时实时渲染 Markdown 格式；光标移入或 Alt-click 可查看底层源码。
+- *双向链接*：wiki 式 =[[链接]]=，支持按名称解析（不依赖完整路径）、反向链接（Linked Mention）。
+- *对象与数据库*：页面、任务、列表项、标签、链接等自动索引为可查询对象，支持 Frontmatter 与自定义属性。
+- *SLIQ 查询语言*：嵌入 Lua 的 SQL/LINQ 风格查询语法（=query[[...]]=），可动态生成内容。详见 [[./silverbullet-sliq.org][SilverBullet 查询语言 (SLIQ)]]。
+- *Space Lua 脚本*：自研 Lua 5.4 兼容运行时，=space-lua= 代码块全局生效，=${expr}= 语法实时求值渲染。
+- *模板系统*：页面模板、Slash 模板，=template.new= 定义可复用模板，查询结果可直接用模板渲染。
+- *离线优先 PWA*：Service Worker + IndexedDB 保存全量本地副本，无网络也可读写查询。
+- *同步引擎*：文件级双向同步（全空间约 20 秒、当前文件 2-3 秒），冲突时生成冲突副本并提示，不静默覆盖。
+- *可扩展*：Plugs（TypeScript 编译为 WebAssembly，Web Worker 沙箱）与 Libraries（Space Lua 脚本与模板集合）。
+- *命令驱动*：命令面板、Slash 命令、可配置键盘快捷键。
+- *Outline 大纲模式*：支持大纲式编辑（折叠、缩进、排序等）。
+
+* 总体架构
+SilverBullet 采用"薄服务端 + 厚客户端"架构，核心决策记录在仓库 =docs/ADR/= 中（Architecture Decision Records）。
+
+** 三层结构
+1. *Client（每浏览器标签页一个实例）*：运行 90%+ 的应用逻辑——编辑器（CodeMirror 6）、Space Lua 运行时、Plugs、Syscalls（系统调用边界）、Datastore（IndexedDB 键值存储，持有对象索引、同步缓存、运行时配置与内部消息队列）。
+2. *Service Worker（每浏览器一个实例）*：离线缓存并托管客户端代码，内嵌同步引擎，本地维护空间文件的完整副本，并通过拦截 HTTP API 调用在本地实现该 API——因此在线与离线时应用行为一致。
+3. *Server（Rust）*：只有三项职责——认证、提供静态客户端、实现文件 HTTP API（list/read/write/delete 文件、运行 shell 命令）。所有索引与查询都发生在客户端，服务端本质是文件存储。
+
+Client 通过 HTTP API 与 Service Worker（在线时也直连 Server）通信；三者围绕同一个 HTTP API 契约解耦，这是"服务端保持哑"的关键。
+
+** 技术栈
+- *客户端*：TypeScript、CodeMirror 6（编辑器）、Preact（UI）、ESBuild（构建）。
+- *服务端*：Rust（Cargo workspace）。历史上经历 Node.js → Deno → Go → Rust 四次重写（v2.10.0 起为 Rust），理由是服务端逻辑极薄，实现语言可替换，最终收敛为 TypeScript + Rust 两种语言。
+- *Space Lua*：自研 Lua 实现（非官方 Lua/LuaJIT/WASM 版），覆盖 Lua 5.4 标准库大部分并增加扩展（SLIQ、Thread Locals）。
+- *Plugs*：TypeScript 编写，编译为 WebAssembly，以 =.plug.js= 资产随 Library 分发，运行在独立 Web Worker 沙箱。
+- *数据层*：浏览器 IndexedDB（客户端本地持久化）；磁盘上只有纯 Markdown 文件与资产。
+
+** 关键架构决策（ADR 摘要）
+- *001 Offline-First PWA*：以 Service Worker + IndexedDB 实现离线优先，本地副本使读写与查询无网络延迟。
+- *002 Sync Engine*：文件级、双向、轮询同步；冲突不合并，写冲突副本并通知。CRDT 被推迟（Rust 后端成熟后可能重启）。
+- *003 Indexed Object Graph*：从 Markdown 持续提取结构化对象图；Markdown 始终是唯一事实来源，索引是可随时重建的缓存。
+- *005 Space Lua*：选定单一嵌入式语言 Lua，消除"查询语言/模板/脚本多语言接缝"。
+- *006 Space Lua Integrated Query (SLIQ)*：在 Lua 内部嵌入查询语法，而非独立 DSL。
+- *007 Core Application Logic on the Client*：核心逻辑全部放客户端，服务端退化为文件存储。
+- *009 Client Build Toolchain*：客户端构建工具链迁至 Node。
+- *010 Rust Backend*：服务端改用 Rust，收敛为 TypeScript + Rust。
+- *011 Link Resolution by Name*：wiki 链接按页面名（basename）解析，兼容 Obsidian 空间。
+
+* 功能设计
+** Space 与数据模型
+- =Space= 即一个目录（Obsidian 称 vault，LogSeq 称 graph），内含 Markdown 页面、资产文件与 =CONFIG.md= 配置页。任何外部工具（如 git、Syncthing）都可直接操作该目录。
+- 页面（Page）为 =*.md= 文件；以 =_= 前缀开头的为元页面（Meta Page），如配置、模板库。页面可嵌套在子目录（Folder）中。
+- 空间至少包含索引页（默认 =index.md=）与 =CONFIG.md=。
+
+** Object Index 对象索引
+- 机制：索引器持续解析空间内所有 Markdown，把页面、标题、任务、列表项、标签、链接等元素提取为对象（Object），存入客户端 IndexedDB。
+- 原则：Markdown 是唯一事实来源；索引只是派生缓存，可随时清空重建（=Space: Reindex= 命令），损坏或 schema 变更通过重建修复。
+- 关系：泛化关系（relation）把反向链接、Frontmatter 链接统一为边，支撑反向链接、对象图、重命名与语义化 Frontmatter（如 ADR 的 =dependsOn=）。
+- 代价：每个客户端各自冷启动建索引，大空间首次索引耗时较长。
+
+** 对象、标签与属性
+- 对象（Object）≈ 数据库行，标签（Tag）≈ 表/类型，属性（Attribute）≈ 列。
+- 每个对象有主标签 =tag= 与预定义属性：=ref=（全局唯一引用，如页面名或 =page@位置=）、=tags=（附加标签）、=itags=（含页面继承的隐式标签）、=inComment=。
+- 属性来源：Frontmatter（YAML）、行内语法 =[attr: value]=（兼容 Obsidian/LogSeq 的 =[attr:: value]=，值按 YAML 解析）、自定义标签定义。
+- 自定义标签：=#hashtag= 语法隐式创建，可用 =tag.define= 显式定义并用 JSON Schema 约束字段类型，编辑器内给出 lint 警告。
+- =X-Ray= 可在编辑器内直接可视化标注已索引的对象。
+
+** 编辑器与 Live Preview
+- 基于 CodeMirror 6 扩展 Markdown 模式，支持大纲折叠、Frontmatter 折叠、语法高亮、自动补全。
+- Live Preview 模式隐藏格式符号（如链接 URL），光标进入或 Alt-click 显示源码；可用命令切换纯 Markdown 显示。
+- ${expression} 表达式以实时 widget 渲染（查询、模板、自定义 widget 内联呈现）。
+- Markdown 扩展包括：wiki 链接、=#标签=、任务 =[ ]=、引用 =![[page]]=、锚点 =$name=、Admonition、脚注、HTML 注释、代码围栏高亮等。
+
+** 离线与同步
+- 离线：Service Worker 缓存客户端代码并持有全量文件副本；网络错误时回退本地数据，行为与在线一致。
+- 同步：文件级、双向、轮询（全空间约 20 秒、当前打开文件 2-3 秒）；比较本地与远端整个文件状态而非字符级差异。
+- 冲突：同一文件两处被改时不做自动合并，写出可解析的冲突副本并通知用户；=sync.ignore= 与 =sync.documents= 可配置同步范围（需写在 =CONFIG.md=）。
+- 协作：近实时内容更新（2-3 秒）、冲突 widget 辅助解决、@提及（Recipient）与 =/.accounts= 账号端点；Revisions 支持 git 历史（托管/非托管/禁用三种模式）。
+
+** 扩展机制
+- *Space Lua*（首选）：=space-lua= 围栏代码块中定义全局函数/命令/widget/事件处理器，跨整个空间生效；用 =-- priority: N= 注释控制加载顺序；=System: Reload= 重载脚本。
+- *Libraries*：Space Lua 脚本、模板、页面的集合，以 SilverBullet 空间形式分发（通常经 Git），通过 Library Manager 安装；可定义命令、Slash 模板、页面模板、widget、样式与虚拟页面。
+- *Plugs*：底层扩展机制，TypeScript 编写、编译为 WASM 在 Web Worker 沙箱运行，经 syscalls 与核心通信；可注册命令/快捷键、响应事件、运行定时任务、自定义事件。大量"内置"功能本身就是 plug。可热加载卸载，无需重启。
+- *Syscalls*：扩展代码与 SilverBullet 核心之间的 API 边界，暴露编辑器、事件、数据存储等能力。
+
+** 模板系统
+- 模板是含 =${expression}= 占位符的字符串，用 Space Lua 求值；=template.new[==[...]==]= 从字符串创建模板函数。
+- 推荐模式：在查询的 =select= 子句中对每行直接应用模板（如 =templates.pageItem(p)=）。
+- 页面模板（=#meta/template/page= 标签）作为新建页面的蓝图；Slash 模板（=#meta/template/slash=）定义插入式斜杠命令。
+
+** 认证与部署
+- 部署形态：单自包含二进制或 Docker 容器，默认端口 3000；首次指向空目录时启动浏览器内设置向导（Space Manager）。
+- 安全：远程访问必须启用认证（token 或账号体系）并前置 TLS——Service Worker、加密与剪贴板 API 要求 https 或 localhost。
+- 多空间模式：单一服务托管多个空间，账号按空间授权；Runtime API（headless Chrome 运行时）默认开启。
+- 文件系统：要求大小写敏感文件系统（Linux 推荐）；同步引擎依赖可靠的修改时间戳持久化。
+- 云选项：PikaPods 托管；商业桌面应用 SilverBullet+。
+
+** CLI 与 Runtime API
+- =sb= CLI（Rust）通过 Runtime API 与运行中的实例交互：求值 Lua 表达式（=sb lua 'query[[...]]'=）、执行脚本、交互式 REPL、跟踪日志、截屏，无需打开浏览器。
+- Runtime API 在服务端管理一个 headless Chrome 子进程承载客户端逻辑，首次调用会做初始索引。
+
+* 适用场景
+- 需要"纯 Markdown 文件 + 数据库查询"的个人知识库、Zettelkasten、任务/项目追踪、仪表盘与自动汇总页。
+- 愿意自托管、重视数据主权、希望笔记系统可编程（动态生成内容、自定义命令与 widget）的用户。
+- 已有 Obsidian 空间想迁移的用户（链接按名称解析、行内属性语法兼容）。
+- 对多设备离线访问、低资源服务器（树莓派、VPS）运行有要求的场景。
+
+* 快速入门
+#+begin_src sh
+# 二进制方式（以 GitHub Release 为准）
+curl -fsSL https://get.silverbullet.md | sh
+silverbullet --hostname localhost --port 3000 ./space
+
+# Docker 方式
+docker run -p 3000:3000 -v "$PWD/space:/space" zefhemel/silverbullet
+#+end_src
+
+然后访问 =http://localhost:3000= 走完设置向导，再阅读 Getting Started 与手册。建议按顺序了解：Space/Page → Markdown 扩展 → Object/Tag/Frontmatter → SLIQ 查询 → 模板 → Space Lua → 库与插件的安装。
+
+* 选择建议
+SilverBullet 适合"数据主权 + 可编程笔记"路线：内容永远是可以被任何工具读取的 Markdown，查询与自动化能力远超普通笔记软件。取舍点：
+- 服务端是哑文件存储，索引在浏览器端，每个客户端各自建索引，超大空间冷启动较慢。
+- 协作是文件级同步而非实时 CRDT 合并（冲突以副本形式人工解决）；实时协作为实验性方向。
+- 自定义能力强但学习曲线陡（Lua 脚本 + 查询语言），重度使用依赖对 Space Lua 的掌握。
+- 与 Obsidian 相比：SilverBullet 不是桌面应用而是自托管 Web 应用，插件生态规模较小，但"纯 Markdown + 数据库"的内置能力更统一。
+
+* 官方资源
+- 官网（本身即只读 SilverBullet 实例）：https://silverbullet.md/
+- 手册：https://silverbullet.md/Manual
+- 架构：https://silverbullet.md/Architecture
+- 查询语言（SLIQ）：https://silverbullet.md/Space%20Lua/Integrated%20Query
+- GitHub：https://github.com/silverbulletmd/silverbullet
+- 社区论坛：https://community.silverbullet.md
+- 发布说明：https://silverbullet.md/CHANGELOG
+- 商业桌面版：https://silverbullet.plus
+
+* 资料状态
+本文按 2026-08-26 可访问的官方文档与仓库源码（v2.10.0）整理。SilverBullet 处于活跃开发期，服务端已从 Go 迁移至 Rust，查询语言已统一为 SLIQ；涉及生产部署时，应以官方文档与仓库发布说明为准。查询语言细节见 [[./silverbullet-sliq.org][SilverBullet 查询语言 (SLIQ)]]。

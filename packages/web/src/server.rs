@@ -24,7 +24,8 @@ use notez_core::config::web_space::{
     WebSourceError,
 };
 use notez_core::config::SelectedSource;
-use serde::{Deserialize, Serialize};
+ 
+ use serde::{Deserialize, Serialize};
 
 use crate::body::render_body;
 use crate::model::ResourceRow;
@@ -108,6 +109,16 @@ pub enum WebServerError {
 }
 
 impl WebServerError {
+    /// Machine-readable variant name, used to render a structured
+    /// error label in the UI instead of a bare string.
+    pub fn kind(&self) -> &'static str {
+        match self {
+            Self::NotFound { .. } => "not_found",
+            Self::NotASpace { .. } => "not_a_space",
+            Self::InvalidRef { .. } => "invalid_ref",
+            Self::Internal { .. } => "internal",
+        }
+    }
     fn not_found(path: &str, msg: impl Into<String>) -> Self {
         Self::NotFound {
             path: path.to_string(),
@@ -412,6 +423,238 @@ pub async fn list_filesystem(source_root: String) -> Result<Vec<SourceFileRow>, 
         .map_err(|e| ServerFnError::new(e.to_string()))?;
     Ok(tree::build_filesystem_listing(&sel.root))
 }
+// ---- document editing -------------------------------------------------------
+
+/// Raw source text for a document, returned to the edit mode so the
+/// textarea can be primed with the current file body. `revision` is
+/// the SHA-256 of the file content (same construction the Org /
+/// Markdown scanners use), so the UI can send it back as the expected
+/// revision when saving.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RawDocument {
+    pub content: String,
+    pub revision: String,
+    pub locator: String,
+    pub kind: String,
+}
+
+/// Structured failure a save can return. Serialized over the wire so
+/// the UI renders a specific state (StaleRevision, ReadOnly,
+/// NotFound…) instead of a bare string.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum SaveFailure {
+    /// The file changed between the time the UI loaded it and the save.
+    StaleRevision { expected: String, actual: String },
+    /// The source does not accept writes.
+    ReadOnly { reason: String },
+    /// The underlying file no longer exists.
+    NotFound { path: String },
+    /// The target is not a document, so raw text editing is unsafe.
+    Unsupported { reason: String },
+    /// Anything else.
+    Internal { message: String },
+}
+
+/// Result of a document save. `Saved` carries the fresh row so the UI
+/// can re-render without a full navigate.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "state", rename_all = "snake_case")]
+pub enum SaveOutcome {
+    Saved { row: ResourceRow, revision: String },
+    Failed(SaveFailure),
+}
+
+impl SaveFailure {
+    fn internal(message: impl Into<String>) -> Self {
+        Self::Internal { message: message.into() }
+    }
+}
+
+/// Load the raw source text of a document for editing. Only `Document`
+/// resources are editable at the source level; other kinds report
+/// `Unsupported`.
+#[server]
+pub async fn read_document_content(
+    source_root: String,
+    ref_str: String,
+) -> Result<Option<RawDocument>, ServerFnError> {
+    let sel = core_resolve_space(Path::new(&source_root))
+        .map_err(WebServerError::from)
+        .map_err(|e| ServerFnError::new(e.to_string()))?;
+    let r_ref = ResourceRef::parse(&ref_str)
+        .map_err(|e| ServerFnError::new(format!("invalid ref {ref_str}: {e}")))?;
+    read_document_content_impl(&sel.root, &r_ref)
+        .map_err(|e| ServerFnError::new(e.to_string()))
+}
+
+/// Save the raw source text of a document. This is the design-doc
+/// "原文编辑" mode: the server writes the whole file with an expected
+/// revision guard, re-scans the source to refresh the projection, and
+/// returns the updated row. Structured/patch editing (TextPatch) is a
+/// later milestone.
+#[server]
+pub async fn update_document(
+    source_root: String,
+    ref_str: String,
+    expected_revision: String,
+    content: String,
+) -> Result<SaveOutcome, ServerFnError> {
+    let sel = core_resolve_space(Path::new(&source_root))
+        .map_err(WebServerError::from)
+        .map_err(|e| ServerFnError::new(e.to_string()))?;
+    let r_ref = ResourceRef::parse(&ref_str)
+        .map_err(|e| ServerFnError::new(format!("invalid ref {ref_str}: {e}")))?;
+    update_document_impl(&sel.root, &r_ref, &expected_revision, &content)
+        .map_err(|e| ServerFnError::new(e.to_string()))
+}
+
+/// Evaluate a Janet script server-side and return its result as
+/// JSON. This is the protocol surface for the design-doc "Janet query
+/// / render" capability (`docs/refactoring-v1.org` §7). The sandbox
+/// narrowing (whitelist, no os/io, timeout) is a follow-up hardening.
+#[server]
+pub async fn janet_eval(script: String) -> Result<serde_json::Value, ServerFnError> {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        crate::janet::eval_janet(&script).map_err(|e| ServerFnError::new(e))
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = script;
+        Err(ServerFnError::new("server-only".to_string()))
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub fn read_document_content_impl(
+    source_root: &Path,
+    r_ref: &ResourceRef,
+) -> Result<Option<RawDocument>, String> {
+    let facade = open_facade(source_root).map_err(|e| e.to_string())?;
+    let facade = facade.lock().map_err(|e| format!("facade lock: {e}"))?;
+    let res: Resource = match facade.read(r_ref).map_err(|e| e.to_string())? {
+        Some(r) => r,
+        None => return Ok(None),
+    };
+    if res.kind != ResourceKind::Document {
+        return Ok(None);
+    }
+    let full = source_root.join(&res.locator);
+    let bytes = std::fs::read(&full).map_err(|e| format!("read {}: {e}", full.display()))?;
+    let revision = sha256_hex(&bytes);
+    Ok(Some(RawDocument {
+        content: String::from_utf8_lossy(&bytes).into_owned(),
+        revision,
+        locator: res.locator,
+        kind: res.kind.as_str().to_string(),
+    }))
+}
+
+#[cfg(target_arch = "wasm32")]
+pub fn read_document_content_impl(_source_root: &Path, _r_ref: &ResourceRef) -> Result<Option<RawDocument>, String> {
+    Err("server-only".to_string())
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub fn update_document_impl(
+    source_root: &Path,
+    r_ref: &ResourceRef,
+    expected_revision: &str,
+    content: &str,
+) -> Result<SaveOutcome, String> {
+    use notez_core::application::ApplicationService;
+
+    let facade = open_facade(source_root).map_err(|e| e.to_string())?;
+    let mut guard = facade.lock().map_err(|e| format!("facade lock: {e}"))?;
+
+    // Resolve the target document; only Document payloads are editable
+    // at the raw-source level.
+    let res: Resource = match guard.read(r_ref).map_err(|e| e.to_string())? {
+        Some(r) => r,
+        None => {
+            return Ok(SaveOutcome::Failed(SaveFailure::NotFound {
+                path: source_root.display().to_string(),
+            }));
+        }
+    };
+    if res.kind != ResourceKind::Document {
+        return Ok(SaveOutcome::Failed(SaveFailure::Unsupported {
+            reason: format!("target {} is not a document", res.kind.as_str()),
+        }));
+    }
+    let full = source_root.join(&res.locator);
+    let canonical_space = std::fs::canonicalize(source_root).unwrap_or_else(|_| source_root.to_path_buf());
+    let canonical_file = std::fs::canonicalize(&full).unwrap_or_else(|_| full.clone());
+    if !canonical_file.starts_with(&canonical_space) {
+        return Ok(SaveOutcome::Failed(SaveFailure::NotFound {
+            path: full.display().to_string(),
+        }));
+    }
+    if !full.exists() {
+        return Ok(SaveOutcome::Failed(SaveFailure::NotFound {
+            path: full.display().to_string(),
+        }));
+    }
+
+    // Revision guard: compare the current on-disk content against the
+    // revision the UI loaded. Empty expected means "no precondition".
+    let current_bytes = std::fs::read(&full).map_err(|e| format!("read {}: {e}", full.display()))?;
+    let current_revision = sha256_hex(&current_bytes);
+    if !expected_revision.is_empty() && expected_revision != current_revision {
+        return Ok(SaveOutcome::Failed(SaveFailure::StaleRevision {
+            expected: expected_revision.to_string(),
+            actual: current_revision,
+        }));
+    }
+
+    // Atomic write: same-directory temp file + rename. Keeps the old
+    // content intact if the write fails midway.
+    let new_bytes = content.as_bytes();
+    let tmp = full.with_extension("notez-tmp");
+    std::fs::write(&tmp, new_bytes)
+        .map_err(|e| format!("write {}: {e}", tmp.display()))?;
+    std::fs::rename(&tmp, &full).map_err(|e| {
+        let _ = std::fs::remove_file(&tmp);
+        format!("rename to {}: {e}", full.display())
+    })?;
+
+    // Refresh the projection from the new content.
+    ApplicationService::scan_native(&mut *guard).map_err(|e| e.to_string())?;
+
+    // Re-read and render the updated row.
+    let updated: Resource = match guard.read(r_ref).map_err(|e| e.to_string())? {
+        Some(r) => r,
+        None => {
+            return Ok(SaveOutcome::Failed(SaveFailure::NotFound {
+                path: source_root.display().to_string(),
+            }));
+        }
+    };
+    let mut row = ResourceRow::from(updated);
+    row.body_html = render_body(&row, source_root);
+    let revision = row.revision.clone();
+    Ok(SaveOutcome::Saved { row, revision })
+}
+
+#[cfg(target_arch = "wasm32")]
+pub fn update_document_impl(
+    _source_root: &Path,
+    _r_ref: &ResourceRef,
+    _expected_revision: &str,
+    _content: &str,
+) -> Result<SaveOutcome, String> {
+    Err("server-only".to_string())
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn sha256_hex(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    let mut h = Sha256::new();
+    h.update(bytes);
+    format!("{:x}", h.finalize())
+}
+
 // ---- _impl helpers (unit-testable) -----------------------------------------
 
 /// Open the projection store + facade for `source_root`, going through
@@ -453,6 +696,11 @@ pub async fn get_resource_impl(
     Ok(res.map(|r| {
         let mut row = ResourceRow::from(r);
         row.body_html = render_body(&row, &sel.root);
+        if row.kind == "document" {
+            if let Ok(bytes) = std::fs::read(sel.root.join(&row.locator)) {
+                row.raw_content = String::from_utf8_lossy(&bytes).into_owned();
+            }
+        }
         row
     }))
 }
