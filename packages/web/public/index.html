@@ -45,6 +45,55 @@
       --col-right-w: 320px;
       --col-main-max: 960px;
 
+      /* M6 design tokens: spacing / radius / elevation / status */
+      --sp-1: 0.25rem; --sp-2: 0.5rem;  --sp-3: 0.75rem;
+      --sp-4: 1rem;    --sp-5: 1.5rem;  --sp-6: 2rem;
+      --r-sm: 3px;     --r-md: 6px;     --r-lg: 10px;
+      --shadow-1: 0 1px 2px rgba(26, 26, 26, 0.08);
+      --shadow-2: 0 4px 14px rgba(26, 26, 26, 0.12);
+      --ok:   #3a6b35;
+      --info: #1a4a7a;
+    }
+
+    /* Dark theme. Every rule reads the palette via var(), so
+     * overriding tokens here re-themes the whole UI. Activated by
+     * [data-theme="dark"] on <html>, or automatically when the OS
+     * reports dark and no explicit [data-theme] is set. */
+    [data-theme="dark"] {
+      --paper:        #16130f;
+      --paper-2:      #201b14;
+      --paper-edge:   #2e2820;
+      --ink:          #ece5d8;
+      --ink-2:        #b8af9d;
+      --ink-3:        #877f6e;
+      --ink-rule:     #3f392d;
+      --accent:       #d99292;
+      --accent-soft:  #5a3232;
+      --warn:         #d9ab63;
+      --err:          #e29090;
+      --ok:           #8fbf88;
+      --info:         #8fb3d9;
+      --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.45);
+      --shadow-2: 0 4px 14px rgba(0, 0, 0, 0.55);
+    }
+    @media (prefers-color-scheme: dark) {
+      html:not([data-theme="light"]) {
+        --paper:        #16130f;
+        --paper-2:      #201b14;
+        --paper-edge:   #2e2820;
+        --ink:          #ece5d8;
+        --ink-2:        #b8af9d;
+        --ink-3:        #877f6e;
+        --ink-rule:     #3f392d;
+        --accent:       #d99292;
+        --accent-soft:  #5a3232;
+        --warn:         #d9ab63;
+        --err:          #e29090;
+        --ok:           #8fbf88;
+        --info:         #8fb3d9;
+      }
+    }
+
     *, *::before, *::after { box-sizing: border-box; }
     html, body { margin: 0; padding: 0; }
     html { background: var(--paper); }

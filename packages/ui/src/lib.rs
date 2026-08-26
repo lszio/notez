@@ -8,3 +8,6 @@ pub use navbar::Navbar;
 
 mod echo;
 pub use echo::Echo;
+
+pub mod notez;
+pub use notez::{NzBadge, NzButton, NzButtonGhost, NzCard, NzInput};
