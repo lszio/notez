@@ -4,6 +4,7 @@
 //! is part of the 0.5.x-A1+A3 use-case impl split.
 
 use crate::application::service::{ApplicationError, ApplicationFacade, StorageErrorKind};
+use crate::domain::{ProjectionReader, ProjectionWrite};
 use crate::application::use_cases::LinkUseCase;
 use crate::application::write_check;
 use crate::domain::{
@@ -11,7 +12,11 @@ use crate::domain::{
     ResourceRef, Selector,
 };
 
-impl<S: ProjectionStore> LinkUseCase for ApplicationFacade<S> {
+impl<S> LinkUseCase for ApplicationFacade<S>
+where
+    S: ProjectionStore,
+    S: ProjectionReader<Error = crate::storage::StorageError>
+        + ProjectionWrite<Error = crate::storage::StorageError>, {
     fn query_link_occurrences(
         &self,
         source_ref: &ResourceRef,

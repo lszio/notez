@@ -53,7 +53,7 @@ impl FormatParser for FakeOrg {
         mime == "text/org"
     }
     fn parse(&self, entity: &RawEntity, source_id: &str) -> Result<ParsedEntity, ParserError> {
-        use notez_core::domain::{Resource, ResourceKind, ResourceRef, derived_id};
+        use notez_core::domain::{Resource, ResourceKind, ResourceRef, derived_id, ProjectionReader, ProjectionWrite};
         let doc_ref = derived_id(
             ResourceKind::Document,
             source_id,
@@ -103,7 +103,7 @@ impl FormatParser for FakeMarkdown {
         mime == "text/markdown"
     }
     fn parse(&self, entity: &RawEntity, source_id: &str) -> Result<ParsedEntity, ParserError> {
-        use notez_core::domain::{Resource, ResourceKind, ResourceRef, derived_id};
+        use notez_core::domain::{Resource, ResourceKind, ResourceRef, derived_id, ProjectionReader, ProjectionWrite};
         let doc_ref = derived_id(
             ResourceKind::Document,
             source_id,

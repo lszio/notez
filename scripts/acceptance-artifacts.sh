@@ -43,7 +43,8 @@ SKILL_DIR="$TEMP_DIR/exported_skill"
 
 echo "Testing MCP artifact transcript..."
 cat <<EOF > "$TEMP_DIR/mcp_req.jsonl"
-{"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}}
+{"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-11-25", "capabilities": {}, "clientInfo": {"name": "notez-acceptance", "version": "0.0.1"}}}
+{"jsonrpc": "2.0", "method": "notifications/initialized"}
 {"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "derive_artifact", "arguments": {"space": "$SPACE_DIR", "community": "comm_core", "recipe": "summary"}}}
 EOF
 
@@ -53,7 +54,7 @@ echo "Deleting SQLite index database..."
 rm -f "$SPACE_DIR/.notez/index.sqlite"
 
 echo "Rebuilding space index..."
-"$NOTEZ_BIN" --space "$SPACE_DIR" space rebuild --json > /dev/null
+"$NOTEZ_BIN" --space "$SPACE_DIR" workspace rebuild --json > /dev/null
 
 echo "Executing post-rebuild artifact derivation..."
 "$NOTEZ_BIN" --space "$SPACE_DIR" --json derive --community comm_core --recipe summary > "$TEMP_DIR/post_summary.json"

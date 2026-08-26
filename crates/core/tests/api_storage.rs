@@ -1,8 +1,4 @@
-use notez_core::domain::{
-    LinkOccurrence, LinkTarget, ProjectionStore, RelationDirection, RelationType, ResolutionStatus,
-    ResolvedRelation, Resource, ResourceKind, ResourceRef, ResourceRelation, SegmentRecord,
-    Selector, TextSpan,
-};
+use notez_core::domain::{LinkOccurrence, LinkTarget, ProjectionStore, RelationDirection, RelationType, ResolutionStatus, ResolvedRelation, Resource, ResourceKind, ResourceRef, ResourceRelation, SegmentRecord, Selector, TextSpan, ProjectionReader, ProjectionWrite};
 use notez_core::storage::{BlobMeta, BlobStore, SqliteProjection, StorageError};
 use std::collections::BTreeMap;
 use std::fs;

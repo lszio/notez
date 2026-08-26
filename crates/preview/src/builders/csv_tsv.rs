@@ -17,8 +17,9 @@
 //! surfaced to the caller rather than swallowed, because a truncated
 //! or malformed CSV is a real bug, not an empty result.
 
-use crate::domain::{Resource, ResourceKind, ResourceRef};
-use crate::preview::{PreviewContext, PreviewError, PreviewModel, Previewer, Table};
+use notez_core::domain::{Resource, ResourceKind, ResourceRef};
+use notez_core::domain::{ProjectionReader, ProjectionWrite};
+use crate::{PreviewContext, PreviewError, PreviewModel, Previewer, Table};
 use bytes::Bytes;
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -125,7 +126,7 @@ fn ctx<'a>(
     bytes: &'a [u8],
     locator: PathBuf,
     mime: &'a str,
-    catalog: &'a crate::preview::PreviewerCatalog,
+    catalog: &'a crate::PreviewerCatalog,
 ) -> PreviewContext<'a> {
     let resource = Resource {
         r#ref: ResourceRef::new(ResourceKind::Attachment, ulid::Ulid::new()),
@@ -152,7 +153,7 @@ fn ctx<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::preview::PreviewerCatalog;
+    use crate::PreviewerCatalog;
 
     #[test]
     fn matches_csv_locator() {

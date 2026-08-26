@@ -20,7 +20,7 @@ fn hello() {}
 "#;
     fs::write(&org_file, org_content).unwrap();
 
-    let scanned_org = OrgScanner::scan(&org_file, "native").unwrap();
+    let scanned_org = { let __bytes = std::fs::read(&org_file).unwrap(); OrgScanner::parse_bytes(&__bytes, "native", &org_file.to_string_lossy()).unwrap() };
     let block_resources: Vec<_> = scanned_org
         .resources
         .iter()
@@ -40,7 +40,7 @@ Paragraph text line. <!-- id: block:01J00000000000000000000052 -->
 "#;
     fs::write(&md_file, md_content).unwrap();
 
-    let scanned_md = MarkdownScanner::scan(&md_file, "native").unwrap();
+    let scanned_md = { let __bytes = std::fs::read(&md_file).unwrap(); MarkdownScanner::parse_bytes(&__bytes, "native", &md_file.to_string_lossy()).unwrap() };
     let md_block_resources: Vec<_> = scanned_md
         .resources
         .iter()

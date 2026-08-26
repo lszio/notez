@@ -23,6 +23,26 @@ impl OrgParser {
         Self
     }
 }
+impl OrgParser {
+    /// Read `path` and parse its bytes. Adapters are the only place
+    /// that owns filesystem IO so that the core scanners stay pure
+    /// and the application layer can run under wasm.
+    pub fn parse_path(
+        &self,
+        path: &std::path::Path,
+        source_id: &str,
+    ) -> Result<notez_core::document::ScannedDocument, notez_core::document::OrgDocumentError>
+    {
+        let path_str = path.to_string_lossy().to_string();
+        let bytes = std::fs::read(path).map_err(|e| {
+            notez_core::document::OrgDocumentError::Io {
+                path: path_str.clone(),
+                kind: e.kind(),
+            }
+        })?;
+        notez_core::document::OrgScanner::parse_bytes(&bytes, source_id, &path_str)
+    }
+}
 
 impl Default for OrgParser {
     fn default() -> Self {

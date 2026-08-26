@@ -85,7 +85,7 @@ impl CapabilityCatalog {
         c.register(CapabilityDescriptor::new(
             "scan",
             "scan native source and rebuild projection",
-            Mutability::Read,
+            Mutability::Write,
         ));
         c.register(CapabilityDescriptor::new(
             "resource",

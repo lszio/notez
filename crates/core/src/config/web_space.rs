@@ -5,6 +5,7 @@
 //! canonical discovery/selection machinery so the route handlers stay thin.
 
 use std::path::{Path, PathBuf};
+use crate::domain::{ProjectionReader, ProjectionWrite};
 
 use crate::config::discovery::{ConfigPaths, SelectedSource, SourceSelector, select_source};
 use crate::config::model::{ConfigError, GlobalConfig, SourceRegistration};

@@ -9,7 +9,7 @@ name = "notez_composition"
 path = "src/lib.rs"
 
 [dependencies]
-core       = { path = "../core" }
+notez-core = { path = "../core" }
 orgmode    = { path = "../adapters/orgmode" }
 markdown   = { path = "../adapters/markdown" }
 thiserror  = { workspace = true }

@@ -220,7 +220,9 @@ fn org_scanner_scan_matches_parse_bytes_for_same_payload() {
     fs::write(&path, ORG_FIXTURE).expect("failed to write org fixture");
 
     let locator_str = path.to_string_lossy().to_string();
-    let scanned = OrgScanner::scan(&path, "native").expect("scan must succeed");
+    let scanned = orgmode::OrgParser::new()
+        .parse_path(&path, "native")
+        .expect("scan must succeed");
     let in_memory = OrgScanner::parse_bytes(ORG_FIXTURE.as_bytes(), "native", &locator_str)
         .expect("parse_bytes must succeed");
 

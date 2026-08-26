@@ -1,4 +1,4 @@
-use crate::preview::Heading;
+use crate::Heading;
 
 /// Render an Org-mode source string into a minimal HTML body and a heading outline.
 ///

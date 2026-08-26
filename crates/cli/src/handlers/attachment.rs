@@ -1,19 +1,29 @@
 //! Handler for `Commands::Attachment` (`AttachmentCommands::{Add,
 //! Extract, Segments}`).
+//!
+//! Every arm translates the parsed CLI syntax into a protocol
+//! `Request`, dispatches it through the [`ApplicationDispatcher`], and
+//! renders the unwrapped response payload.
 
 use serde_json::json;
 use std::process::exit;
 
 use super::{Service, exit_code_for};
 use crate::commands::{AttachmentCommands, AttachmentSubcommand};
-use notez_core::application::use_cases::AttachmentUseCase;
-use notez_core::domain::ResourceRef;
+use notez_core::application::dispatcher::{ApplicationDispatcher, Response};
+use notez_protocol::request::{
+    AddAttachmentRequest, ExtractAttachmentRequest, QuerySegmentsRequest, Request,
+};
 
 pub fn run_attachment(json: bool, service: &mut Service, sub: AttachmentSubcommand) {
+    let mut dispatcher = ApplicationDispatcher::new(service);
     match sub.command {
         AttachmentCommands::Add { path, mime } => {
-            match AttachmentUseCase::add_attachment(service, &path, &mime) {
-                Ok(att_ref) => {
+            match dispatcher.dispatch(Request::AddAttachment(AddAttachmentRequest {
+                file_path: path.display().to_string(),
+                mime: Some(mime),
+            })) {
+                Ok(Response::AttachmentRef(att_ref)) => {
                     if json {
                         println!("{}", json!({ "ref": att_ref.to_string() }));
                     } else {
@@ -24,20 +34,15 @@ pub fn run_attachment(json: bool, service: &mut Service, sub: AttachmentSubcomma
                     eprintln!("Add attachment error: {e}");
                     exit(exit_code_for(&e));
                 }
+                other => unreachable!("unexpected dispatcher response: {other:?}"),
             }
         }
 
         AttachmentCommands::Extract { r_ref } => {
-            let parsed_ref = match ResourceRef::parse(&r_ref) {
-                Ok(r) => r,
-                Err(e) => {
-                    eprintln!("Invalid resource ref format '{r_ref}': {e}");
-                    exit(2);
-                }
-            };
-
-            match AttachmentUseCase::run_extraction(service, &parsed_ref) {
-                Ok(segments) => {
+            match dispatcher.dispatch(Request::ExtractAttachment(ExtractAttachmentRequest {
+                source_ref: r_ref.clone(),
+            })) {
+                Ok(Response::Segments(segments)) => {
                     if json {
                         println!(
                             "{}",
@@ -54,20 +59,15 @@ pub fn run_attachment(json: bool, service: &mut Service, sub: AttachmentSubcomma
                     eprintln!("Extract attachment error: {e}");
                     exit(exit_code_for(&e));
                 }
+                other => unreachable!("unexpected dispatcher response: {other:?}"),
             }
         }
 
         AttachmentCommands::Segments { r_ref } => {
-            let parsed_ref = match ResourceRef::parse(&r_ref) {
-                Ok(r) => r,
-                Err(e) => {
-                    eprintln!("Invalid resource ref format '{r_ref}': {e}");
-                    exit(2);
-                }
-            };
-
-            match AttachmentUseCase::query_segments(service, &parsed_ref) {
-                Ok(segments) => {
+            match dispatcher.dispatch(Request::QuerySegments(QuerySegmentsRequest {
+                source_ref: r_ref,
+            })) {
+                Ok(Response::Segments(segments)) => {
                     if json {
                         println!("{}", serde_json::to_string(&segments).unwrap());
                     } else {
@@ -80,6 +80,7 @@ pub fn run_attachment(json: bool, service: &mut Service, sub: AttachmentSubcomma
                     eprintln!("Query segments error: {e}");
                     exit(exit_code_for(&e));
                 }
+                other => unreachable!("unexpected dispatcher response: {other:?}"),
             }
         }
     }

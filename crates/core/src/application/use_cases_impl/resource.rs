@@ -9,11 +9,16 @@ use crate::application::service::{
 use crate::application::use_cases::ResourceUseCase;
 use crate::application::write_check;
 use crate::domain::{
-    LinkOccurrence, ProjectionStore, QueryPage, ResolutionStatus, Resource, ResourceKind,
-    ResourceRef, Selector,
+    LinkOccurrence, ProjectionReader, ProjectionStore, ProjectionWrite, QueryPage,
+    ResolutionStatus, Resource, ResourceKind, ResourceRef, Selector,
 };
 
-impl<S: ProjectionStore> ResourceUseCase for ApplicationFacade<S> {
+impl<S> ResourceUseCase for ApplicationFacade<S>
+where
+    S: ProjectionStore,
+    S: ProjectionReader<Error = crate::storage::StorageError>
+        + ProjectionWrite<Error = crate::storage::StorageError>,
+{
     fn upsert_resource(&mut self, resource: Resource) -> Result<(), ApplicationError> {
         write_check::check_capability(self, "resource")?;
         write_check::check_address_uniqueness(
@@ -23,8 +28,16 @@ impl<S: ProjectionStore> ResourceUseCase for ApplicationFacade<S> {
             },
             &resource.r#ref,
         )?;
-
-        self.store
+        // M3 event spine: journal before mutating, audit after.
+        let journaling = crate::application::projector::Journaling::from_parts(
+            self.journal.as_ref(),
+            self.audit.as_ref(),
+            self.actor_principal(),
+            self.now_unix_millis(),
+        );
+        let mut projector =
+            crate::application::projector::Projector::new(&mut self.store, &journaling);
+        projector
             .upsert_resource(&resource)
             .map_err(|e| ApplicationError::Storage {
                 kind: StorageErrorKind::Sqlite,
@@ -41,7 +54,17 @@ impl<S: ProjectionStore> ResourceUseCase for ApplicationFacade<S> {
         )?;
         write_check::check_capability(self, "resource")?;
 
-        self.store
+        let journaling = crate::application::projector::Journaling::from_parts(
+            self.journal.as_ref(),
+            self.audit.as_ref(),
+            self.actor_principal(),
+            self.now_unix_millis(),
+        );
+        let mut projector = crate::application::projector::Projector::new(
+            &mut self.store,
+            &journaling,
+        );
+        projector
             .delete_resource(r_ref)
             .map_err(|e| ApplicationError::Storage {
                 kind: StorageErrorKind::Sqlite,

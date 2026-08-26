@@ -1,4 +1,4 @@
-use crate::domain::{Resource, ResourceRef, SegmentRecord};
+use notez_core::domain::{Resource, ResourceRef, SegmentRecord};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use thiserror::Error;

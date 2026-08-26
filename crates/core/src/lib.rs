@@ -12,7 +12,10 @@
 //! | `application` | `ApplicationService<S>` — single use-case seam                 |
 //! | `sync`        | Multi-actor sync engine + transports + three-way merge         |
 //! | `artifact`    | Attachment extraction + recipes + skill export                 |
-//! | `preview`     | `Previewer` catalog for SSR/view models                        |
+//!
+//! `preview` (SSR/view-model builders) lives in its own crate,
+//! `crates/preview` (`notez-preview`), so heavyweight format parsers
+//! stay out of the engine's dependency graph.
 //!
 //! Format parsers (`org`, `markdown`) live in dedicated adapters under
 //! `crates/adapters/{orgmode,markdown}` and are wired in via the
@@ -26,7 +29,6 @@ pub mod config;
 pub mod document;
 pub mod domain;
 mod error_serde;
-pub mod preview;
 pub mod source;
 pub mod storage;
 pub mod sync;

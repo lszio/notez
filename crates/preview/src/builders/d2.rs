@@ -1,4 +1,4 @@
-use crate::preview::{PreviewContext, PreviewError, PreviewModel, Previewer};
+use crate::{PreviewContext, PreviewError, PreviewModel, Previewer};
 
 /// Previewer for D2 diagrams embedded in source blocks.
 ///

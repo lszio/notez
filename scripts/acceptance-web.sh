@@ -1,12 +1,14 @@
 #!/usr/bin/env bash
-# Acceptance test for the `notez web` subcommand.
+# Acceptance test for the Dioxus fullstack web server (packages/web).
 #
-# Builds `notez` with the `web` cargo feature, seeds a tiny space, runs a
-# scan, then launches the server in the background. Verifies:
+# Seeds a tiny space, scans it with the CLI, launches the SSR web
+# server binary in the background, then verifies:
 #
-#   * /healthz returns "ok"
-#   * /             renders the space picker
-#   * /s/<space>/   renders the hub page (the seed file's title appears)
+#   * /                              renders 200 (space picker)
+#   * /source/<encoded>/list         renders the seeded resource title
+#   * POST /api/sources/watch/start  starts watching (form contract)
+#   * GET  /api/sources/watch/state  reports watching=true
+#   * POST /api/sources/watch/stop   accepts `source_root` form field
 #
 # Finally tears the server down.
 
@@ -16,86 +18,104 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$PROJECT_ROOT"
 
-echo "Building notez with web feature..."
-cargo build -p cli --features web
+echo "Building notez CLI and web server..."
+cargo build -p cli --bin notez
+cargo build -p web --bin web
 
 NOTEZ_BIN="$PROJECT_ROOT/target/debug/notez"
+WEB_BIN="$PROJECT_ROOT/target/debug/web"
 
-BIND="127.0.0.1:3939"
-BASE="http://$BIND"
+BIND_IP="127.0.0.1"
+PORT="3939"
+BASE="http://$BIND_IP:$PORT"
 
 SPACE_DIR="$(mktemp -d -t notez-web-XXXXXX)"
 PID=""
 cleanup() {
-  if [[ -n "$PID" ]] && kill -0 "$PID" 2>/dev/null; then
-    kill "$PID" 2>/dev/null || true
-    wait "$PID" 2>/dev/null || true
-  fi
-  rm -rf "$SPACE_DIR"
+    if [[ -n "$PID" ]] && kill -0 "$PID" 2>/dev/null; then
+        kill "$PID" 2>/dev/null || true
+        wait "$PID" 2>/dev/null || true
+    fi
+    rm -rf "$SPACE_DIR"
 }
 trap cleanup EXIT
 
-echo "Seeding space at $SPACE_DIR..."
-mkdir -p "$SPACE_DIR/projects"
-cat > "$SPACE_DIR/README.org" <<EOF
+mkdir -p "$SPACE_DIR/docs"
+cat > "$SPACE_DIR/docs/README.org" <<EOF
 #+TITLE: Web Acceptance Space
 * hello world
+:PROPERTIES:
+:ID: 01J000000000000000000000AA
+:END:
 EOF
 
 echo "Scanning space..."
 "$NOTEZ_BIN" --space "$SPACE_DIR" scan --json > /dev/null
 
-echo "Launching notez web on $BIND..."
-"$NOTEZ_BIN" --space "$SPACE_DIR" web --bind "$BIND" > /tmp/notez-web.log 2>&1 &
+ENCODING="$(printf '%s' "$SPACE_DIR" | base64 -w0 | tr '+/' '-_' | tr -d '=')"
+
+echo "Launching web server on $PORT..."
+IP="$BIND_IP" PORT="$PORT" "$WEB_BIN" > /tmp/notez-web.log 2>&1 &
 PID=$!
 
-echo "Waiting for /healthz ..."
-for _ in $(seq 1 30); do
-  if curl -fsS "$BASE/healthz" >/dev/null 2>&1; then
-    break
-  fi
-  sleep 0.2
-done
+wait_http() {
+    local url="$1"
+    for _ in $(seq 1 60); do
+        if curl -fsS -o /dev/null "$url" 2>/dev/null; then
+            return 0
+        fi
+        if ! kill -0 "$PID" 2>/dev/null; then
+            echo "Error: web server exited early; log follows."
+            tail -40 /tmp/notez-web.log || true
+            exit 1
+        fi
+        sleep 0.5
+    done
+    echo "Error: timed out waiting for $url"
+    tail -40 /tmp/notez-web.log || true
+    exit 1
+}
 
-HEALTH=$(curl -fsS "$BASE/healthz")
-if [[ "$HEALTH" != "ok" ]]; then
-  echo "FAIL: /healthz returned '$HEALTH', expected 'ok'" >&2
-  cat /tmp/notez-web.log >&2 || true
-  exit 1
-fi
-echo "  /healthz = ok"
+echo "Waiting for server root..."
+wait_http "$BASE/"
 
-ROOT_HTML=$(curl -fsS "$BASE/")
-if ! grep -q "Notez" <<<"$ROOT_HTML"; then
-  echo "FAIL: / did not contain 'Notez'" >&2
-  echo "$ROOT_HTML" >&2
-  exit 1
+ROOT_STATUS=$(curl -s -o /dev/null -w '%{http_code}' "$BASE/")
+if [[ "$ROOT_STATUS" != "200" ]]; then
+    echo "Error: / returned $ROOT_STATUS, expected 200"
+    exit 1
 fi
-echo "  / contains 'Notez'"
+echo "  / = 200"
 
-SPACE_NAME="$(basename "$SPACE_DIR")"
-HUB_HTML=$(curl -fsS "$BASE/s/$SPACE_NAME/")
-if ! grep -q "Web Acceptance Space" <<<"$HUB_HTML"; then
-  echo "FAIL: /s/$SPACE_NAME/ did not contain the README title" >&2
-  echo "$HUB_HTML" >&2
-  exit 1
+LIST_HTML=$(curl -fsS "$BASE/source/$ENCODING/list")
+if ! grep -q "Web Acceptance Space" <<<"$LIST_HTML"; then
+    echo "Error: /source/<encoded>/list does not contain the seeded title"
+    exit 1
 fi
-echo "  /s/$SPACE_NAME/ contains the README title"
+echo "  /source/<encoded>/list contains the seeded title"
 
-# /s/.../agenda also returns 200 (may be empty).
-AG_STATUS=$(curl -s -o /dev/null -w '%{http_code}' "$BASE/s/$SPACE_NAME/agenda")
-if [[ "$AG_STATUS" != "200" ]]; then
-  echo "FAIL: /s/$SPACE_NAME/agenda returned HTTP $AG_STATUS, expected 200" >&2
-  exit 1
-fi
-echo "  /s/$SPACE_NAME/agenda = 200"
+echo "Starting watch via form endpoint..."
+STOP_FORM="$SPACE_DIR"
+curl -fsS -o /dev/null -X POST \
+    --data-urlencode "source_root=$STOP_FORM" \
+    "$BASE/api/sources/watch/start"
 
-# Bundled static asset is served out of the box.
-MERMAID_STATUS=$(curl -s -o /dev/null -w '%{http_code}' "$BASE/static/js/preview/mermaid.mjs")
-if [[ "$MERMAID_STATUS" != "200" ]]; then
-  echo "FAIL: /static/js/preview/mermaid.mjs returned HTTP $MERMAID_STATUS, expected 200" >&2
-  exit 1
+STATE_JSON=$(curl -fsS "$BASE/api/sources/watch/state?path=$(python3 -c "import urllib.parse,sys;print(urllib.parse.quote(sys.argv[1]))" "$SPACE_DIR")")
+if ! grep -q '"watching":true' <<<"$STATE_JSON"; then
+    echo "Error: watch state did not report watching=true: $STATE_JSON"
+    exit 1
 fi
-echo "  /static/js/preview/mermaid.mjs = 200"
+echo "  watch state reports watching=true"
+
+echo "Stopping watch via form endpoint (source_root field)..."
+curl -fsS -o /dev/null -X POST \
+    --data-urlencode "source_root=$STOP_FORM" \
+    "$BASE/api/sources/watch/stop"
+
+STATE_JSON=$(curl -fsS "$BASE/api/sources/watch/state?path=$(python3 -c "import urllib.parse,sys;print(urllib.parse.quote(sys.argv[1]))" "$SPACE_DIR")")
+if grep -q '"watching":true' <<<"$STATE_JSON"; then
+    echo "Error: watch still reported active after stop: $STATE_JSON"
+    exit 1
+fi
+echo "  watch stopped cleanly"
 
 echo "web acceptance: PASS"

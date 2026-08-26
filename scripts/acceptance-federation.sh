@@ -59,7 +59,8 @@ echo "Querying cross-source index..."
 
 echo "Testing MCP source_list and query transcript..."
 cat <<EOF > "$TEMP_DIR/mcp_req.jsonl"
-{"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}}
+{"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-11-25", "capabilities": {}, "clientInfo": {"name": "notez-acceptance", "version": "0.0.1"}}}
+{"jsonrpc": "2.0", "method": "notifications/initialized"}
 {"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "source_list", "arguments": {"space": "$SPACE_DIR"}}}
 {"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {"name": "query", "arguments": {}}}
 EOF

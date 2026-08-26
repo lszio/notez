@@ -1,4 +1,4 @@
-use crate::preview::{PreviewContext, PreviewError, PreviewModel, Previewer};
+use crate::{PreviewContext, PreviewError, PreviewModel, Previewer};
 
 /// Fallback previewer that matches every context.
 ///

@@ -34,15 +34,6 @@ pub struct OrgScanner;
 const TODO_KEYWORDS: &[&str] = &["TODO", "NEXT", "PEND", "WAIT", "DONE", "QUIT"];
 
 impl OrgScanner {
-    pub fn scan(path: &Path, source_id: &str) -> Result<ScannedDocument, DocumentError> {
-        let path_str = path.to_string_lossy().to_string();
-        let bytes = std::fs::read(path).map_err(|e| DocumentError::Io {
-            path: path_str.clone(),
-            kind: e.kind(),
-        })?;
-        Self::parse_bytes(&bytes, source_id, &path_str)
-    }
-
     pub fn parse_bytes(
         bytes: &[u8],
         source_id: &str,

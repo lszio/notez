@@ -5,5 +5,5 @@ edition = "2024"
 description = "notez markdown parser adapter"
 
 [dependencies]
-core = { path = "../../core" }
+notez-core = { path = "../../core" }
 serde = { workspace = true }

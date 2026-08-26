@@ -1,4 +1,4 @@
-use crate::preview::{
+use crate::{
     PreviewContext, PreviewError, PreviewModel, Previewer, PreviewerCatalog, Sheet,
 };
 use bytes::Bytes;

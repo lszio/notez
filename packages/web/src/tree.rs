@@ -100,7 +100,9 @@ pub fn build_tree<S>(
     facade: &ApplicationFacade<S>,
 ) -> Result<TreeNode, notez_core::application::ApplicationError>
 where
-    S: notez_core::domain::ProjectionStore,
+    S: notez_core::domain::ProjectionStore
+        + notez_core::domain::ProjectionReader<Error = notez_core::storage::StorageError>
+        + notez_core::domain::ProjectionWrite<Error = notez_core::storage::StorageError>,
 {
     let page = facade.query(&Selector::new())?;
     Ok(build_tree_from(&page.items))
@@ -113,7 +115,9 @@ pub fn build_tree_with_disk<S>(
     source_root: &Path,
 ) -> Result<TreeNode, notez_core::application::ApplicationError>
 where
-    S: notez_core::domain::ProjectionStore,
+    S: notez_core::domain::ProjectionStore
+        + notez_core::domain::ProjectionReader<Error = notez_core::storage::StorageError>
+        + notez_core::domain::ProjectionWrite<Error = notez_core::storage::StorageError>,
 {
     let page = facade.query(&Selector::new())?;
     let loose = build_filesystem_listing(source_root);
@@ -125,7 +129,9 @@ pub fn build_source_files<S>(
     source_root: &Path,
 ) -> Result<Vec<SourceFileRow>, notez_core::application::ApplicationError>
 where
-    S: notez_core::domain::ProjectionStore,
+    S: notez_core::domain::ProjectionStore
+        + notez_core::domain::ProjectionReader<Error = notez_core::storage::StorageError>
+        + notez_core::domain::ProjectionWrite<Error = notez_core::storage::StorageError>,
 {
     let page = facade.query(&Selector::new())?;
     Ok(build_source_files_from(&page.items, source_root))
@@ -135,7 +141,9 @@ pub fn build_kind_counts<S>(
     facade: &ApplicationFacade<S>,
 ) -> Result<KindCounts, notez_core::application::ApplicationError>
 where
-    S: notez_core::domain::ProjectionStore,
+    S: notez_core::domain::ProjectionStore
+        + notez_core::domain::ProjectionReader<Error = notez_core::storage::StorageError>
+        + notez_core::domain::ProjectionWrite<Error = notez_core::storage::StorageError>,
 {
     let page = facade.query(&Selector::new())?;
     Ok(build_kind_counts_from(&page.items))
@@ -145,7 +153,9 @@ pub fn build_index_entry<S>(
     facade: &ApplicationFacade<S>,
 ) -> Result<Option<IndexEntryDto>, notez_core::application::ApplicationError>
 where
-    S: notez_core::domain::ProjectionStore,
+    S: notez_core::domain::ProjectionStore
+        + notez_core::domain::ProjectionReader<Error = notez_core::storage::StorageError>
+        + notez_core::domain::ProjectionWrite<Error = notez_core::storage::StorageError>,
 {
     let page = facade.query(&Selector::new())?;
     Ok(build_index_entry_from(&page.items))
@@ -157,7 +167,9 @@ pub fn build_search<S>(
     q: &str,
 ) -> Result<Vec<SearchHit>, notez_core::application::ApplicationError>
 where
-    S: notez_core::domain::ProjectionStore,
+    S: notez_core::domain::ProjectionStore
+        + notez_core::domain::ProjectionReader<Error = notez_core::storage::StorageError>
+        + notez_core::domain::ProjectionWrite<Error = notez_core::storage::StorageError>,
 {
     let page = facade.query(&Selector::new())?;
     Ok(build_search_from(&page.items, source_root, q))
@@ -257,12 +269,6 @@ pub fn build_tree_from_with_disk(resources: &[Resource], loose: &[SourceFileRow]
         })
         .cloned()
         .collect();
-    // Add loose files that aren't already indexed.
-    for f in loose {
-        if !loose_set.contains(&f.display_path) {
-            // already filtered above, but keep the dedup logic safe
-        }
-    }
     // Build tree from the filtered indexed set first.
     let mut tree = build_tree_from(&resources_vec);
     // Add loose-file leaves that don't have an indexed counterpart.

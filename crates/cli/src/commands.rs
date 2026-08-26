@@ -87,9 +87,6 @@ pub enum Commands {
     /// Synchronization commands (folder push/pull/conflicts)
     Sync(SyncSubcommand),
 
-    /// Launch the local web server over the active space.
-    #[cfg(feature = "web")]
-    Web(WebArgs),
 
     /// Watch the active space for filesystem changes.
     Watch(WatchArgs),
@@ -213,8 +210,9 @@ pub enum TaskCommands {
         r_ref: String,
         #[arg(long)]
         to: String,
-        #[arg(long, default_value = "2026-07-22 Wed 16:00")]
-        timestamp: String,
+        /// Org-format timestamp; omitted = stamp current time.
+        #[arg(long)]
+        timestamp: Option<String>,
     },
 
     /// List all tasks grouped by status
@@ -288,6 +286,21 @@ pub enum SyncCommands {
 
     /// List active sync conflicts
     Conflicts,
+
+    /// Adjudicate a pending conflict (keep mine or theirs)
+    Resolve {
+        /// Logical path of the conflicted file
+        #[arg(long)]
+        path: String,
+
+        /// Which side to keep
+        #[arg(long, value_parser = ["mine", "theirs"])]
+        keep: String,
+
+        /// Shared sync folder holding the conflict objects
+        #[arg(long)]
+        folder: PathBuf,
+    },
 
     /// Force relay synchronization over HTTP
     Relay {

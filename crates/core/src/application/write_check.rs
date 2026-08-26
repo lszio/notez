@@ -26,6 +26,7 @@
 //! checks entirely.
 
 use crate::application::service::{ApplicationError, ApplicationFacade};
+use crate::domain::{ProjectionReader, ProjectionWrite};
 use crate::domain::ProjectionStore;
 use crate::domain::link::ResourceAddress;
 use crate::domain::resource::ResourceRef;
@@ -33,10 +34,15 @@ use crate::domain::resource::ResourceRef;
 /// Refuse the call if `capability` is not registered in the facade's
 /// `CapabilityCatalog`. The nine built-in capabilities that ship with
 /// `with_builtins()` always pass.
-pub fn check_capability<S: ProjectionStore>(
+pub fn check_capability<S>(
     facade: &ApplicationFacade<S>,
     capability: &'static str,
-) -> Result<(), ApplicationError> {
+) -> Result<(), ApplicationError>
+where
+    S: ProjectionStore,
+    S: ProjectionReader<Error = crate::storage::StorageError>
+        + ProjectionWrite<Error = crate::storage::StorageError>,
+{
     if facade.capability_catalog().contains(capability) {
         Ok(())
     } else {
@@ -48,11 +54,16 @@ pub fn check_capability<S: ProjectionStore>(
 /// does not match `expected`. An empty `expected` is treated as "no
 /// precondition" and always passes; non-empty strings that don't
 /// match raise `RevisionConflict`.
-pub fn check_revision<S: ProjectionStore>(
+pub fn check_revision<S>(
     facade: &ApplicationFacade<S>,
     r_ref: &ResourceRef,
     expected: &str,
-) -> Result<(), ApplicationError> {
+) -> Result<(), ApplicationError>
+where
+    S: ProjectionStore,
+    S: ProjectionReader<Error = crate::storage::StorageError>
+        + ProjectionWrite<Error = crate::storage::StorageError>,
+{
     if expected.is_empty() {
         return Ok(());
     }
@@ -78,11 +89,16 @@ pub fn check_revision<S: ProjectionStore>(
 /// Refuse the call if a different `ResourceRef` already binds to the
 /// same `ResourceAddress::Ref`. Locator-based addresses are accepted
 /// as-is for now (deferred to 0.6 along with locator uniqueness).
-pub fn check_address_uniqueness<S: ProjectionStore>(
+pub fn check_address_uniqueness<S>(
     facade: &ApplicationFacade<S>,
     addr: &ResourceAddress,
     candidate: &ResourceRef,
-) -> Result<(), ApplicationError> {
+) -> Result<(), ApplicationError>
+where
+    S: ProjectionStore,
+    S: ProjectionReader<Error = crate::storage::StorageError>
+        + ProjectionWrite<Error = crate::storage::StorageError>,
+{
     let ResourceAddress::Ref { r#ref: existing } = addr else {
         return Ok(());
     };

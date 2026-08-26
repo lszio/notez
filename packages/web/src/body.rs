@@ -33,7 +33,7 @@ use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 
 use notez_core::domain::{Resource, ResourceKind, ResourceRef};
-use notez_core::preview::{
+use notez_preview::{
     builders::org_html::render_org_html, PreviewContext, PreviewModel, PreviewerCatalog,
 };
 use ulid::Ulid;
@@ -45,7 +45,7 @@ use crate::model::ResourceRow;
 /// holds 15 `Box<dyn Previewer>`s (Markdown through Fallback) and is
 /// immutable after construction, so a static `LazyLock` is safe.
 static CATALOG: LazyLock<PreviewerCatalog> =
-    LazyLock::new(notez_core::preview::default_catalog);
+    LazyLock::new(notez_preview::default_catalog);
 
 /// Render the body of `row` for the detail page.
 pub fn render_body(row: &ResourceRow, source_root: &Path) -> String {
@@ -214,7 +214,7 @@ fn model_to_html(model: &PreviewModel, raw_url: &str, ext: &str, title: &str) ->
 // ----- per-variant renderers --------------------------------------------------
 
 fn render_pdf(
-    pages: &[notez_core::preview::PdfPage],
+    pages: &[notez_preview::PdfPage],
     text: &str,
     title: &str,
     raw_url: &str,
@@ -235,7 +235,7 @@ fn render_pdf(
     )
 }
 
-fn render_xlsx(sheets: &[notez_core::preview::Sheet]) -> String {
+fn render_xlsx(sheets: &[notez_preview::Sheet]) -> String {
     if sheets.is_empty() {
         return "<div class=\"preview-xlsx\"><p class=\"mono-sm\">Empty workbook.</p></div>".into();
     }
@@ -261,7 +261,7 @@ fn render_xlsx(sheets: &[notez_core::preview::Sheet]) -> String {
     out
 }
 
-fn render_pptx(slides: &[notez_core::preview::Slide]) -> String {
+fn render_pptx(slides: &[notez_preview::Slide]) -> String {
     if slides.is_empty() {
         return "<div class=\"preview-pptx\"><p class=\"mono-sm\">Empty deck.</p></div>".into();
     }
@@ -288,7 +288,7 @@ fn render_pptx(slides: &[notez_core::preview::Slide]) -> String {
     out
 }
 
-fn render_zip(entries: &[notez_core::preview::ZipEntry]) -> String {
+fn render_zip(entries: &[notez_preview::ZipEntry]) -> String {
     if entries.is_empty() {
         return "<div class=\"preview-zip\"><p class=\"mono-sm\">Empty archive.</p></div>".into();
     }
@@ -309,7 +309,7 @@ fn render_zip(entries: &[notez_core::preview::ZipEntry]) -> String {
     out
 }
 
-fn render_docx(paragraphs: &[notez_core::preview::DocxParagraph]) -> String {
+fn render_docx(paragraphs: &[notez_preview::DocxParagraph]) -> String {
     if paragraphs.is_empty() {
         return "<div class=\"preview-docx\"><p class=\"mono-sm\">Empty document.</p></div>".into();
     }
@@ -332,7 +332,7 @@ fn render_docx(paragraphs: &[notez_core::preview::DocxParagraph]) -> String {
 }
 
 
-fn render_table(table: &notez_core::preview::Table) -> String {
+fn render_table(table: &notez_preview::Table) -> String {
     let mut out = String::from("<div class=\"preview-table-wrap\"><table class=\"preview-table\" style=\"border-collapse:collapse;width:100%;\">");
     if !table.headers.is_empty() {
         out.push_str("<thead><tr>");
@@ -402,7 +402,7 @@ fn render_iframe(src: &str, sandbox: &str) -> String {
     )
 }
 
-fn render_query_embed(query: &notez_core::preview::QueryRequest) -> String {
+fn render_query_embed(query: &notez_preview::QueryRequest) -> String {
     let mut html = String::from("<div class=\"preview-query\"><p class=\"mono-sm\">Query</p><ul>");
     html.push_str(&format!("<li>source: {}</li>", html_escape::encode_safe(&query.source)));
     if let Some(k) = &query.kind_hint {

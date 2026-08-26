@@ -258,20 +258,10 @@ impl MarkdownScanner {
             links,
             link_occurrences,
         })
-    }
-
-    /// Read a Markdown file from disk and parse it. Kept for callers that
-    /// still have a `Path` available; the canonical path is [`parse_bytes`].
-    pub fn scan(path: &Path, source_id: &str) -> Result<ScannedDocument, DocumentError> {
-        let path_str = path.to_string_lossy().to_string();
-        let bytes = std::fs::read(path).map_err(|e| DocumentError::Io {
-            path: path_str.clone(),
-            kind: e.kind(),
-        })?;
-        Self::parse_bytes(&bytes, source_id, &path_str)
-    }
+}
 }
 
+/// Extract all Markdown links from a line.
 /// Extract all Markdown links from a line.
 ///
 /// Supported forms:

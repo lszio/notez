@@ -66,7 +66,54 @@ impl std::fmt::Display for CountingError {
 }
 impl std::error::Error for CountingError {}
 
-impl notez_core::domain::ProjectionStore for CountingStore {
+impl notez_core::domain::ProjectionReader for CountingStore {
+    type Error = CountingError;
+    fn get(&self, _r_ref: &ResourceRef) -> Result<Option<Resource>, Self::Error> {
+        Ok(None)
+    }
+    fn query(&self, _selector: &Selector) -> Result<notez_core::domain::QueryPage, Self::Error> {
+        Ok(notez_core::domain::QueryPage {
+            items: vec![],
+            next_cursor: None,
+        })
+    }
+    fn query_segments(
+        &self,
+        _attachment_ref: &str,
+    ) -> Result<Vec<notez_core::domain::SegmentRecord>, Self::Error> {
+        Ok(vec![])
+    }
+    fn query_link_occurrences(
+        &self,
+        _source_ref: &ResourceRef,
+    ) -> Result<Vec<notez_core::domain::LinkOccurrence>, Self::Error> {
+        Ok(vec![])
+    }
+    fn query_resolved_relations(
+        &self,
+        _source_ref: &ResourceRef,
+    ) -> Result<Vec<notez_core::domain::ResolvedRelation>, Self::Error> {
+        Ok(vec![])
+    }
+    fn list_link_diagnostics(
+        &self,
+        _source_ref: &ResourceRef,
+    ) -> Result<Option<Vec<notez_core::domain::LinkDiagnostic>>, Self::Error> {
+        Ok(None)
+    }
+    fn find_by_object(
+        &self,
+        _object_id: &notez_core::domain::ObjectIdentity,
+    ) -> Result<Vec<Resource>, Self::Error> {
+        Ok(vec![])
+    }
+    fn list_conflicts(&self) -> Result<Vec<notez_core::domain::ConflictRecord>, Self::Error> {
+        notez_core::domain::ProjectionReader::list_conflicts(&self.base)
+            .map_err(|e| CountingError(e.to_string()))
+    }
+}
+
+impl notez_core::domain::ProjectionWrite for CountingStore {
     type Error = CountingError;
     fn replace_source(
         &mut self,
@@ -76,15 +123,6 @@ impl notez_core::domain::ProjectionStore for CountingStore {
         _link_occurrences: Vec<notez_core::domain::LinkOccurrence>,
     ) -> Result<(), Self::Error> {
         Ok(())
-    }
-    fn get(&self, _r_ref: &ResourceRef) -> Result<Option<Resource>, Self::Error> {
-        Ok(None)
-    }
-    fn query(&self, _selector: &Selector) -> Result<notez_core::domain::QueryPage, Self::Error> {
-        Ok(notez_core::domain::QueryPage {
-            items: vec![],
-            next_cursor: None,
-        })
     }
     fn clear(&mut self) -> Result<(), Self::Error> {
         Ok(())
@@ -100,22 +138,49 @@ impl notez_core::domain::ProjectionStore for CountingStore {
         self.deletes.lock().unwrap().push(r_ref.to_string());
         Ok(())
     }
+    fn insert_segments(
+        &mut self,
+        _segments: &[notez_core::domain::SegmentRecord],
+    ) -> Result<(), Self::Error> {
+        Ok(())
+    }
+    fn replace_link_occurrences(
+        &mut self,
+        _source_id: &str,
+        _occurrences: Vec<notez_core::domain::LinkOccurrence>,
+    ) -> Result<(), Self::Error> {
+        Ok(())
+    }
+    fn replace_resolved_relations(
+        &mut self,
+        _source_id: &str,
+        _relations: Vec<notez_core::domain::ResolvedRelation>,
+    ) -> Result<(), Self::Error> {
+        Ok(())
+    }
+    fn write_link_diagnostics(
+        &mut self,
+        _source_id: &str,
+        _diagnostics: &[(
+            notez_core::domain::LinkOccurrence,
+            notez_core::domain::ResolutionStatus,
+            Vec<ResourceRef>,
+        )],
+    ) -> Result<(), Self::Error> {
+        Ok(())
+    }
     fn replace_conflicts(
         &mut self,
         records: &[notez_core::domain::ConflictRecord],
     ) -> Result<(), Self::Error> {
-        notez_core::domain::ProjectionStore::replace_conflicts(&mut self.base, records)
-            .map_err(|e| CountingError(e.to_string()))
-    }
-    fn list_conflicts(&self) -> Result<Vec<notez_core::domain::ConflictRecord>, Self::Error> {
-        notez_core::domain::ProjectionStore::list_conflicts(&self.base)
+        notez_core::domain::ProjectionWrite::replace_conflicts(&mut self.base, records)
             .map_err(|e| CountingError(e.to_string()))
     }
 }
 
 #[test]
 fn projection_store_does_not_provide_silent_upsert_noop() {
-    use notez_core::domain::ProjectionStore;
+    use notez_core::domain::{ProjectionReader, ProjectionWrite};
     // A bare trait object is not constructible, but we can check via the
     // type system: any implementor MUST provide a body. The empty trait
     // default is a compile error, not a runtime assertion. The strongest
@@ -141,8 +206,8 @@ fn projection_store_does_not_provide_silent_upsert_noop() {
         object_id: notez_core::domain::ObjectIdentity::default(),
         primary_source_id: String::new(),
     };
-    ProjectionStore::upsert_resource(&mut store, &res).unwrap();
-    let got = ProjectionStore::get(&store, &r_ref).unwrap();
+    ProjectionWrite::upsert_resource(&mut store, &res).unwrap();
+    let got = ProjectionReader::get(&store, &r_ref).unwrap();
     assert!(
         got.is_some(),
         "SqliteProjection must persist upsert_resource calls"
@@ -169,23 +234,23 @@ fn upserting_one_resource_preserves_sibling_resources() {
         primary_source_id: String::new(),
     };
 
-    use notez_core::domain::ProjectionStore;
-    ProjectionStore::upsert_resource(&mut store, &make(a_ref, "a")).unwrap();
-    ProjectionStore::upsert_resource(&mut store, &make(b_ref, "b")).unwrap();
+    use notez_core::domain::{ProjectionReader, ProjectionWrite};
+    ProjectionWrite::upsert_resource(&mut store, &make(a_ref, "a")).unwrap();
+    ProjectionWrite::upsert_resource(&mut store, &make(b_ref, "b")).unwrap();
 
     // Update only `a`; `b` must remain.
     let mut a_updated = make(a_ref, "a");
     a_updated.revision = "r2".to_string();
-    ProjectionStore::upsert_resource(&mut store, &a_updated).unwrap();
+    ProjectionWrite::upsert_resource(&mut store, &a_updated).unwrap();
 
     assert_eq!(
-        ProjectionStore::get(&store, &a_ref)
+        ProjectionReader::get(&store, &a_ref)
             .unwrap()
             .unwrap()
             .revision,
         "r2"
     );
-    assert!(ProjectionStore::get(&store, &b_ref).unwrap().is_some());
+    assert!(ProjectionReader::get(&store, &b_ref).unwrap().is_some());
 }
 
 #[test]

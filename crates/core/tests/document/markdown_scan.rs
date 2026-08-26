@@ -18,7 +18,7 @@ See [[Obsidian Vault]] and [[id:01J00000000000000000000902][Target Link]].
 "#;
     fs::write(&file, content).unwrap();
 
-    let scanned = MarkdownScanner::scan(&file, "native").unwrap();
+    let scanned = { let __bytes = std::fs::read(&file).unwrap(); MarkdownScanner::parse_bytes(&__bytes, "native", &file.to_string_lossy()).unwrap() };
 
     assert_eq!(scanned.resources.len(), 2);
 

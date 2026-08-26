@@ -1,4 +1,4 @@
-use crate::preview::{PreviewContext, PreviewError, PreviewModel, Previewer, ZipEntry};
+use crate::{PreviewContext, PreviewError, PreviewModel, Previewer, ZipEntry};
 use bytes::Bytes;
 use std::io::Cursor;
 use zip::ZipArchive;

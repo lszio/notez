@@ -1,0 +1,14 @@
+[package]
+name = "notez-protocol"
+version = "0.1.0"
+edition = "2024"
+description = "Notez unified request/response wire vocabulary shared by CLI, MCP, HTTP API, and web clients"
+
+# Intentionally dependency-light: pure data + schemas. All parsing and
+# domain conversion happens engine-side (core::application::dispatcher),
+# so this crate stays compilable for every surface including wasm32.
+
+[dependencies]
+serde          = { workspace = true }
+serde_json     = { workspace = true }
+schemars       = { workspace = true }

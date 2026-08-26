@@ -5,7 +5,7 @@ use clap::Parser;
 use notez_cli::commands;
 use notez_cli::commands::{Cli, Commands};
 use notez_cli::handlers;
-use notez_composition::{OpenSpaceError, open_space};
+use notez_composition::native::{OpenSpaceError, open_space};
 use std::process::exit;
 
 fn main() {
@@ -84,22 +84,22 @@ fn main() {
     let mut service = handle.facade;
     match cli.command {
         Commands::Scan => handlers::scan::run_scan(cli.json, &mut service),
-        Commands::Resolve { query } => handlers::resource::run_resolve(cli.json, &service, &query),
+        Commands::Resolve { query } => handlers::resource::run_resolve(cli.json, &mut service, &query),
         Commands::Link(sub) => handlers::link::run_link(cli.json, &mut service, sub),
-        Commands::Query(args) => handlers::resource::run_query(cli.json, &service, args),
-        Commands::Recent { limit } => handlers::resource::run_recent(cli.json, &service, limit),
-        Commands::Read { r_ref } => handlers::resource::run_read(cli.json, &service, &r_ref),
+        Commands::Query(args) => handlers::resource::run_query(cli.json, &mut service, args),
+        Commands::Recent { limit } => handlers::resource::run_recent(cli.json, &mut service, limit),
+        Commands::Read { r_ref } => handlers::resource::run_read(cli.json, &mut service, &r_ref),
         Commands::Inspect { r_ref, rules } => {
-            handlers::resource::run_inspect(cli.json, &service, &r_ref, rules)
+            handlers::resource::run_inspect(cli.json, &mut service, &r_ref, rules)
         }
         Commands::Resource(sub) => handlers::resource::run_resource(cli.json, &mut service, sub),
-        Commands::Agenda => handlers::task::run_agenda(cli.json, &service),
+        Commands::Agenda => handlers::task::run_agenda(cli.json, &mut service),
         Commands::Task(sub) => handlers::task::run_task(cli.json, &mut service, sub, &source_root),
         Commands::Source(sub) => handlers::source::run_source(cli.json, &mut service, sub),
         Commands::Attachment(sub) => {
             handlers::attachment::run_attachment(cli.json, &mut service, sub)
         }
-        Commands::Community(sub) => handlers::community::run_community(cli.json, &service, sub),
+        Commands::Community(sub) => handlers::community::run_community(cli.json, &mut service, sub),
         Commands::Derive(commands::DeriveArgs { community, recipe }) => {
             handlers::community::run_derive(cli.json, &mut service, &community, &recipe)
         }
@@ -120,7 +120,7 @@ fn main() {
         Commands::Sync(sub) => handlers::sync::run_sync(cli.json, &mut service, sub),
         Commands::Artifact(commands::ArtifactSubcommand {
             command: commands::ArtifactCommands::Stale,
-        }) => handlers::community::run_artifact_stale(cli.json, &service),
+        }) => handlers::community::run_artifact_stale(cli.json, &mut service),
         Commands::Mcp(commands::McpSubcommand {
             command: commands::McpCommands::Serve,
         }) => handlers::mcp_cmd::run_mcp(service),
@@ -129,20 +129,6 @@ fn main() {
         }
         Commands::Config(sub) => {
             handlers::workspace::run_config(cli.json, &r_config, &source_root, &selected, sub)
-        }
-        #[cfg(feature = "web")]
-        Commands::Web(_args) => {
-            eprintln!(
-                "the `notez web` subcommand is no longer implemented.\n\
-                 use the v0.1 Dioxus fullstack client instead:\n\
-                 \n  \
-                 NOTEZ_SPACE_ROOT={} cargo run -p app --bin notez-web\n\
-                 \n\
-                 see docs/superpowers/specs/2026-08-03-notez-v01-web-client-design.org \
-                 for the design and deployment notes.",
-                source_root.display()
-            );
-            exit(5);
         }
         Commands::ListCapabilities => {
             // Handled by the early-return block above; reaching here is

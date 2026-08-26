@@ -224,7 +224,7 @@ fn markdown_scanner_scan_matches_parse_bytes_for_same_payload() {
     fs::write(&path, MD_FIXTURE).expect("failed to write md fixture");
 
     let locator_str = path.to_string_lossy().to_string();
-    let scanned = MarkdownScanner::scan(&path, "native").expect("scan must succeed");
+    let scanned = markdown::MarkdownParser::new().parse_path(&path, "native").expect("scan must succeed");
     let in_memory = MarkdownScanner::parse_bytes(MD_FIXTURE.as_bytes(), "native", &locator_str)
         .expect("parse_bytes must succeed");
 

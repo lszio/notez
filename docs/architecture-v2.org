@@ -1,0 +1,241 @@
+#+title: Notez 架构 v2 重设计 — 以 SICP 为指导
+#+date: 2026-08-25
+#+STARTUP: showeverything
+
+本文档是对现有实现的全面评审结论与目标架构设计。诊断部分全部基于代码证据（含三份并行审计），不是对 [[file:architecture.org][Notez 架构]] 的复述。目标架构以 SICP 的核心方法论（基本元素 / 组合手段 / 抽象手段 / 流 / 元语言抽象）组织，并对齐主流工程模式（端口与适配器、CQRS、事件溯源、单向数据流）。
+
+v2 落地后，[[file:architecture.org][架构导读]] 与 [[file:roadmap.org][Roadmap]] 中受影响的条目按 §8 迁移路线逐步改写；本文档在此之前是唯一的目标态权威。
+
+* 1. 本质问题
+
+系统要同时保住四件事：文件主权、异构来源接入、同一对象跨空间组合、人类客户端与 Agent 同规则读写。当前实现把这四件事都声明为目标，但在三个层面系统性偏离：
+
+1. *底层*：领域内核（domain）是干净的，但应用层把「编排骨架 + 具体基础设施 + 错误分类 + 能力元数据」揉在一个泛型门面里；没有事件脊柱，同步的三路合并在结构上不可能工作。
+2. *协议*：同一个用例存在四套互相独立的请求模型（CLI / MCP / 应用层位置参数 / preview 私有 DSL），且已经实际发散。三个表面跑在两个不同的运行时装配上。
+3. *交互与 UI*：Web 是纯 SSR 静态 HTML 加内联脚本补丁，大量按「有水合客户端」写的处理器永远不执行；桌面 / 移动端是不相干的脚手架；没有设计系统。
+
+根因只有一个：*领域内核没有从基础设施中真正剥离*，导致客户端无法拥有可运行的运行时（wasm32 编不出有用的客户端），于是所有交互退化成表单提交和页面跳转；而服务端为了补交互又绕过了自己的组合根。
+
+* 2. 诊断（证据清单）
+
+以下每条都有代码出处，供迁移时逐条销号。
+
+** 2.1 底层
+
+| # | 问题 | 证据 |
+|---+------+------|
+| B1 | =ApplicationFacade<S>= 单文件承载错误分类 + 门面状态 + 构造 + 注册 + 44 个转发方法 | =crates/core/src/application/service.rs= 832 行 |
+| B2 | 具体 SQLite 类型作为公开默认类型参数泄漏到 CLI/MCP/composition 签名 | =service.rs:362= 默认别名 =ApplicationFacade<SqliteProjection>=; =cli/src/handlers/mod.rs:21-22=; =cli/src/mcp/server.rs:424-446=; =composition/src/lib.rs:24-26= |
+| B3 | =ProjectionStore= 是 15 方法宽口神端口，读写不分；且大量静默无操作默认实现（=upsert_resource= / =delete_resource= / =insert_segments= / =replace_link_occurrences= 等默认返回 =Ok(())= 或空集） | =crates/core/src/domain/query.rs:64-174= |
+| B4 | 应用层直接做文件 I/O 并构造具体 =BlobStore=；community/federation 缓存直接读写 JSON；解析器内部自己 =fs::read= —— I/O 所有权分散在三处 | =use_cases_impl/attachment.rs:26-34,128-131=; =community_app.rs:1-33=; =federation.rs:14-25=; =document/org.rs:38-42=; =document/markdown.rs:267-270= |
+| B5 | 无变更日志（journal）。=write_check.rs= 注释明确「journal + expected revision 延后」，空 revision 即无条件写 | =application/write_check.rs:14-17,47-55= |
+| B6 | 同步的「三路合并」结构上不可能工作：push 恒写 =parent_snapshots: vec![]=，pull 用空字符串做 base 文本，heads 是合成计数器 | =sync/engine.rs:73-88,130-136=; =sync/merge.rs:13-40= |
+| B7 | 写回不可用：全部适配器 =can_write=false=，transport 的 =mutate= 只有整体覆盖语义，无外科手术式补丁 | =source/adapter.rs:149-178,272-297=; =source/protocol.rs:52-66= |
+| B8 | 能力元数据与行为矛盾：=scan= 标注 =Mutability::Read= 但会重写整个投影 | =capability.rs:77-81= vs =use_cases_impl/scan.rs:67-80= |
+| B9 | preview（PDF/XLSX/PPTX/DOCX/ZIP 解析，1919 行）住在核心里 | =crates/core/src/preview/= |
+| B10 | wasm32 只剩占位类型：占位 =SqliteProjection= 无构造函数，artifact 依赖 =tempfile= | =storage/mod.rs:1-14=; =application/mod.rs:20-58=; =artifact/extractor.rs:190-193= |
+
+** 2.2 协议与边界
+
+| # | 问题 | 证据 |
+|---+------+------|
+| P1 | 四套独立请求模型：CLI 17 个 Clap 结构 + 14 个子命令枚举；MCP 14 个参数结构各配手写 JsonSchema；应用层全是位置参数；preview 另有私有 =QueryRequest= | =cli/src/commands.rs=; =cli/src/mcp/server.rs:80-365=; =application/use_cases/*=; =preview/mod.rs:34-40= |
+| P2 | 表面已发散：CLI query 支持 =--exact-ref/--source/--limit/block=，MCP =QueryArgs= 只有 kind/title 且拒绝 block；=link resolved=（读）与 MCP =link_resolve=（主动解析落库）同名不同义 | =commands.rs:98-120=; =mcp/server.rs:106-122,495-517,636-655= |
+| P3 | Web 绕过组合根：多个 =_impl= 直接开 =SqliteProjection/ApplicationFacade=，跳过解析器注册与 legacy 配置合并 —— 与 CLI/MCP 是两套运行时 | =packages/web/src/server.rs= vs =composition/src/lib.rs= |
+| P4 | 运行时状态分裂四处：=notez.toml=、=.notez/sources.json=（TOML 胜出）、communities JSON、全局注册表；损坏 JSON 被静默当空 | =composition/src/lib.rs:73-85=; =federation.rs:14-25= |
+| P5 | MCP 工具声明可选 =space= 参数但绝大多数忽略它，不重绑定服务 | =mcp/server.rs:186-354,728-980= |
+| P6 | CLI 无渲染端口，每个 handler 手写 JSON/文本双路输出 + 退出码 | =cli/src/handlers/mod.rs:1-41= 及各 handler |
+| P7 | =core= 包名遮蔽 =::core= 导致 schemars 派生宏不可用，被迫手写 14 份 JsonSchema | 各 spec 记载；=mcp/server.rs:80-365= |
+
+** 2.3 诚实性缺陷（昨日 bc6547d 已修一批，残留如下）
+
+| # | 问题 | 证据 |
+|---+------+------|
+| H1 | =notez watch start= 从不调用 =svc.start()=，轮询一个永远空的环形缓冲；SIGINT 处理器定义了却从未安装 | =cli/src/handlers/watch.rs:7-31,67-98= |
+| H2 | Web 停止监视表单发 =name=path=，服务端只接受 =source_root=/encoded=，必然失败 | =pages/list.rs= WatchPanel; =routes.rs= SpaceForm |
+| H3 | 树构建中的死循环：条件恒假且循环体为空，与注释宣称的行为相反 | =packages/web/src/tree.rs:261-265= |
+| H4 | =ResourceRow::to_resource= 在 ref 解析失败时凭空铸造新 ULID 和新 ObjectIdentity —— UI 层伪造领域身份 | =packages/web/src/model.rs:62-75= |
+| H5 | =acceptance-evolution.sh= 向 MCP 发已知非法的 block 过滤却不断言结果仍 PASS；=acceptance-web.sh= 测一个不存在的 =WebArgs= 子命令 | =scripts/acceptance-evolution.sh:36-55=; =commands.rs:89-95=; =main.rs:131-148= |
+| H6 | golden 套件字节级双份维护；orgmode 适配器缺位于 workspace members 却被四方消费；其 =workflow.rs/security.rs= 是未编译的字节级死拷贝 | =tests/golden_suite.rs= ≡ =crates/core/tests/application/golden_suite.rs=; 根 =Cargo.toml:3-13= |
+
+** 2.4 交互与 UI
+
+| # | 问题 | 证据 |
+|---+------+------|
+| U1 | wasm main 是空函数；纯 SSR + 内联脚本补丁。列表过滤 oninput、命令面板 oninput/onkeydown/Enter 导航（TODO PR9.5）、ui::Echo 全部永不执行 | =packages/web/src/main.rs=; =pages/layout.rs=; =pages/palette.rs= |
+| U2 | 监视状态是进程级全局可变态（GLOBAL_WATCH + 门面缓存），由 URL 请求驱动，无会话模型 | =routes.rs= WebState/GLOBAL_WATCH |
+| U3 | 预览正文经 =dangerous_inner_html= 注入，安全性完全依赖核心 15 个 builder 全部正确转义 | =pages/detail.rs=, =space_home.rs=, =preview.rs=; =core/preview/builders/= |
+| U4 | 无设计系统：1438 行手写 CSS 内嵌 index.html；packages/ui 是 Dioxus starter 残骸且未被 Web 使用；desktop/mobile 是 blog demo 脚手架；landing 是静态硬编码 HTML | =public/index.html=; =packages/ui=; =packages/desktop=, =mobile=, =landing= |
+| U5 | 类型化错误在布局层退化为 Internal，UI 无法区分 NotFound/NotASpace | =pages/layout.rs= use_space_layout |
+| U6 | README 描述与代码漂移（watch/state 路径名、live activity 面板不存在）；=list_source_files= 无调用方 | =packages/web/README=; =server.rs= |
+
+* 3. SICP 设计透镜 → Notez 映射
+
+SICP 给出的不是一套模式，而是评价语言/系统的三条标尺：*基本元素是什么，如何组合，如何抽象*。以此重审 Notez：
+
+| SICP 概念 | Notez v2 对应物 | 现状差距 |
+|-----------+-----------------+----------|
+| 基本元素 (primitives) | =ObjectId= / =ResourceRef= / =Locator+TextSpan= / =Change= / =Relation= / =Capability= / =Principal+Scope= | 身份与关系已存在；Change 与 Principal 缺位（B5） |
+| 组合手段 (combination) | Space = 引用集 × 语义（排序/标签/视图/授权）；SavedQuery = 谓词组合；View = fold(Change 流)；Artifact = recipe(Community) | Space 组合语义未落地（跨空间引用是 MVP-1 未竟项）；View 不是折叠产物而是全量重扫 |
+| 抽象手段 (abstraction) | 一个用例 = 一个 Request/Response 类型，统一经 Dispatcher 分派；端口隐藏表示 | 四套请求模型并存（P1/P2）；具体存储泄漏（B2） |
+| 数据抽象 (data abstraction) | constructor/selectors 契约：=ResourceRef::parse/to_string=；表示隐藏在端口后 | UI DTO 反向伪造身份（H4）；宽口 trait 混杂读写（B3） |
+| 消息传递 / 泛型操作 (data-directed) | SourceRegistry 按 =(SourceKind, 操作)= 分派；CapabilityCatalog 即操作表 | 已有雏形，但要升级为统一 Dispatcher 的注册表机制 |
+| 流 (streams) | Change journal = 事件流；投影 = 流的折叠；同步 = 流合并（真实因果父）；UI signal = 流的当前值投影 | 流完全缺位：无 journal（B5）、假祖先（B6）、UI 无失效刷新（U1） |
+| 元语言抽象 (metalinguistic) | Selector 查询代数 + 解释器；=notez://object|query|code= URI 文法；PARA/看板 = 命名查询 | Selector 是固定结构体非代数；看板/查询驱动视图未实现 |
+
+关键判据：*每个新需求应该表现为「新增一种组合或一个新的注册表条目」，而不是修改既有抽象的签名*。当前新增一个查询过滤维度要同时动 Selector、trait、SQLite、CLI、MCP 五处 —— 这就是抽象手段缺失的直接度量。
+
+* 4. 目标架构
+
+** 4.1 分层总图
+
+#+begin_src text
+┌────────────────────────────────────────────────────────────────────┐
+│ 表面层（薄）：CLI │ MCP │ HTTP API │ Web 客户端(WASM水合)          │
+│  职责仅两项：本地语法 ↔ Protocol DTO 翻译；呈现                    │
+│  禁止：业务逻辑、文件访问、存储构造                                  │
+└───────────────────────────┬────────────────────────────────────────┘
+                            │  notez-protocol（唯一请求/响应词汇表）
+┌───────────────────────────▼────────────────────────────────────────┐
+│ 应用层 notez-engine                                                 │
+│  Dispatcher: Request → 授权 → 写检查 → handler 注册表 → Response    │
+│  写路径: Command ⇒ 校验 ⇒ Change ⇒ Journal ⇒ Projector ⇒ 投影      │
+│  读路径: Query(Selector 代数) ⇒ 解释器 ⇒ Reader 端口 ⇒ View         │
+└──────────┬─────────────────────────────┬───────────────────────────┘
+┌──────────▼──────────────┐  ┌───────────▼──────────────────────────┐
+│ 领域 notez-domain       │  │ 端口（traits, 领域侧定义）            │
+│ 纯函数, 可编译 wasm32    │  │  FormatParser / SourceTransport      │
+│ Resource·ObjectId·Span  │  │  ProjectionReader / EventJournal     │
+│ Relation·Rule           │  │  BlobStore / SourceWriter / Clock    │
+│ Selector 代数 + 解释器   │  │  Watcher                             │
+│ 三方文本合并(纯算法)     │  │  每个 trait 方法必须实现，无默认空体  │
+└─────────────────────────┘  └───────────┬──────────────────────────┘
+┌────────────────────────────────────────▼───────────────────────────┐
+│ 基础设施适配（仅 native 平台编译）：                                │
+│  notez-sqlite(投影+journal) · fs transport · blob · notify watcher │
+│  notez-format-org / notez-format-markdown（真解析器+span 写回）     │
+│  notez-preview-office 等（PDF/XLSX/PPTX… 出核）                     │
+└────────────────────────────────────────────────────────────────────┘
+        组合根 notez-composition：唯一装配点，四个表面共用
+#+end_src
+
+** 4.2 Crate 切分
+
+| crate | 内容 | 平台约束 |
+|-------+------+----------|
+| =notez-domain= | 现 =core::domain= + Selector 代数解释器 + 合并纯算法 | 纯净，wasm ✓ |
+| =notez-protocol= | 全部 Request/Response DTO、错误契约、=notez://= 地址文法、schemars 导出 | serde + schemars，wasm ✓ |
+| =notez-engine= | Dispatcher、九个用例（改为消费 DTO）、Projector、审计 | 仅依赖 domain + 端口，wasm ✓ |
+| =notez-sqlite= | =SqliteProjection=（Reader 实现）+ journal 表 + 迁移 | rusqlite，native only |
+| =notez-fs= | NativeTransport、BlobStore、Watcher、文件型 journal 镜像 | std/fs + notify，native only |
+| =notez-format-org= / =notez-format-markdown= | 真·解析器（从 core/document 迁出）+ span 级外科写回器 | 纯文本处理，wasm ✓ |
+| =notez-preview-*= | 办公文档/PDF 预览 builder（从 core/preview 迁出） | native（tempfile 限制在此） |
+| =notez-composition= | 现有 composition 扩展：装配上述全部 | native |
+| =crates/cli= | clap 枚举 → Protocol DTO 的纯翻译 + 渲染端口实现 | native |
+| =crates/cli::mcp=（或独立 =notez-mcp=） | rmcp 外壳，输入 schema 由 schemars 从 protocol 自动生成 | tokio |
+| =packages/web= | Dioxus fullstack：SSR 壳 + 水合 WASM 客户端 | 双平台 |
+| =packages/ui= | 真·设计系统（tokens + 组件），web/desktop/mobile 共用 | wasm ✓ |
+
+命名前置条件：包 =core= 更名 =notez-core=（或随拆分自然消失），消除 =::core= 遮蔽 —— 这是 schemars 自动化的开关，直接消灭 P7/H 系列的手写 schema。
+
+** 4.3 统一协议与 Dispatcher（抽象手段）
+
+- 每个用例一对类型：如 =QueryRequest{ selector: SelectorExpr, page }= → =QueryResponse{ rows, total }=。全部住 =notez-protocol=，派生 =Serialize/Deserialize/JsonSchema=。
+- =Dispatcher= 把 =RequestKind → Handler= 存入注册表（SICP 的 put/get 表）。CLI/MCP/HTTP/Web 都把各自输入翻译成同一种 Request：
+  - CLI：clap 枚举 match 后构造 DTO —— 字段齐全性由编译器强制，P2 类发散不再可能；
+  - MCP：工具输入 schema 由 =schemars::schema_for!(QueryRequest)= 生成，删除 14 份手写；
+  - HTTP：axum extractor 直接反序列化 DTO；
+  - Web：水合客户端经 HTTP/server function 发送同一 DTO。
+- 横切关注点单点化：授权（Principal × Space × Source × Action × Scope）、revision 写检查、审计记录、trace 全部挂在 Dispatcher 一处。这是 MVP-2 验收场景 3/5 的结构性保证。
+- 现有 =CapabilityCatalog= 九个描述符升级为该注册表的元数据源（同时修正 B8 的 Mutability 谎报）。
+
+** 4.4 事件脊柱（流）
+
+- =Change { id: Ulid, hlc, actor: Principal, source_id, op, targets: [ResourceRef], expected_revision, payload_ref }=。
+- =EventJournal= 端口：=append= / =since(cursor)= / =by_target=。native 实现 = SQLite 表 + =.notez/journal.ndjson= 镜像（日志本身是历史，不属可重建投影；NDJSON 形态保住文件主权，可 diff 可备份）。
+- 一切写路径收敛为：Command → 领域校验 → 生成 Change → journal 追加 → Projector 折叠进投影 → 各表面收到失效通知。
+- 同步修复（B6）：push 时写入真实 =parent_snapshots=（heads 按 actor 维护真实因果史）；pull 在对象库中找共同祖先内容再做三方合并；无法合并 → =ConflictRecord=（已有域类型）+ 显式冲突状态。relay/P2P transport 保持端口，接不接由 roadmap 决定，但引擎只面向 Change 流。
+- 收益即时兑现：审计 = journal 投影；离线队列 = 未投递 Change；冲突可见性 = ConflictRecord 查询 —— 规范 §7 全部条款有了单一机制载体。
+
+** 4.5 读模型与查询解释器（元语言抽象）
+
+- =SelectorExpr= 代数：=And/Or/Not/KindIn/TitleContains/Tag/HasRelation{kind,direction}/InSpace/Fulltext= ，纯数据、可序列化。
+- 解释器 =eval(expr, &ProjectionReader)=；SQLite 实现负责下推，内存实现用于测试与 wasm。
+- SavedQuery = =notez.toml= 里的命名 =SelectorExpr=；PARA 分类 = 关系 + 命名查询；看板 = 命名查询的列投影。拖卡片 =task transition= Command（走 Dispatcher 授权/审计路径），符合规范 §6/§10 场景 7。
+- =notez://query/<id>= 直接引用命名查询，URI 文法与解释器同源。
+
+** 4.6 保真写回（数据抽象闭环）
+
+- 解析时保留 =TextSpan=（已有）。=SourceWriter= 端口：=apply(locator, Vec<TextPatch>)=，patch 以 span 定位做外科替换，禁止整文覆盖。
+- org/markdown 各实现一个 writer；=mutate= 整体载荷语义删除。这是 MVP-1「写回不得倒灌正文」门槛的落地件。
+
+** 4.7 交互与 UI 重设计
+
+运行时形态：
+
+#+begin_src text
+浏览器 ── SSR 首屏(壳+数据) ──► 水合 WASM 客户端
+                                    │  Action
+                                    ▼
+                              Client Store (signals)
+                                    │  Dispatch(Request)
+                                    ▼
+                              HTTP API / server fn
+                                    │
+                          Engine Dispatcher（服务端）
+                                    │ Response
+              Client Store 更新 ──► View 重渲染（单向数据流）
+#+end_src
+
+- *单向数据流*：Action → Dispatch → Response → Store（spaces / 当前 source / 资源缓存 / 同步与审计状态）→ View。Dioxus signal 只作机制，不做跨组件隐式全局；扫描/watch 完成后由 Store 失效刷新取代「重定向拿新页」。
+- *水合的前提*正是 4.2 的拆分：客户端只依赖 =notez-domain + notez-protocol + ui=，永不见 rusqlite/tempfile。engine 若需嵌入客户端（本地直连模式）也具备编译资格，但首版走 HTTP。
+- *交互债务清零*：删除内联面板 JS shim；palette Enter 导航、列表过滤实时性、watch 启停（修 H2 参数错）全部经由 Action 路径实现并验收；删除一切不水合的死处理器。
+- *安全*：预览 HTML 由 builder 输出改为「结构化渲染树 → 前端 RSX 渲染」或至少集中一个净化出口；=dangerous_inner_html= 收敛到单点并加转义测试（U3）。
+- *设计系统*（主流做法，token 优先）：
+  - =packages/ui/tokens.css=：色彩/字阶/间距/圆角/阴影 CSS 变量，暗色主题为变量切换；
+  - 组件层：Button/Input/Select/Card/Panel/Tabs/Table/Badge/Tree/KanbanColumn/CommandPalette/Toast/EmptyState，全 RSX，零内嵌长 CSS；
+  - 现 1438 行 paper-terminal 样式改写为「tokens 之上的主题皮肤」，视觉延续、实现收敛；
+  - 布局照规范 §6：左栏（Space/来源/树/PARA 入口）、主区（列表/详情/编辑，大纲⇄原文⇄属性切换）、右栏（反向链接/活动/同步状态/Agent 审计）、全局命令栏（palette 走 Dispatcher 的 =SearchRequest=）。
+- desktop/mobile：删 blog 脚手架，改为复用 =packages/web= 的客户端组件树 + 平台壳（Dioxus 多目标本就为此设计）；landing 静态页保留但数据口径与产品一致或移除。
+
+* 5. 迁移路线（绞杀者模式，每步全绿可交付）
+
+| 步 | 内容 | 验收 |
+|----+------+------|
+| M0 卫生 | workspace 补 =adapters/orgmode=；删除死拷贝 =workflow.rs/security.rs= 与树构建死循环（H3）；golden 套件去重；修 =watch start=（装 SIGINT + 真正 start）（H1）；watch-stop 表单参数（H2）；=ResourceRow::to_resource= 返回 Result 不再铸身份（H4）；evolution/web 验收脚本要么断言要么删除（H5）；=scan= 能力标注改写（B8） | 全部测试绿；=cargo test --workspace= + 修订后 acceptance 脚本通过 |
+| M1 协议统一 | 包更名 =notez-core=；新建 =notez-protocol=，九用例 DTO + schemars；Dispatcher 注册表落地；CLI/MCP 改为翻译层，MCP schema 自动生成 | =cli_mcp_capabilities= 等价测试扩展为「CLI/MCP/HTTP 同请求同结果」；手写 JsonSchema 清零 |
+| M2 端口诚实化 | =ProjectionStore= 拆 =ProjectionReader=（读）+ Projector 写入口；删除全部默认空体方法；=BlobStore=/Clock 端口注入；attachment/community/federation 的 fs 移入 =notez-fs= | =SqliteProjection= 不再出现在任何表面签名；测试替身必须显式实现全部方法 |
+| M3 事件脊柱 | journal 端口 + SQLite/NDJSON 实现；写路径（transition/upsert/delete/writeback 先行）改 Command→Change→Projector；expectedRevision 必填；审计记录落库 | 断网写→恢复→同步往返验收（roadmap 场景 2）；并发 revision 冲突显式拒绝 |
+| M4 格式出核+保真写回 | =core/document= 迁入 format crate；scanner 去 =fs::read=；=SourceWriter= span 补丁落地 org/markdown；preview 迁出核 | MVP-1「脱离 Notez 可读可编辑 + 外科手术写回」验收；golden 保真套件扩到写回 |
+| M5 同步真实化 | 真实 parent_snapshots/heads；共同祖先三方合并；冲突 UX（列表+裁决 Command） | 双空间冲突往返（现 acceptance-sync 强化版）；=ConflictRecord= 可见可裁决 |
+| M6 客户端水合+设计系统 | engine/protocol/domain 过 wasm32 CI 门禁；Web 水合 + Store 单向流；palette/过滤/watch 全活；tokens.css + 组件库；desktop/mobile 收敛 | 浏览器实测：palette 回车导航、过滤即时生效、拖卡 transition 走审计路径；wasm32 build 绿 |
+
+顺序依据：M0 消除噪声证据；M1 是其后一切的地基（更名越早越便宜）；M2/M3 打通流；M4 兑现 MVP-1 门槛；M5 修复联邦语义；M6 最后做 UI，因为它依赖前面所有端口。若需要提前看到 UI 成果，M6 的 tokens/组件库可与 M2-M5 并行推进（纯前端层不依赖事件脊柱）。
+
+* 6. 风险与非目标
+
+风险：
+
+1. *更名涟漪*（M1）：workspace 级机械改动，量大但低智；一次提交完成，避免长期双名。
+2. *事件脊柱触碰所有写路径*（M3）：沿用 0.5.x-A2 的「逐 trait 迁移、每步全量测试」节奏；过渡期允许旧直写路径与新 journal 并存，但新路径必须先覆盖全部写用例才删旧路径。
+3. *Dioxus 水合已知痛点*（M6）：git 史显示 fullstack 装配曾踩 =Router<()> 闭包坑与 wasm rustflags；对策：自定义 axum 路由合并优先策略保留，水合按页灰度，每页过浏览器实测。
+4. *范围诱惑*：CRDT、多人实时协作、Notion/Anytype 双向仍是非目标（继承规范 §9）；Change 流为其预留接口但不实现。
+
+非目标（本轮明确不做）：
+
+- 不换技术栈（Dioxus/Rust/SQLite 维持）；
+- 不追求任意格式完美无损双向转换；
+- 不做自动解决所有远程冲突；
+- 不在本设计中实现 Notion/Anytype/网页摘录 Adapter。
+
+* 7. 验收场景对照（规范 §10）
+
+| 场景 | v2 机制 |
+|------+---------|
+| 1 同一对象多 Space 引用不复制正文 | ObjectId + Space 引用集（M3 投影模型固化） |
+| 2 离线变更可观察可重试 | Change journal + 失效通知（M3） |
+| 3 同一 Use Case 多表面一致 | notez-protocol + Dispatcher（M1） |
+| 4 符号→设计/任务/实现/summary | notez://code + 关系证据（沿 roadmap 0.6，协议层已就位） |
+| 5 Agent 授权范围内写 + 审计 | Dispatcher 单点授权 + journal 审计投影（M1+M3） |
+| 6 新增 Adapter 只增不改 | SourceTransport/FormatParser/SourceWriter 端口 + 注册表 |
+| 7 PARA/看板是投影非副本 | SavedQuery 解释器 + task transition Command（M3+M6） |

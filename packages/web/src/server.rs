@@ -32,8 +32,11 @@ use crate::router::Route;
 use crate::tree::{
     self, IndexEntryDto, KindCounts, SearchHit, SourceFileRow, TreeNode,
 };
-use notez_core::application::{ApplicationFacade, Graph};
+use notez_core::application::Graph;
+#[cfg(not(target_arch = "wasm32"))]
+use notez_core::application::ApplicationFacade;
 use notez_core::domain::{Resource, ResourceRef, ResourceKind, Selector};
+#[cfg(not(target_arch = "wasm32"))]
 use notez_core::storage::SqliteProjection;
 
 // ---- DTO surface -----------------------------------------------------------
@@ -413,6 +416,7 @@ pub async fn list_filesystem(source_root: String) -> Result<Vec<SourceFileRow>, 
 
 /// Open the projection store + facade for `source_root`, going through
 /// the `WebState` cache so repeat calls reuse the same SQLite handle.
+#[cfg(not(target_arch = "wasm32"))]
 fn open_facade(source_root: &Path) -> Result<std::sync::Arc<std::sync::Mutex<ApplicationFacade<SqliteProjection>>>, String> {
     let state = crate::routes::state_snapshot();
     state.facade_for(&source_root.to_path_buf()).map_err(|e| e.to_string())

@@ -7,18 +7,45 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct PushReport {
     pub pushed_files: usize,
     pub pushed_manifests: usize,
     pub pushed_objects: usize,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct PullReport {
     pub pulled_files: usize,
     pub merged_files: usize,
     pub conflicts: Vec<ConflictRecord>,
+}
+
+
+/// Per-device memory of "the last hash I knew for this path" — the
+/// honest causal parent for the next push. Stored under
+/// `<space>/.notez/sync-state.json`.
+#[derive(Debug, Default, Clone, serde::Serialize, serde::Deserialize)]
+pub(crate) struct SyncState {
+    pub known: std::collections::BTreeMap<String, String>,
+}
+
+impl SyncState {
+    fn load(device_space: &Path) -> Self {
+        let p = device_space.join(".notez/sync-state.json");
+        fs::read_to_string(p)
+            .ok()
+            .and_then(|t| serde_json::from_str(&t).ok())
+            .unwrap_or_default()
+    }
+
+    fn save(&self, device_space: &Path) -> Result<(), SyncError> {
+        let dir = device_space.join(".notez");
+        fs::create_dir_all(&dir)?;
+        let p = dir.join("sync-state.json");
+        fs::write(p, serde_json::to_string_pretty(self)?)?;
+        Ok(())
+    }
 }
 
 pub struct SyncEngine {
@@ -37,6 +64,7 @@ impl SyncEngine {
     }
 
     pub fn push(&self) -> Result<PushReport, SyncError> {
+        let mut sync_state = SyncState::load(&self.device_space);
         let mut pushed_files = 0;
         let mut pushed_manifests = 0;
         let mut pushed_objects = 0;
@@ -71,10 +99,29 @@ impl SyncEngine {
                     self.transport.store.write_object(&obj)?;
                     pushed_objects += 1;
 
+                    // M5: the causal parent is the hash THIS device
+                    // last knew for this path (sync-state), because
+                    // that is the state this push evolved from. Fall
+                    // back to the shared folder's previous manifest.
+                    let mut parents: Vec<String> = Vec::new();
+                    if let Some(prev) = sync_state.known.get(&logical_path) {
+                        if prev != &hash && !parents.contains(prev) {
+                            parents.push(prev.clone());
+                        }
+                    }
+                    if parents.is_empty() {
+                        if let Some(prev) = self.transport.store.read_manifest(&logical_path)? {
+                            if prev.content_hash != hash && !parents.contains(&prev.content_hash) {
+                                parents.push(prev.content_hash);
+                            }
+                        }
+                    }
+                    sync_state.known.insert(logical_path.clone(), hash.clone());
+
                     let manifest = Manifest {
                         source_id: "default_source".to_string(),
                         actor_id: self.actor_id.clone(),
-                        parent_snapshots: vec![],
+                        parent_snapshots: parents,
                         logical_path,
                         content_hash: hash,
                         properties: Default::default(),
@@ -88,6 +135,7 @@ impl SyncEngine {
 
         let heads = HeadsTracker::new(self.transport.store.manifests_dir().parent().unwrap());
         heads.set_head(&self.actor_id, &format!("snap_{pushed_files}"))?;
+        sync_state.save(&self.device_space)?;
 
         Ok(PushReport {
             pushed_files,
@@ -96,6 +144,7 @@ impl SyncEngine {
         })
     }
     pub fn pull(&self) -> Result<PullReport, SyncError> {
+        let mut sync_state = SyncState::load(&self.device_space);
         let mut pulled_files = 0;
         let mut merged_files = 0;
         let mut conflicts = Vec::new();
@@ -124,18 +173,46 @@ impl SyncEngine {
                             }
                             fs::write(&local_file, &obj.payload)?;
                             pulled_files += 1;
+                            sync_state.known.insert(manifest.logical_path.clone(), manifest.content_hash.clone());
                         } else {
                             let local_text = fs::read_to_string(&local_file)?;
                             if local_text != incoming_text {
-                                let base_text = "";
+                                // M5: find a real common ancestor — the
+                                // first incoming parent whose object we
+                                // also have locally. Empty base only as
+                                // a last resort.
+                                let mut base_text = String::new();
+                                for cand in &manifest.parent_snapshots {
+                                    if let Some(base_obj) =
+                                        self.transport.store.read_object(cand)?
+                                    {
+                                        let cand_text =
+                                            String::from_utf8_lossy(&base_obj.payload);
+                                        if cand_text != local_text
+                                            || cand_text != incoming_text
+                                        {
+                                            base_text = cand_text.to_string();
+                                            break;
+                                        }
+                                    }
+                                }
                                 match ThreeWayMerger::merge(
                                     &manifest.logical_path,
-                                    base_text,
+                                    &base_text,
                                     &local_text,
                                     &incoming_text,
                                 ) {
                                     MergeResult::Clean(merged) => {
-                                        fs::write(&local_file, merged)?;
+                                        fs::write(&local_file, &merged)?;
+                                        let merged_hash =
+                                            format!("{:x}", Sha256::digest(merged.as_bytes()));
+                                        self.transport.store.write_object(&SyncObject {
+                                            hash: merged_hash.clone(),
+                                            payload: merged.into_bytes(),
+                                        })?;
+                                        sync_state
+                                            .known
+                                            .insert(manifest.logical_path.clone(), merged_hash);
                                         merged_files += 1;
                                     }
                                     MergeResult::Conflict { conflict } => {
@@ -149,6 +226,8 @@ impl SyncEngine {
                 }
             }
         }
+
+        sync_state.save(&self.device_space)?;
 
         Ok(PullReport {
             pulled_files,

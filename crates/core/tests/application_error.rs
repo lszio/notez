@@ -2,7 +2,7 @@
 
 use notez_core::application::ApplicationError;
 use notez_core::capability::Mutability;
-use notez_core::domain::{ResourceKind, ResourceRef};
+use notez_core::domain::{ResourceKind, ResourceRef, ProjectionReader, ProjectionWrite};
 
 #[test]
 fn not_found_display_and_serde_round_trip() {

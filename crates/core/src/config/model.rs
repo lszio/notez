@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use crate::domain::{ProjectionReader, ProjectionWrite};
 use serde_json::Value as JsonValue;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};

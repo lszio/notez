@@ -1,5 +1,5 @@
-use crate::domain::{Resource, ResourceKind, ResourceRef};
-use crate::preview::{PreviewContext, PreviewError, PreviewModel, Previewer};
+use notez_core::domain::{Resource, ResourceKind, ResourceRef};
+use crate::{PreviewContext, PreviewError, PreviewModel, Previewer};
 use std::collections::BTreeMap;
 
 /// Previewer that renders a linked-target resource as a child preview.
@@ -64,7 +64,7 @@ impl Previewer for LinkEmbedPreviewer {
                     source_id: ctx.resource.source_id.clone(),
                     locator: target_ref.to_string(),
                     properties: BTreeMap::new(),
-                    object_id: crate::domain::derived_object_id("", "", ""),
+                    object_id: notez_core::domain::derived_object_id("", "", ""),
                     primary_source_id: String::new(),
                 }
             };

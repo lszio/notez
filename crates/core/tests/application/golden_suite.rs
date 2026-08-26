@@ -33,14 +33,14 @@ fn golden_suite_org_and_markdown_roundtrip_fidelity() {
     let org_file = temp_dir.path().join("golden.org");
     std::fs::write(&org_file, org_input).unwrap();
 
-    let scanned_org = document::OrgScanner::scan(&org_file, "native").unwrap();
+    let scanned_org = document::{ let __bytes = std::fs::read(&org_file).unwrap(); OrgScanner::parse_bytes(&__bytes, "native", &org_file.to_string_lossy()).unwrap() };
     assert_eq!(*scanned_org.raw, *org_input);
 
     let md_input = "---\ntitle: Golden MD\nid: 01J00000000000000000000006\n---\n\n# Golden Section <!-- id: 01J00000000000000000000007 -->\n";
     let md_file = temp_dir.path().join("golden.md");
     std::fs::write(&md_file, md_input).unwrap();
 
-    let scanned_md = document::MarkdownScanner::scan(&md_file, "native").unwrap();
+    let scanned_md = document::{ let __bytes = std::fs::read(&md_file).unwrap(); MarkdownScanner::parse_bytes(&__bytes, "native", &md_file.to_string_lossy()).unwrap() };
     assert_eq!(*scanned_md.raw, *md_input);
 }
 

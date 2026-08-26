@@ -3,7 +3,7 @@
 use notez_core::application::ApplicationFacade;
 use notez_core::application::ResolveResult;
 use notez_core::application::use_cases::ResourceUseCase;
-use notez_core::domain::{ProjectionStore, Resource, ResourceKind, ResourceRef, Selector};
+use notez_core::domain::{ProjectionStore, Resource, ResourceKind, ResourceRef, Selector, ProjectionReader, ProjectionWrite};
 use notez_core::storage::SqliteProjection;
 
 fn make_facade() -> (tempfile::TempDir, ApplicationFacade<SqliteProjection>) {

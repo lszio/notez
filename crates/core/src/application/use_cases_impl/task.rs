@@ -7,13 +7,18 @@ use crate::application::service::{
     ApplicationError, ApplicationFacade, DocumentErrorKind, StorageErrorKind,
 };
 use crate::application::task_para::{AgendaItem, AgendaView, ParaNode, ParaOverview};
+use crate::domain::{ProjectionReader, ProjectionWrite};
 use crate::application::use_cases::TaskUseCase;
 use crate::application::write_check;
 use crate::document::StateTransition;
 use crate::domain::{ProjectionStore, ResourceRef, Selector};
 use std::path::Path;
 
-impl<S: ProjectionStore> TaskUseCase for ApplicationFacade<S> {
+impl<S> TaskUseCase for ApplicationFacade<S>
+where
+    S: ProjectionStore,
+    S: ProjectionReader<Error = crate::storage::StorageError>
+        + ProjectionWrite<Error = crate::storage::StorageError>, {
     fn agenda(&self) -> Result<crate::application::task_para::AgendaView, ApplicationError> {
         let page = <Self as crate::application::use_cases::ResourceUseCase>::query(
             self,
@@ -87,14 +92,49 @@ impl<S: ProjectionStore> TaskUseCase for ApplicationFacade<S> {
 
         // First write back to the authoritative source
         // We serialize the state change into a JSON payload for the adapter's mutate interface
-        let payload = serde_json::json!({
-            "action": "UpdateTaskStatus",
-            "to_state": transition.to_state,
-            "closed_timestamp": transition.closed_timestamp
-        })
-        .to_string();
-
-        self.writeback_resource(&source_id, &res.locator, &payload)?;
+        if source_id == "native" {
+            // M4 surgical write-back: patch the heading line in place
+            // instead of replacing the whole file payload.
+            let file_path = self.require_space_root()?.join(&res.locator);
+            let content = std::fs::read_to_string(&file_path).map_err(|e| {
+                ApplicationError::Io {
+                    path: Some(file_path.clone()),
+                    source: e.kind(),
+                }
+            })?;
+            let file_lines: Vec<String> = content.lines().map(str::to_string).collect();
+            let found = crate::source::writer::find_heading_line(&file_lines, &res.title, 1)
+                .ok_or_else(|| ApplicationError::NotFound {
+                    kind: crate::domain::ResourceKind::Heading,
+                    r_ref: r_ref.clone(),
+                })?;
+            let done = matches!(transition.to_state.as_str(), "DONE" | "QUIT");
+            let patch = if res.locator.ends_with(".org") {
+                crate::source::writer::org_heading_state_patch(
+                    found.0,
+                    &found.1,
+                    &transition.to_state,
+                )
+            } else {
+                crate::source::writer::markdown_heading_state_patch(found.0, &found.1, done)
+            };
+            let patch = patch.ok_or_else(|| ApplicationError::UnsupportedCapability {
+                capability: "task_transition_format",
+            })?;
+            crate::source::writer::FsSpanWriter::apply(&file_path, &[patch])
+                .map_err(|e| ApplicationError::Storage {
+                    kind: StorageErrorKind::Sqlite,
+                    message: e.to_string(),
+                })?;
+        } else {
+            let payload = serde_json::json!({
+                "action": "UpdateTaskStatus",
+                "to_state": transition.to_state,
+                "closed_timestamp": transition.closed_timestamp
+            })
+            .to_string();
+            self.writeback_resource(&source_id, &res.locator, &payload)?;
+        }
 
         // Then update the local projection
         self.store

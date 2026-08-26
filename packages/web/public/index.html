@@ -1431,6 +1431,10 @@
     .welcome-files-name { flex: 1; font-family: var(--mono); font-size: 0.82rem; }
     .welcome-files-title { width: 40%; text-align: right; }
   </style>
+    <!-- M6: hydrated Dioxus client. Served from /wasm/* by the
+         server when built with `dx build --platform web`; harmless
+         404 in SSR-only builds. -->
+    <script type="module" src="/wasm/web.js"></script>
 </head>
 <body>
   <div id="main"></div>

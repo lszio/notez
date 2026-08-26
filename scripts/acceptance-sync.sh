@@ -37,7 +37,8 @@ echo "Pulling into Space B..."
 
 echo "Testing MCP sync transcript..."
 cat <<EOF > "$TEMP_DIR/mcp_req.jsonl"
-{"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}}
+{"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-11-25", "capabilities": {}, "clientInfo": {"name": "notez-acceptance", "version": "0.0.1"}}}
+{"jsonrpc": "2.0", "method": "notifications/initialized"}
 {"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "sync_push", "arguments": {"space": "$SPACE_A", "actor": "actor_a", "folder": "$SHARED"}}}
 {"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {"name": "sync_pull", "arguments": {"space": "$SPACE_B", "actor": "actor_b", "folder": "$SHARED"}}}
 EOF
@@ -48,7 +49,7 @@ echo "Deleting SQLite index on Space B..."
 rm -f "$SPACE_B/.notez/index.sqlite"
 
 echo "Rebuilding Space B index and pulling..."
-"$NOTEZ_BIN" --space "$SPACE_B" space rebuild --json > /dev/null
+"$NOTEZ_BIN" --space "$SPACE_B" workspace rebuild --json > /dev/null
 "$NOTEZ_BIN" --space "$SPACE_B" --json sync pull --actor actor_b --folder "$SHARED" > "$TEMP_DIR/post_pull.json"
 
 echo "Verifying synced file on Space B..."

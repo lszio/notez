@@ -1,0 +1,8 @@
+[application]
+name = "notez_web"
+
+[web.app]
+title = "Notez"
+
+[web.watcher]
+watch_path = ["src"]

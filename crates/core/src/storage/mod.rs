@@ -14,7 +14,11 @@ pub enum StorageError {
 pub struct SqliteProjection;
 
 pub use crate::domain::SegmentRecord;
+pub mod cache;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod journal;
+#[cfg(not(target_arch = "wasm32"))]
+pub use journal::{SqliteAuditLog, SqliteEventJournal};
+pub use cache::{SourceInstancesCache, SpaceCommunitiesConfig};
 pub mod blob;
 pub use blob::{BlobMeta, BlobStore};
-
-pub use crate::domain::ProjectionStore;

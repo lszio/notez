@@ -4,10 +4,15 @@
 //! is part of the 0.5.x-A1+A3 use-case impl split.
 
 use crate::application::service::{ApplicationError, ApplicationFacade, StorageErrorKind};
+use crate::domain::{ProjectionReader, ProjectionWrite};
 use crate::application::use_cases::InspectUseCase;
 use crate::domain::{InspectResult, ProjectionStore, ResourceRef};
 
-impl<S: ProjectionStore> InspectUseCase for ApplicationFacade<S> {
+impl<S> InspectUseCase for ApplicationFacade<S>
+where
+    S: ProjectionStore,
+    S: ProjectionReader<Error = crate::storage::StorageError>
+        + ProjectionWrite<Error = crate::storage::StorageError>, {
     fn inspect_rules(
         &self,
         r_ref: &ResourceRef,

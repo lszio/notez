@@ -61,10 +61,9 @@ fn cli_rules_task_transition_and_agenda() {
         .assert()
         .success();
 
-    // 5. Task transition now requires a writable source. The current
-    // NativeSourceAdapter does not implement mutation, so the operation
-    // must surface an explicit error rather than silently pretending to
-    // succeed. Assert the failure path instead of the old fake success.
+    // 5. Task transition on a native source succeeds via the M4
+    // surgical span writer: the heading line is patched in place and
+    // every other byte of the file is preserved.
     notez_cmd()
         .arg("--space")
         .arg(space)
@@ -75,5 +74,5 @@ fn cli_rules_task_transition_and_agenda() {
         .arg("--to")
         .arg("DONE")
         .assert()
-        .failure();
+        .success();
 }

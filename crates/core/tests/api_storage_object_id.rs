@@ -1,7 +1,4 @@
-use notez_core::domain::{
-    LinkTarget, ProjectionStore, RelationDirection, RelationType, ResolutionStatus,
-    ResolvedRelation, Resource, ResourceKind, ResourceRef, ResourceRelation, derived_object_id,
-};
+use notez_core::domain::{LinkTarget, ProjectionStore, RelationDirection, RelationType, ResolutionStatus, ResolvedRelation, Resource, ResourceKind, ResourceRef, ResourceRelation, derived_object_id, ProjectionReader, ProjectionWrite};
 use notez_core::storage::SqliteProjection;
 use rusqlite::Connection;
 use tempfile::tempdir;

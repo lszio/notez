@@ -7,6 +7,7 @@ use crate::application::service::{
     ApplicationError, ApplicationFacade, DocumentErrorKind, StorageErrorKind,
 };
 use crate::application::use_cases::AttachmentUseCase;
+use crate::domain::{ProjectionReader, ProjectionWrite};
 use crate::application::use_cases::ResourceUseCase;
 use crate::application::write_check;
 use crate::domain::{
@@ -14,7 +15,11 @@ use crate::domain::{
 };
 use std::path::Path;
 
-impl<S: ProjectionStore> AttachmentUseCase for ApplicationFacade<S> {
+impl<S> AttachmentUseCase for ApplicationFacade<S>
+where
+    S: ProjectionStore,
+    S: ProjectionReader<Error = crate::storage::StorageError>
+        + ProjectionWrite<Error = crate::storage::StorageError>, {
     fn add_attachment(
         &mut self,
         file_path: &Path,
@@ -27,14 +32,12 @@ impl<S: ProjectionStore> AttachmentUseCase for ApplicationFacade<S> {
             path: Some(file_path.to_path_buf()),
             source: e.kind(),
         })?;
-        let blob_store = crate::storage::BlobStore::new(&source_root);
-        let meta =
-            blob_store
-                .store_bytes(&bytes, default_mime)
-                .map_err(|e| ApplicationError::Io {
-                    path: Some(file_path.to_path_buf()),
-                    source: e.kind(),
-                })?;
+        let blob_store = crate::application::FilesystemBlobStore::new(&source_root);
+        let meta = <crate::application::FilesystemBlobStore as crate::application::BlobStore>::store_bytes(&blob_store, &bytes, default_mime)
+            .map_err(|e| ApplicationError::Io {
+                path: Some(file_path.to_path_buf()),
+                source: e.kind(),
+            })?;
 
         let att_ulid = if meta.hash.len() >= 32 {
             u128::from_str_radix(&meta.hash[..32], 16)
@@ -125,9 +128,8 @@ impl<S: ProjectionStore> AttachmentUseCase for ApplicationFacade<S> {
             .cloned()
             .unwrap_or_else(|| "application/octet-stream".to_string());
 
-        let blob_store = crate::storage::BlobStore::new(&source_root);
-        let bytes = blob_store
-            .get(hash)
+        let blob_store = crate::application::FilesystemBlobStore::new(&source_root);
+        let bytes = <crate::application::FilesystemBlobStore as crate::application::BlobStore>::load(&blob_store, hash)
             .map_err(|e| ApplicationError::Io {
                 path: None,
                 source: e.kind(),

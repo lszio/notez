@@ -1,4 +1,5 @@
 pub mod adapter;
+pub mod writer;
 pub mod protocol;
 pub mod registry;
 pub use protocol::{

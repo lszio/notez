@@ -37,5 +37,6 @@ pub fn exit_code_for(err: &notez_core::application::ApplicationError) -> i32 {
         ApplicationError::SourceNotFound { .. } => 8,
         ApplicationError::RevisionConflict { .. } => 9,
         ApplicationError::AddressUniqueness { .. } => 10,
+        ApplicationError::InvalidRequest { .. } => 2,
     }
 }

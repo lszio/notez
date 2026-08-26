@@ -24,6 +24,26 @@ impl MarkdownParser {
     }
 }
 
+impl MarkdownParser {
+    /// Read `path` and parse its bytes. Adapters are the only place
+    /// that owns filesystem IO so the core scanner stays pure.
+    pub fn parse_path(
+        &self,
+        path: &std::path::Path,
+        source_id: &str,
+    ) -> Result<notez_core::document::ScannedDocument, notez_core::document::MarkdownDocumentError>
+    {
+        let path_str = path.to_string_lossy().to_string();
+        let bytes = std::fs::read(path).map_err(|e| {
+            notez_core::document::MarkdownDocumentError::Io {
+                path: path_str.clone(),
+                kind: e.kind(),
+            }
+        })?;
+        notez_core::document::MarkdownScanner::parse_bytes(&bytes, source_id, &path_str)
+    }
+}
+
 impl Default for MarkdownParser {
     fn default() -> Self {
         Self::new()

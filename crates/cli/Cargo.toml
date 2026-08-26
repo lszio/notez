@@ -12,8 +12,8 @@ path = "src/lib.rs"
 name = "notez"
 path = "src/main.rs"
 [dependencies]
-core       = { path = "../core" }
-orgmode    = { path = "../adapters/orgmode" }
+notez-core = { path = "../core" }
+notez-protocol = { path = "../protocol" }
 markdown   = { path = "../adapters/markdown" }
 composition = { path = "../composition" }
 tokio      = { version = "1", features = ["rt-multi-thread", "macros", "io-util"] }

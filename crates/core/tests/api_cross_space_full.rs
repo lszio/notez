@@ -6,7 +6,7 @@
 //! on each projection returns the matching row whose `object_id` is
 //! equal across sources while `ref` and `source_id` differ.
 
-use notez_core::domain::{ProjectionStore, ResourceKind};
+use notez_core::domain::{ProjectionStore, ResourceKind, ProjectionReader, ProjectionWrite};
 use notez_core::source::{SourceConfig, SourceKind, SourceRegistry};
 use notez_core::storage::SqliteProjection;
 use tempfile::tempdir;

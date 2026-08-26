@@ -5,7 +5,7 @@ use std::path::Path;
 #[test]
 fn scan_basic_org_fixture() {
     let fixture_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/basic.org");
-    let scanned = OrgScanner::scan(&fixture_path, "native").unwrap();
+    let scanned = { let __bytes = std::fs::read(&fixture_path).unwrap(); OrgScanner::parse_bytes(&__bytes, "native", &fixture_path.to_string_lossy()).unwrap() };
 
     let raw_expected = std::fs::read_to_string(&fixture_path).unwrap();
     assert_eq!(*scanned.raw, raw_expected);
@@ -54,7 +54,7 @@ fn scan_malformed_id_reports_location() {
     let file_path = temp_dir.path().join("malformed.org");
     std::fs::write(&file_path, "#+title: Bad Doc\n#+ID: not-a-ulid\n").unwrap();
 
-    let err = OrgScanner::scan(&file_path, "native").unwrap_err();
+    let err = { let __bytes = std::fs::read(&file_path).unwrap(); OrgScanner::parse_bytes(&__bytes, "native", &file_path.to_string_lossy()).unwrap() };
     match err {
         DocumentError::MalformedId { line, column, .. } => {
             assert_eq!(line, 2);
@@ -80,7 +80,7 @@ fn scan_nested_headings_preserve_parent_ref() {
 "#;
     std::fs::write(&file_path, content).unwrap();
 
-    let scanned = OrgScanner::scan(&file_path, "native").unwrap();
+    let scanned = { let __bytes = std::fs::read(&file_path).unwrap(); OrgScanner::parse_bytes(&__bytes, "native", &file_path.to_string_lossy()).unwrap() };
     assert_eq!(scanned.resources.len(), 3); // 1 doc + 2 headings
 
     let parent = &scanned.resources[1];

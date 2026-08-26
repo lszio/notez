@@ -4,11 +4,13 @@ members = [
     "crates/core",
     "crates/cli",
     "crates/composition",
-    "crates/adapters/markdown",
-    "packages/ui",
+    "crates/adapters/orgmode",
+    "crates/protocol",
+    "crates/preview",
     "packages/web",
     "packages/desktop",
     "packages/mobile",
+    "packages/ui",
     "packages/api",
 ]
 

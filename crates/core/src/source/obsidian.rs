@@ -47,7 +47,14 @@ impl SourceAdapter for ObsidianSourceAdapter {
         let mut link_occurrences = Vec::new();
 
         for path in entries {
-            let doc = MarkdownScanner::scan(&path, &self.config.id)?;
+            // M4 v1: same inline-shim rationale as GitSourceAdapter.
+            let bytes = std::fs::read(&path).map_err(SourceError::Io)?;
+            let doc = MarkdownScanner::parse_bytes(
+                &bytes,
+                &self.config.id,
+                &path.to_string_lossy(),
+            )
+            .map_err(|e| SourceError::Parse(e.to_string()))?;
             resources.extend(doc.resources);
             relations.extend(doc.links);
             link_occurrences.extend(doc.link_occurrences);

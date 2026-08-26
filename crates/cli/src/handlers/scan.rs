@@ -4,11 +4,12 @@ use serde_json::json;
 use std::process::exit;
 
 use super::{Service, exit_code_for};
-use notez_core::application::use_cases::ScanUseCase;
+use notez_core::application::dispatcher::{ApplicationDispatcher, Response};
+use notez_protocol::request::{Request, ScanNativeRequest};
 
 pub fn run_scan(json: bool, service: &mut Service) {
-    match ScanUseCase::scan_native(service) {
-        Ok(report) => {
+    match ApplicationDispatcher::new(service).dispatch(Request::ScanNative(ScanNativeRequest {})) {
+        Ok(Response::Scan(report)) => {
             if json {
                 println!(
                     "{}",
@@ -29,5 +30,6 @@ pub fn run_scan(json: bool, service: &mut Service) {
             eprintln!("Scan error: {e}");
             exit(exit_code_for(&e));
         }
+        other => unreachable!("unexpected dispatcher response: {other:?}"),
     }
 }

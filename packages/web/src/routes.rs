@@ -67,7 +67,7 @@ impl WebState {
             }
         }
         let sel = core_resolve_space(&canonical).map_err(WebRouteError::from)?;
-        let handle = notez_composition::open_selected(&sel, None)
+        let handle = notez_composition::native::open_selected(&sel, None)
             .map_err(|e| WebRouteError::Internal(e.to_string()))?;
         let facade = Arc::new(Mutex::new(handle.facade));
         self.facades
@@ -215,7 +215,13 @@ fn do_scan(state: &WebState, form: SpaceForm) -> Result<Redirect, WebRouteError>
 
 fn do_watch_start(state: &WebState, form: SpaceForm) -> Result<Redirect, WebRouteError> {
     let source_root = resolve_form_space(&form)?;
-    state.watch.start(&source_root)?;
+    // Idempotent: the auto-watch middleware may already have started
+    // this watch; re-posting the form must not surface as a 500.
+    match state.watch.start(&source_root) {
+        Ok(_) => {}
+        Err(WatchError::AlreadyActive(_)) => {}
+        Err(e) => return Err(e.into()),
+    }
     Ok(Redirect::to(&format!(
         "{}{}",
         route_for_space_list(&source_root.to_string_lossy()),

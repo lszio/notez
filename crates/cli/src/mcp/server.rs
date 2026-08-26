@@ -4,24 +4,40 @@
 //! (rmcp's `LATEST`). All tools are callable immediately after `initialize`
 //! returns; the server does NOT track `notifications/initialized` and does
 //! NOT gate tool calls on any client handshake.
+//!
+//! Tool execution flow (M1 protocol unification): each tool deserializes its
+//! raw JSON arguments into the matching [`notez_protocol`] request struct —
+//! accepting both the historical MCP argument names (`ref`, `to`,
+//! `community`, …) and the canonical protocol names — wraps it in a
+//! [`Request`] and hands it to the engine's [`ApplicationDispatcher`], the
+//! sole interpreter of the protocol (ref/kind parsing, write checks). On
+//! success the tool serializes the *unwrapped* payload from the [`Response`]
+//! envelope, so every tool's text output stays wire-compatible with earlier
+//! releases. A few service-level tools (`source_list`, `source_add`,
+//! `watch_*`, `list_capabilities`) have no protocol request yet and keep
+//! calling the application service directly.
+//!
+//! Input schemas advertised via `tools/list` are generated from the protocol
+//! request types with `schemars::schema_for!`; there are no hand-written
+//! `JsonSchema` impls left in this module.
 
-use std::sync::{Arc, Mutex};
+use std::collections::BTreeMap;
+use std::sync::{Arc, LazyLock, Mutex};
 
-use notez_core::application::{
-    ApplicationService, ResolveResult,
-    use_cases::{
-        ArtifactUseCase, AttachmentUseCase, CommunityUseCase, InspectUseCase, LinkUseCase,
-        ResourceUseCase, ScanUseCase, SyncUseCase, TaskUseCase,
-    },
-};
-use notez_core::domain::{ResourceKind, ResourceRef, Selector};
+use notez_core::application::dispatcher::{ApplicationDispatcher, Response};
+use notez_core::application::{ApplicationService, ResolveResult};
 use notez_core::storage::SqliteProjection;
+use notez_protocol::request::{
+    AddAttachmentRequest, AgendaRequest, ArtifactFreshnessRequest, CreateCommunityRequest,
+    DeriveArtifactRequest, DiagnoseLinkRequest, ExportSkillRequest, ExtractAttachmentRequest,
+    InspectRulesRequest, ListConflictsRequest, ListJobsRequest, ListLinksRequest,
+    QueryResourcesRequest, QuerySegmentsRequest, ReadResourceRequest, ReindexLinksRequest,
+    Request, ResolveLinksRequest, ResolveRequest, SourceDoctorRequest, SyncPullRequest,
+    SyncPushRequest, TransitionTaskRequest,
+};
 use rmcp::{
     ErrorData as McpError, ServerHandler, ServiceExt,
-    handler::server::{
-        tool::ToolRouter,
-        wrapper::{Json, Parameters},
-    },
+    handler::server::{tool::ToolRouter, wrapper::Parameters},
     model::*,
     tool, tool_handler, tool_router,
 };
@@ -29,172 +45,33 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Argument DTOs
+// Service-level argument DTOs
 //
-// Each `schemars`-derived struct becomes the JSON schema exposed via
-// `tools/list`. Field names match the legacy hand-rolled server EXACTLY —
-// clients depend on them.
+// Tools that have no protocol request yet keep small local argument structs.
+// They are plain `#[derive(schemars::JsonSchema)]`: the workspace no longer
+// shadows `::core`, so derived schemas work everywhere.
 // ─────────────────────────────────────────────────────────────────────────────
 
-use schemars::{Schema, SchemaGenerator};
-use std::borrow::Cow;
-
-// Hand-rolled `schemars::JsonSchema` impls for the 13 MCP tool DTOs.
-//
-// We cannot use `#[derive(schemars::JsonSchema)]` because the workspace's
-// core crate is also named `core`, and schemars' 1.x derive macro emits
-// absolute `::core::*` paths (convert, concat, marker, stringify, module_path)
-// that resolve to our local package rather than the standard library.
-// Hand-rolled impls dodge the macro entirely.
-//
-// Each schema mirrors the JSON the legacy derive produced: a top-level
-// object with `type: "object"`, a `properties` map keyed by snake_case
-// field name, and a `required` array listing the non-Option fields.
-// Doc comments are preserved as `description` strings to keep the
-// existing `tools/list` output stable for clients.
-
-fn object_schema(properties: serde_json::Value, required: &[&str]) -> Schema {
-    let mut map = serde_json::Map::new();
-    map.insert("type".to_string(), serde_json::json!("object"));
-    map.insert("properties".to_string(), properties);
-    if !required.is_empty() {
-        map.insert("required".to_string(), serde_json::json!(required));
-    }
-    Schema::from(map)
-}
-
-fn prop_str(desc: &str) -> serde_json::Value {
-    serde_json::json!({ "type": "string", "description": desc })
-}
-fn prop_opt_str() -> serde_json::Value {
-    serde_json::json!({ "type": "string" })
-}
-fn prop_bool() -> serde_json::Value {
-    serde_json::json!({ "type": "boolean" })
-}
-fn prop_str_array() -> serde_json::Value {
-    serde_json::json!({ "type": "array", "items": { "type": "string" } })
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub struct ResolveArgs {
-    /// Query string to resolve. Accepts bare IDs and fully qualified
-    /// addresses (`document:01J...`).
-    pub query: String,
-}
-impl schemars::JsonSchema for ResolveArgs {
-    fn schema_name() -> Cow<'static, str> {
-        "ResolveArgs".into()
-    }
-    fn json_schema(g: &mut SchemaGenerator) -> Schema {
-        let mut p = serde_json::Map::new();
-        p.insert("query".into(), prop_str(
-            "Query string to resolve. Accepts bare IDs and fully qualified addresses (`document:01J...`)."));
-        object_schema(serde_json::Value::Object(p), &["query"])
-    }
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub struct QueryArgs {
-    /// Optional resource kind filter (`document`, `heading`, `attachment`).
-    pub kind: Option<String>,
-    /// Optional case-sensitive substring filter on the resource title.
-    pub title_contains: Option<String>,
-}
-impl schemars::JsonSchema for QueryArgs {
-    fn schema_name() -> Cow<'static, str> {
-        "QueryArgs".into()
-    }
-    fn json_schema(g: &mut SchemaGenerator) -> Schema {
-        let mut p = serde_json::Map::new();
-        p.insert("kind".into(), prop_opt_str());
-        p.insert("title_contains".into(), prop_opt_str());
-        object_schema(serde_json::Value::Object(p), &[])
-    }
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub struct RefArgs {
-    /// A `ResourceRef` string (e.g. `heading:01J...`).
-    pub r#ref: String,
-}
-impl schemars::JsonSchema for RefArgs {
-    fn schema_name() -> Cow<'static, str> {
-        "RefArgs".into()
-    }
-    fn json_schema(g: &mut SchemaGenerator) -> Schema {
-        let mut p = serde_json::Map::new();
-        p.insert(
-            "ref".into(),
-            prop_str("A `ResourceRef` string (e.g. `heading:01J...`)."),
-        );
-        object_schema(serde_json::Value::Object(p), &["ref"])
-    }
-}
-/// Arguments for `watch_status` — a space path and an event limit.
-#[derive(Debug, Deserialize, Default)]
-#[serde(rename_all = "snake_case")]
-pub struct WatchStatusArgs {
-    pub space: Option<String>,
-    pub limit: Option<usize>,
-}
-impl schemars::JsonSchema for WatchStatusArgs {
-    fn schema_name() -> Cow<'static, str> {
-        "WatchStatusArgs".into()
-    }
-    fn json_schema(g: &mut SchemaGenerator) -> Schema {
-        let mut p = serde_json::Map::new();
-        p.insert(
-            "space".into(),
-            prop_str("Optional space name or absolute path. Defaults to the active space."),
-        );
-        p.insert(
-            "limit".into(),
-            prop_str("Maximum number of recent events to return. Default 50."),
-        );
-        object_schema(serde_json::Value::Object(p), &[])
-    }
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub struct InspectArgs {
-    /// Optional resource ref. When present, returns occurrences, resolved
-    /// relations, and diagnostics for that resource.
-    pub r#ref: Option<String>,
-}
-impl schemars::JsonSchema for InspectArgs {
-    fn schema_name() -> Cow<'static, str> {
-        "InspectArgs".into()
-    }
-    fn json_schema(g: &mut SchemaGenerator) -> Schema {
-        let mut p = serde_json::Map::new();
-        p.insert("ref".into(), prop_opt_str());
-        object_schema(serde_json::Value::Object(p), &[])
-    }
-}
-
-#[derive(Debug, Deserialize)]
+/// Arguments for tools that address a space by filesystem path.
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub struct SpaceArgs {
     /// Filesystem path to the space root. Defaults to `.` when omitted.
     pub space: Option<String>,
 }
-impl schemars::JsonSchema for SpaceArgs {
-    fn schema_name() -> Cow<'static, str> {
-        "SpaceArgs".into()
-    }
-    fn json_schema(g: &mut SchemaGenerator) -> Schema {
-        let mut p = serde_json::Map::new();
-        p.insert("space".into(), prop_opt_str());
-        object_schema(serde_json::Value::Object(p), &[])
-    }
+
+/// Arguments for `watch_status` — a space path and an event limit.
+#[derive(Debug, Deserialize, Default, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub struct WatchStatusArgs {
+    /// Optional space name or absolute path. Defaults to the active space.
+    pub space: Option<String>,
+    /// Maximum number of recent events to return. Default 50.
+    pub limit: Option<usize>,
 }
 
-#[derive(Debug, Deserialize)]
+/// Arguments for `source_add`.
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub struct SourceAddArgs {
     pub space: Option<String>,
@@ -205,166 +82,88 @@ pub struct SourceAddArgs {
     pub include_paths: Option<Vec<String>>,
     pub exclude_paths: Option<Vec<String>>,
 }
-impl schemars::JsonSchema for SourceAddArgs {
-    fn schema_name() -> Cow<'static, str> {
-        "SourceAddArgs".into()
-    }
-    fn json_schema(g: &mut SchemaGenerator) -> Schema {
-        let mut p = serde_json::Map::new();
-        p.insert("space".into(), prop_opt_str());
-        p.insert("id".into(), prop_str(""));
-        p.insert("kind".into(), prop_str(""));
-        p.insert("path".into(), prop_str(""));
-        p.insert("read_only".into(), prop_bool());
-        p.insert("include_paths".into(), prop_str_array());
-        p.insert("exclude_paths".into(), prop_str_array());
-        object_schema(serde_json::Value::Object(p), &["id", "kind", "path"])
-    }
-}
 
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub struct AttachmentAddArgs {
-    pub space: Option<String>,
-    pub path: String,
-    pub mime: Option<String>,
-}
-impl schemars::JsonSchema for AttachmentAddArgs {
-    fn schema_name() -> Cow<'static, str> {
-        "AttachmentAddArgs".into()
-    }
-    fn json_schema(g: &mut SchemaGenerator) -> Schema {
-        let mut p = serde_json::Map::new();
-        p.insert("space".into(), prop_opt_str());
-        p.insert("path".into(), prop_str(""));
-        p.insert("mime".into(), prop_opt_str());
-        object_schema(serde_json::Value::Object(p), &["path"])
-    }
-}
+// ─────────────────────────────────────────────────────────────────────────────
+// tools/list input schemas
+//
+// Generated once from the protocol request types — one schema, one source of
+// truth. Tools whose handler takes raw `Value` arguments (to accept legacy
+// argument names) get their real schemas patched in here; without this they
+// would advertise a catch-all object.
+// ─────────────────────────────────────────────────────────────────────────────
 
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub struct AttachmentExtractArgs {
-    pub space: Option<String>,
-    pub r#ref: String,
-}
-impl schemars::JsonSchema for AttachmentExtractArgs {
-    fn schema_name() -> Cow<'static, str> {
-        "AttachmentExtractArgs".into()
+static TOOL_SCHEMAS: LazyLock<BTreeMap<&'static str, JsonObject>> = LazyLock::new(|| {
+    fn schema_of<T: schemars::JsonSchema>() -> JsonObject {
+        match serde_json::to_value(schemars::schema_for!(T)) {
+            Ok(Value::Object(map)) => map,
+            _ => unreachable!("struct schemas serialize to JSON objects"),
+        }
     }
-    fn json_schema(g: &mut SchemaGenerator) -> Schema {
-        let mut p = serde_json::Map::new();
-        p.insert("space".into(), prop_opt_str());
-        p.insert("ref".into(), prop_str(""));
-        object_schema(serde_json::Value::Object(p), &["ref"])
+    fn object_map(value: Value) -> JsonObject {
+        match value {
+            Value::Object(map) => map,
+            _ => unreachable!("literal schemas are JSON objects"),
+        }
     }
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub struct CommunityCreateArgs {
-    pub space: Option<String>,
-    pub id: String,
-    pub name: String,
-    pub kind: Option<String>,
-    pub title_contains: Option<String>,
-}
-impl schemars::JsonSchema for CommunityCreateArgs {
-    fn schema_name() -> Cow<'static, str> {
-        "CommunityCreateArgs".into()
-    }
-    fn json_schema(g: &mut SchemaGenerator) -> Schema {
-        let mut p = serde_json::Map::new();
-        p.insert("space".into(), prop_opt_str());
-        p.insert("id".into(), prop_str(""));
-        p.insert("name".into(), prop_str(""));
-        p.insert("kind".into(), prop_opt_str());
-        p.insert("title_contains".into(), prop_opt_str());
-        object_schema(serde_json::Value::Object(p), &["id", "name"])
-    }
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub struct DeriveArtifactArgs {
-    pub space: Option<String>,
-    pub community: String,
-    pub recipe: String,
-}
-impl schemars::JsonSchema for DeriveArtifactArgs {
-    fn schema_name() -> Cow<'static, str> {
-        "DeriveArtifactArgs".into()
-    }
-    fn json_schema(g: &mut SchemaGenerator) -> Schema {
-        let mut p = serde_json::Map::new();
-        p.insert("space".into(), prop_opt_str());
-        p.insert("community".into(), prop_str(""));
-        p.insert("recipe".into(), prop_str(""));
-        object_schema(serde_json::Value::Object(p), &["community", "recipe"])
-    }
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub struct ExportSkillArgs {
-    pub space: Option<String>,
-    pub community: String,
-    pub description: Option<String>,
-    pub out: String,
-}
-impl schemars::JsonSchema for ExportSkillArgs {
-    fn schema_name() -> Cow<'static, str> {
-        "ExportSkillArgs".into()
-    }
-    fn json_schema(g: &mut SchemaGenerator) -> Schema {
-        let mut p = serde_json::Map::new();
-        p.insert("space".into(), prop_opt_str());
-        p.insert("community".into(), prop_str(""));
-        p.insert("description".into(), prop_opt_str());
-        p.insert("out".into(), prop_str(""));
-        object_schema(serde_json::Value::Object(p), &["community", "out"])
-    }
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub struct SyncArgs {
-    pub space: Option<String>,
-    pub actor: Option<String>,
-    pub folder: String,
-}
-impl schemars::JsonSchema for SyncArgs {
-    fn schema_name() -> Cow<'static, str> {
-        "SyncArgs".into()
-    }
-    fn json_schema(g: &mut SchemaGenerator) -> Schema {
-        let mut p = serde_json::Map::new();
-        p.insert("space".into(), prop_opt_str());
-        p.insert("actor".into(), prop_opt_str());
-        p.insert("folder".into(), prop_str(""));
-        object_schema(serde_json::Value::Object(p), &["folder"])
-    }
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub struct TaskTransitionArgs {
-    pub r#ref: String,
-    pub to: String,
-    pub timestamp: Option<String>,
-}
-impl schemars::JsonSchema for TaskTransitionArgs {
-    fn schema_name() -> Cow<'static, str> {
-        "TaskTransitionArgs".into()
-    }
-    fn json_schema(g: &mut SchemaGenerator) -> Schema {
-        let mut p = serde_json::Map::new();
-        p.insert("ref".into(), prop_str(""));
-        p.insert("to".into(), prop_str(""));
-        p.insert("timestamp".into(), prop_opt_str());
-        object_schema(serde_json::Value::Object(p), &["ref", "to"])
-    }
-}
+    BTreeMap::from([
+        ("agenda", schema_of::<AgendaRequest>()),
+        ("artifact_stale", schema_of::<ArtifactFreshnessRequest>()),
+        ("attachment_add", schema_of::<AddAttachmentRequest>()),
+        ("attachment_extract", schema_of::<ExtractAttachmentRequest>()),
+        ("community_create", schema_of::<CreateCommunityRequest>()),
+        (
+            "derive_artifact",
+            schema_of::<DeriveArtifactRequest>(),
+        ),
+        ("export_skill", schema_of::<ExportSkillRequest>()),
+        ("inspect_rules", schema_of::<InspectRulesRequest>()),
+        ("job_list", schema_of::<ListJobsRequest>()),
+        ("link_diagnose", schema_of::<DiagnoseLinkRequest>()),
+        ("link_list", schema_of::<ListLinksRequest>()),
+        ("link_reindex", schema_of::<ReindexLinksRequest>()),
+        ("link_resolve", schema_of::<ResolveLinksRequest>()),
+        (
+            "list_capabilities",
+            object_map(json!({ "type": "object" })),
+        ),
+        (
+            // Composite snapshot: an optional ref plus the query filters.
+            "inspect",
+            object_map(json!({
+                "type": "object",
+                "properties": {
+                    "ref": {
+                        "type": "string",
+                        "description": "Optional resource ref. When present, returns occurrences, resolved relations, and diagnostics for that resource."
+                    },
+                    "source_ref": {
+                        "type": "string",
+                        "description": "Canonical spelling of `ref`."
+                    },
+                    "kind": { "type": "string" },
+                    "title_contains": { "type": "string" },
+                    "exact_ref": { "type": "string" },
+                    "source_id": { "type": "string" },
+                    "limit": { "type": "integer" }
+                }
+            })),
+        ),
+        ("query", schema_of::<QueryResourcesRequest>()),
+        ("query_segments", schema_of::<QuerySegmentsRequest>()),
+        ("read", schema_of::<ReadResourceRequest>()),
+        ("resolve", schema_of::<ResolveRequest>()),
+        ("source_doctor", schema_of::<SourceDoctorRequest>()),
+        ("source_add", schema_of::<SourceAddArgs>()),
+        ("source_list", schema_of::<SpaceArgs>()),
+        ("sync_conflicts", schema_of::<ListConflictsRequest>()),
+        ("sync_pull", schema_of::<SyncPullRequest>()),
+        ("sync_push", schema_of::<SyncPushRequest>()),
+        ("task_transition", schema_of::<TransitionTaskRequest>()),
+        ("watch_start", schema_of::<SpaceArgs>()),
+        ("watch_status", schema_of::<WatchStatusArgs>()),
+        ("watch_stop", schema_of::<SpaceArgs>()),
+    ])
+});
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Result helpers
@@ -400,8 +199,69 @@ fn struct_err(err: &notez_core::application::ApplicationError) -> Result<CallToo
         notez_core::application::ApplicationError::SourceNotFound { .. } => "source_not_found",
         notez_core::application::ApplicationError::RevisionConflict { .. } => "revision_conflict",
         notez_core::application::ApplicationError::AddressUniqueness { .. } => "address_uniqueness",
+        notez_core::application::ApplicationError::InvalidRequest { .. } => "invalid_request",
     };
     text_err(serde_json::json!({ "kind": kind, "message": err.to_string() }).to_string())
+}
+
+/// Serialize a successful dispatcher payload as the tool's text content.
+fn payload_ok<T: serde::Serialize>(value: &T) -> Result<CallToolResult, McpError> {
+    match serde_json::to_value(value) {
+        Ok(v) => text_ok(v),
+        Err(e) => text_err(format!("Internal serialization error: {e}")),
+    }
+}
+
+/// Message for the impossible case of a response variant not matching the
+/// dispatched request.
+fn unexpected_response(resp: &Response) -> String {
+    format!("Internal dispatcher error: unexpected response variant {resp:?}")
+}
+
+/// Deserialize raw tool arguments into a protocol request struct, first
+/// translating legacy MCP argument names onto canonical protocol field
+/// names. Clients depend on the historical spellings (`ref`, `to`,
+/// `community`, …), so both are accepted; when both are present the
+/// Raw tool arguments. rmcp requires the handler parameter type to
+/// carry an object-typed JSON Schema; `serde_json::Value` alone does
+/// not, so tools accepting free-form maps use this newtype.
+#[derive(Debug, serde::Deserialize)]
+struct RawArgs(Value);
+
+impl schemars::JsonSchema for RawArgs {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        std::borrow::Cow::Borrowed("RawArgs")
+    }
+    fn json_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        serde_json::from_value(json!({
+            "type": "object",
+            "additionalProperties": true
+        }))
+        .expect("static object schema")
+    }
+}
+
+/// canonical name wins. `fill` inserts defaults for fields the MCP surface
+/// has always defaulted differently from the protocol.
+fn parse_args<T: serde::de::DeserializeOwned>(
+    args: &Value,
+    renames: &[(&str, &str)],
+    fill: &[(&str, &str)],
+) -> Result<T, McpError> {
+    let mut value = args.clone();
+    if let Some(obj) = value.as_object_mut() {
+        for &(from, to) in renames {
+            if let Some(v) = obj.remove(from) {
+                obj.entry(to.to_string()).or_insert(v);
+            }
+        }
+        for &(key, default) in fill {
+            obj.entry(key.to_string())
+                .or_insert_with(|| Value::String(default.to_string()));
+        }
+    }
+    serde_json::from_value(value)
+        .map_err(|e| McpError::invalid_params(format!("Invalid tool arguments: {e}"), None))
 }
 
 fn space_path(arg: Option<&str>) -> std::path::PathBuf {
@@ -435,6 +295,19 @@ impl NotezMcpServer {
             tool_router: Self::tool_router(),
         }
     }
+
+    /// Run one protocol request through the engine dispatcher while holding
+    /// the service mutex mutably (dispatch interprets writes too).
+    fn dispatch(
+        &self,
+        req: Request,
+    ) -> Result<Response, notez_core::application::ApplicationError> {
+        self.with_service_mut(|svc| {
+            let mut dispatcher = ApplicationDispatcher::new(svc);
+            dispatcher.dispatch(req)
+        })
+    }
+
     fn with_service<R>(&self, f: impl FnOnce(&ApplicationService<SqliteProjection>) -> R) -> R {
         let guard = self.service.lock().expect("service mutex poisoned");
         f(&*guard)
@@ -455,85 +328,49 @@ impl NotezMcpServer {
     #[tool(description = "Resolve a query string to a ResourceRef")]
     fn resolve(
         &self,
-        Parameters(args): Parameters<ResolveArgs>,
+        Parameters(args): Parameters<RawArgs>,
     ) -> Result<CallToolResult, McpError> {
-        self.with_service(|svc| {
-            let address_str: &str = &args.query;
-            if let Ok(addr) = notez_core::domain::ResourceAddress::parse(address_str) {
-                match ResourceUseCase::resolve_address(svc, &addr) {
-                    Ok(ResolveResult::Found(r_ref)) => text_ok(json!({ "ref": r_ref.to_string() })),
-                    Ok(ResolveResult::NotFound) => {
-                        text_err(format!("Resource not found: {address_str}"))
-                    }
-                    Ok(ResolveResult::Ambiguous(refs)) => {
-                        let str_refs: Vec<String> = refs.iter().map(|r| r.to_string()).collect();
-                        text_err(format!(
-                            "Ambiguous resolve '{address_str}': matches {str_refs:?}"
-                        ))
-                    }
-                    Err(e) => struct_err(&e),
+        let req: ResolveRequest = parse_args(&args.0, &[], &[])?;
+        let query = req.query.clone();
+        match self.dispatch(Request::Resolve(req)) {
+            Ok(Response::Resolve(result)) => match result {
+                ResolveResult::Found(r_ref) => text_ok(json!({ "ref": r_ref.to_string() })),
+                ResolveResult::NotFound => text_err(format!("Resource not found: {query}")),
+                ResolveResult::Ambiguous(refs) => {
+                    let str_refs: Vec<String> = refs.iter().map(|r| r.to_string()).collect();
+                    text_err(format!(
+                        "Ambiguous resolve '{query}': matches {str_refs:?}"
+                    ))
                 }
-            } else {
-                match ResourceUseCase::resolve(svc, address_str) {
-                    Ok(ResolveResult::Found(r_ref)) => text_ok(json!({ "ref": r_ref.to_string() })),
-                    Ok(ResolveResult::NotFound) => {
-                        text_err(format!("Resource not found: {address_str}"))
-                    }
-                    Ok(ResolveResult::Ambiguous(refs)) => {
-                        let str_refs: Vec<String> = refs.iter().map(|r| r.to_string()).collect();
-                        text_err(format!(
-                            "Ambiguous resolve '{address_str}': matches {str_refs:?}"
-                        ))
-                    }
-                    Err(e) => struct_err(&e),
-                }
-            }
-        })
+            },
+            Ok(other) => text_err(unexpected_response(&other)),
+            Err(e) => struct_err(&e),
+        }
     }
 
     #[tool(description = "Query resources in the space")]
-    fn query(&self, Parameters(args): Parameters<QueryArgs>) -> Result<CallToolResult, McpError> {
-        self.with_service(|svc| {
-            let mut selector: Selector = Selector::default();
-            if let Some(kind_str) = args.kind.as_deref() {
-                match kind_str {
-                    "document" => selector.kind = Some(ResourceKind::Document),
-                    "heading" => selector.kind = Some(ResourceKind::Heading),
-                    "attachment" => selector.kind = Some(ResourceKind::Attachment),
-                    other => return text_err(format!("Unknown resource kind: {other}")),
-                }
-            }
-            if let Some(title_sub) = args.title_contains.as_deref() {
-                selector.title_contains = Some(title_sub.to_owned());
-            }
-            match ResourceUseCase::query(svc, &selector) {
-                Ok(page) => match serde_json::to_value(&page) {
-                    Ok(v) => text_ok(v),
-                    Err(e) => text_err(format!("Internal query serialization error: {e}")),
-                },
-                Err(e) => struct_err(&e),
-            }
-        })
+    fn query(
+        &self,
+        Parameters(args): Parameters<RawArgs>,
+    ) -> Result<CallToolResult, McpError> {
+        let req: QueryResourcesRequest = parse_args(&args.0, &[], &[])?;
+        match self.dispatch(Request::QueryResources(req)) {
+            Ok(Response::ResourcePage(page)) => payload_ok(&page),
+            Ok(other) => text_err(unexpected_response(&other)),
+            Err(e) => struct_err(&e),
+        }
     }
 
     #[tool(description = "Read details of a resource by ref")]
-    fn read(&self, Parameters(args): Parameters<RefArgs>) -> Result<CallToolResult, McpError> {
-        self.with_service(|svc| {
-            let r_ref = match ResourceRef::parse(&args.r#ref) {
-                Ok(r) => r,
-                Err(e) => {
-                    return text_err(format!("Invalid resource ref '{}': {e}", args.r#ref));
-                }
-            };
-            match ResourceUseCase::read(svc, &r_ref) {
-                Ok(Some(res)) => match serde_json::to_value(&res) {
-                    Ok(v) => text_ok(v),
-                    Err(e) => text_err(format!("Internal read serialization error: {e}")),
-                },
-                Ok(None) => text_err(format!("Resource not found: {}", args.r#ref)),
-                Err(e) => struct_err(&e),
-            }
-        })
+    fn read(&self, Parameters(args): Parameters<RawArgs>) -> Result<CallToolResult, McpError> {
+        let req: ReadResourceRequest = parse_args(&args.0, &[("ref", "r_ref")], &[])?;
+        let ref_str = req.r_ref.clone();
+        match self.dispatch(Request::ReadResource(req)) {
+            Ok(Response::Resource(Some(resource))) => payload_ok(&resource),
+            Ok(Response::Resource(None)) => text_err(format!("Resource not found: {ref_str}")),
+            Ok(other) => text_err(unexpected_response(&other)),
+            Err(e) => struct_err(&e),
+        }
     }
 
     #[tool(
@@ -541,200 +378,168 @@ impl NotezMcpServer {
     )]
     fn inspect(
         &self,
-        Parameters(args): Parameters<InspectArgs>,
+        Parameters(args): Parameters<RawArgs>,
     ) -> Result<CallToolResult, McpError> {
-        // resolve_links + reindex_links need &mut self, so take the mutex
-        // mutably. The link_list + diagnose_link + query variants are read-only
-        // but we run them all through the same mutex to keep the snapshot
-        // consistent.
-        self.with_service_mut(|svc| {
-            if let Some(ref_str) = args.r#ref.as_deref() {
-                let parsed = match ResourceRef::parse(ref_str) {
-                    Ok(r) => r,
-                    Err(e) => return text_err(format!("Invalid resource ref '{ref_str}': {e}")),
-                };
-                let occs = match LinkUseCase::list_links(svc, &parsed) {
-                    Ok(o) => o,
-                    Err(e) => return struct_err(&e),
-                };
-                let resolved = match LinkUseCase::resolve_links(svc, &parsed) {
-                    Ok(r) => r,
-                    Err(e) => return struct_err(&e),
-                };
-                let diags = match LinkUseCase::diagnose_link(svc, &parsed) {
-                    Ok(d) => d,
-                    Err(e) => return struct_err(&e),
-                };
-                let mut by_status = serde_json::Map::new();
-                for d in &diags {
-                    let key = format!("{:?}", d.status);
-                    let count = by_status.get(&key).and_then(|v| v.as_u64()).unwrap_or(0);
-                    by_status.insert(key, serde_json::json!(count + 1));
+        let raw_ref = args.0
+            .get("ref")
+            .or_else(|| args.0.get("source_ref"))
+            .and_then(Value::as_str)
+            .map(str::to_owned);
+        let Some(ref_str) = raw_ref else {
+            let req = QueryResourcesRequest {
+                kind: None,
+                title_contains: None,
+                exact_ref: None,
+                source_id: None,
+                limit: None,
+            };
+            return match self.dispatch(Request::QueryResources(req)) {
+                Ok(Response::ResourcePage(page)) => {
+                    text_ok(json!({ "status": "ok", "total_items": page.items.len() }))
                 }
-                text_ok(json!({
-                    "ref": parsed.to_string(),
-                    "occurrences": occs,
-                    "resolved_relations": resolved,
-                    "diagnostics": diags,
-                    "occurrences_by_status": by_status,
-                }))
-            } else {
-                let selector: Selector = Selector::default();
-                match ResourceUseCase::query(svc, &selector) {
-                    Ok(page) => text_ok(json!({
-                        "status": "ok",
-                        "total_items": page.items.len(),
-                    })),
-                    Err(e) => struct_err(&e),
-                }
-            }
-        })
+                Ok(other) => text_err(unexpected_response(&other)),
+                Err(e) => struct_err(&e),
+            };
+        };
+        // resolve_links persists relations, so run the whole composite
+        // snapshot through the mutable service view (the dispatcher takes
+        // `&mut` anyway).
+        let occs = match self.dispatch(Request::ListLinks(ListLinksRequest {
+            source_ref: ref_str.clone(),
+        })) {
+            Ok(Response::Occurrences(occs)) => occs,
+            Ok(other) => return text_err(unexpected_response(&other)),
+            Err(e) => return struct_err(&e),
+        };
+        let resolved = match self.dispatch(Request::ResolveLinks(ResolveLinksRequest {
+            source_ref: ref_str.clone(),
+        })) {
+            Ok(Response::Relations(rels)) => rels,
+            Ok(other) => return text_err(unexpected_response(&other)),
+            Err(e) => return struct_err(&e),
+        };
+        let diags = match self.dispatch(Request::DiagnoseLink(DiagnoseLinkRequest {
+            source_ref: ref_str.clone(),
+        })) {
+            Ok(Response::Diagnostics(diags)) => diags,
+            Ok(other) => return text_err(unexpected_response(&other)),
+            Err(e) => return struct_err(&e),
+        };
+        let mut by_status = serde_json::Map::new();
+        for d in &diags {
+            let key = format!("{:?}", d.status);
+            let count = by_status.get(&key).and_then(Value::as_u64).unwrap_or(0);
+            by_status.insert(key, json!(count + 1));
+        }
+        text_ok(json!({
+            "ref": ref_str,
+            "occurrences": occs,
+            "resolved_relations": resolved,
+            "diagnostics": diags,
+            "occurrences_by_status": by_status,
+        }))
     }
 
     #[tool(description = "Inspect rule traces for a resource ref")]
     fn inspect_rules(
         &self,
-        Parameters(args): Parameters<RefArgs>,
+        Parameters(args): Parameters<RawArgs>,
     ) -> Result<CallToolResult, McpError> {
-        self.with_service(|svc| {
-            let r_ref = match ResourceRef::parse(&args.r#ref) {
-                Ok(r) => r,
-                Err(e) => {
-                    return text_err(format!("Invalid resource ref '{}': {e}", args.r#ref));
-                }
-            };
-            match InspectUseCase::inspect_rules(svc, &r_ref) {
-                Ok(Some(inspect_res)) => match serde_json::to_value(&inspect_res) {
-                    Ok(v) => text_ok(v),
-                    Err(e) => text_err(format!("Internal inspect_rules serialization error: {e}")),
-                },
-                Ok(None) => text_err(format!("Resource not found: {}", args.r#ref)),
-                Err(e) => struct_err(&e),
+        let req: InspectRulesRequest = parse_args(&args.0, &[("ref", "source_ref")], &[])?;
+        let ref_str = req.source_ref.clone();
+        match self.dispatch(Request::InspectRules(req)) {
+            Ok(Response::InspectRules(Some(inspect_res))) => payload_ok(&inspect_res),
+            Ok(Response::InspectRules(None)) => {
+                text_err(format!("Resource not found: {ref_str}"))
             }
-        })
+            Ok(other) => text_err(unexpected_response(&other)),
+            Err(e) => struct_err(&e),
+        }
     }
 
     #[tool(description = "List link occurrences for a resource")]
-    fn link_list(&self, Parameters(args): Parameters<RefArgs>) -> Result<CallToolResult, McpError> {
-        self.with_service(|svc| {
-            let r_ref = match ResourceRef::parse(&args.r#ref) {
-                Ok(r) => r,
-                Err(e) => {
-                    return text_err(format!("Invalid resource ref '{}': {e}", args.r#ref));
-                }
-            };
-            match LinkUseCase::list_links(svc, &r_ref) {
-                Ok(occs) => match serde_json::to_value(&occs) {
-                    Ok(v) => text_ok(v),
-                    Err(e) => text_err(format!("Internal link_list serialization error: {e}")),
-                },
-                Err(e) => struct_err(&e),
-            }
-        })
+    fn link_list(
+        &self,
+        Parameters(args): Parameters<RawArgs>,
+    ) -> Result<CallToolResult, McpError> {
+        let req: ListLinksRequest = parse_args(&args.0, &[("ref", "source_ref")], &[])?;
+        match self.dispatch(Request::ListLinks(req)) {
+            Ok(Response::Occurrences(occs)) => payload_ok(&occs),
+            Ok(other) => text_err(unexpected_response(&other)),
+            Err(e) => struct_err(&e),
+        }
     }
 
     #[tool(description = "Re-resolve link occurrences for a resource and return relations")]
     fn link_resolve(
         &self,
-        Parameters(args): Parameters<RefArgs>,
+        Parameters(args): Parameters<RawArgs>,
     ) -> Result<CallToolResult, McpError> {
-        self.with_service_mut(|svc| {
-            let r_ref = match ResourceRef::parse(&args.r#ref) {
-                Ok(r) => r,
-                Err(e) => {
-                    return text_err(format!("Invalid resource ref '{}': {e}", args.r#ref));
-                }
-            };
-            match LinkUseCase::resolve_links(svc, &r_ref) {
-                Ok(rels) => match serde_json::to_value(&rels) {
-                    Ok(v) => text_ok(v),
-                    Err(e) => text_err(format!("Internal link_resolve serialization error: {e}")),
-                },
-                Err(e) => struct_err(&e),
-            }
-        })
+        let req: ResolveLinksRequest = parse_args(&args.0, &[("ref", "source_ref")], &[])?;
+        match self.dispatch(Request::ResolveLinks(req)) {
+            Ok(Response::Relations(rels)) => payload_ok(&rels),
+            Ok(other) => text_err(unexpected_response(&other)),
+            Err(e) => struct_err(&e),
+        }
     }
 
     #[tool(description = "Diagnose link occurrences (status + candidates) for a resource")]
     fn link_diagnose(
         &self,
-        Parameters(args): Parameters<RefArgs>,
+        Parameters(args): Parameters<RawArgs>,
     ) -> Result<CallToolResult, McpError> {
-        self.with_service(|svc| {
-            let r_ref = match ResourceRef::parse(&args.r#ref) {
-                Ok(r) => r,
-                Err(e) => {
-                    return text_err(format!("Invalid resource ref '{}': {e}", args.r#ref));
-                }
-            };
-            match LinkUseCase::diagnose_link(svc, &r_ref) {
-                Ok(diags) => match serde_json::to_value(&diags) {
-                    Ok(v) => text_ok(v),
-                    Err(e) => text_err(format!("Internal link_diagnose serialization error: {e}")),
-                },
-                Err(e) => struct_err(&e),
-            }
-        })
+        let req: DiagnoseLinkRequest = parse_args(&args.0, &[("ref", "source_ref")], &[])?;
+        match self.dispatch(Request::DiagnoseLink(req)) {
+            Ok(Response::Diagnostics(diags)) => payload_ok(&diags),
+            Ok(other) => text_err(unexpected_response(&other)),
+            Err(e) => struct_err(&e),
+        }
     }
 
     #[tool(description = "Reindex link status counts for the whole space")]
     fn link_reindex(
         &self,
-        Parameters(args): Parameters<SpaceArgs>,
+        Parameters(args): Parameters<RawArgs>,
     ) -> Result<CallToolResult, McpError> {
-        self.with_service_mut(|svc| match LinkUseCase::reindex_links(svc) {
-            Ok(report) => match serde_json::to_value(&report) {
-                Ok(v) => text_ok(v),
-                Err(e) => text_err(format!("Internal link_reindex serialization error: {e}")),
-            },
+        let _ = args;
+        match self.dispatch(Request::ReindexLinks(ReindexLinksRequest {})) {
+            Ok(Response::Reindex(report)) => payload_ok(&report),
+            Ok(other) => text_err(unexpected_response(&other)),
             Err(e) => struct_err(&e),
-        })
+        }
     }
 
     #[tool(description = "Show the agenda (tasks + scheduled + deadline windows)")]
-    fn agenda(&self) -> Result<CallToolResult, McpError> {
-        self.with_service(|svc| match TaskUseCase::agenda(svc) {
-            Ok(agenda) => match serde_json::to_value(&agenda) {
-                Ok(v) => text_ok(v),
-                Err(e) => text_err(format!("Internal agenda serialization error: {e}")),
-            },
+    fn agenda(&self, Parameters(args): Parameters<RawArgs>) -> Result<CallToolResult, McpError> {
+        let _ = args;
+        match self.dispatch(Request::Agenda(AgendaRequest {})) {
+            Ok(Response::Agenda(agenda)) => payload_ok(&agenda),
+            Ok(other) => text_err(unexpected_response(&other)),
             Err(e) => struct_err(&e),
-        })
+        }
     }
 
     #[tool(description = "Transition task state")]
     fn task_transition(
         &self,
-        Parameters(args): Parameters<TaskTransitionArgs>,
+        Parameters(args): Parameters<RawArgs>,
     ) -> Result<CallToolResult, McpError> {
-        let r_ref = match ResourceRef::parse(&args.r#ref) {
-            Ok(r) => r,
-            Err(e) => {
-                return text_err(format!("Invalid resource ref '{}': {e}", args.r#ref));
-            }
-        };
-        let timestamp = args.timestamp.as_deref().unwrap_or("2026-07-22 Wed 16:00");
-        self.with_service_mut(|svc| {
-            match TaskUseCase::transition_task(svc, &r_ref, &args.to, timestamp) {
-                Ok(transition) => match serde_json::to_value(&transition) {
-                    Ok(v) => text_ok(v),
-                    Err(e) => text_err(format!("Internal transition serialization error: {e}")),
-                },
-                Err(e) => struct_err(&e),
-            }
-        })
+        let req: TransitionTaskRequest =
+            parse_args(&args.0, &[("ref", "r_ref"), ("to", "to_state")], &[])?;
+        match self.dispatch(Request::TransitionTask(req)) {
+            Ok(Response::Transition(transition)) => payload_ok(&transition),
+            Ok(other) => text_err(unexpected_response(&other)),
+            Err(e) => struct_err(&e),
+        }
     }
 
     #[tool(description = "List configured sources in the space")]
     fn source_list(
         &self,
-        Parameters(args): Parameters<SpaceArgs>,
+        Parameters(_args): Parameters<SpaceArgs>,
     ) -> Result<CallToolResult, McpError> {
         self.with_service(|svc| match svc.list_sources() {
-            Ok(sources) => match serde_json::to_value(&sources) {
-                Ok(v) => text_ok(v),
-                Err(e) => text_err(format!("Internal source_list serialization error: {e}")),
-            },
+            Ok(sources) => payload_ok(&sources),
             Err(e) => struct_err(&e),
         })
     }
@@ -779,213 +584,188 @@ impl NotezMcpServer {
     #[tool(description = "Add an attachment file to space")]
     fn attachment_add(
         &self,
-        Parameters(args): Parameters<AttachmentAddArgs>,
+        Parameters(args): Parameters<RawArgs>,
     ) -> Result<CallToolResult, McpError> {
-        let file_path = std::path::Path::new(&args.path);
-        let default_mime = args.mime.as_deref().unwrap_or("application/octet-stream");
-        self.with_service_mut(|svc| {
-            match AttachmentUseCase::add_attachment(svc, file_path, default_mime) {
-                Ok(att_ref) => text_ok(json!({ "ref": att_ref.to_string() })),
-                Err(e) => struct_err(&e),
+        let req: AddAttachmentRequest = parse_args(&args.0, &[("path", "file_path")], &[])?;
+        match self.dispatch(Request::AddAttachment(req)) {
+            Ok(Response::AttachmentRef(att_ref)) => {
+                text_ok(json!({ "ref": att_ref.to_string() }))
             }
-        })
+            Ok(other) => text_err(unexpected_response(&other)),
+            Err(e) => struct_err(&e),
+        }
     }
 
     #[tool(description = "Run text/metadata extraction job on attachment ref")]
     fn attachment_extract(
         &self,
-        Parameters(args): Parameters<AttachmentExtractArgs>,
+        Parameters(args): Parameters<RawArgs>,
     ) -> Result<CallToolResult, McpError> {
-        let r_ref = match ResourceRef::parse(&args.r#ref) {
-            Ok(r) => r,
-            Err(e) => {
-                return text_err(format!("Invalid resource ref '{}': {e}", args.r#ref));
-            }
-        };
-        self.with_service_mut(|svc| match AttachmentUseCase::run_extraction(svc, &r_ref) {
-            Ok(segments) => text_ok(json!({
-                "attachment_ref": args.r#ref,
+        let req: ExtractAttachmentRequest = parse_args(&args.0, &[("ref", "source_ref")], &[])?;
+        let ref_str = req.source_ref.clone();
+        match self.dispatch(Request::ExtractAttachment(req)) {
+            Ok(Response::Segments(segments)) => text_ok(json!({
+                "attachment_ref": ref_str,
                 "segments_count": segments.len(),
             })),
+            Ok(other) => text_err(unexpected_response(&other)),
             Err(e) => struct_err(&e),
-        })
+        }
     }
 
     #[tool(description = "Query extracted text segments for attachment ref")]
     fn query_segments(
         &self,
-        Parameters(args): Parameters<RefArgs>,
+        Parameters(args): Parameters<RawArgs>,
     ) -> Result<CallToolResult, McpError> {
-        self.with_service(|svc| {
-            let r_ref = match ResourceRef::parse(&args.r#ref) {
-                Ok(r) => r,
-                Err(e) => {
-                    return text_err(format!("Invalid resource ref '{}': {e}", args.r#ref));
-                }
-            };
-            match AttachmentUseCase::query_segments(svc, &r_ref) {
-                Ok(segments) => match serde_json::to_value(&segments) {
-                    Ok(v) => text_ok(v),
-                    Err(e) => text_err(format!("Internal query_segments serialization error: {e}")),
-                },
-                Err(e) => struct_err(&e),
-            }
-        })
+        let req: QuerySegmentsRequest = parse_args(&args.0, &[("ref", "source_ref")], &[])?;
+        match self.dispatch(Request::QuerySegments(req)) {
+            Ok(Response::Segments(segments)) => payload_ok(&segments),
+            Ok(other) => text_err(unexpected_response(&other)),
+            Err(e) => struct_err(&e),
+        }
     }
 
     #[tool(description = "Create a community in space")]
     fn community_create(
         &self,
-        Parameters(args): Parameters<CommunityCreateArgs>,
+        Parameters(args): Parameters<RawArgs>,
     ) -> Result<CallToolResult, McpError> {
-        let mut selector: Selector = Selector::default();
-        if let Some(kind_str) = args.kind.as_deref() {
-            match kind_str {
-                "document" => selector.kind = Some(ResourceKind::Document),
-                "heading" => selector.kind = Some(ResourceKind::Heading),
-                "attachment" => selector.kind = Some(ResourceKind::Attachment),
-                other => return text_err(format!("Unknown resource kind: {other}")),
-            }
-        }
-        if let Some(title_sub) = args.title_contains.as_deref() {
-            selector.title_contains = Some(title_sub.to_owned());
-        }
-        let comm = notez_core::domain::community::Community {
-            id: args.id.clone(),
-            name: args.name.clone(),
-            selector,
-            pinned_members: vec![],
-            excluded_members: vec![],
-        };
-        self.with_service_mut(|svc| match CommunityUseCase::create_community(svc, comm) {
-            Ok(_) => text_ok(json!({ "created": true })),
+        let req: CreateCommunityRequest = parse_args(&args.0, &[], &[])?;
+        match self.dispatch(Request::CreateCommunity(req)) {
+            Ok(Response::Done) => text_ok(json!({ "created": true })),
+            Ok(other) => text_err(unexpected_response(&other)),
             Err(e) => struct_err(&e),
-        })
+        }
     }
 
     #[tool(description = "Derive a recipe artifact (summary, llms.txt, context-pack, skill-ir)")]
     fn derive_artifact(
         &self,
-        Parameters(args): Parameters<DeriveArtifactArgs>,
+        Parameters(args): Parameters<RawArgs>,
     ) -> Result<CallToolResult, McpError> {
-        let recipe_name = args.recipe.clone();
-        self.with_service_mut(|svc| {
-            match ArtifactUseCase::derive_artifact(svc, &args.community, &recipe_name) {
-                Ok(derived) => text_ok(json!({
-                    "recipe": recipe_name,
-                    "content": derived.content,
-                })),
-                Err(e) => struct_err(&e),
-            }
-        })
+        let req: DeriveArtifactRequest = parse_args(
+            &args.0,
+            &[("community", "community_id"), ("recipe", "recipe_name")],
+            &[],
+        )?;
+        let recipe_name = req.recipe_name.clone();
+        match self.dispatch(Request::DeriveArtifact(req)) {
+            Ok(Response::Derived(artifact)) => text_ok(json!({
+                "recipe": recipe_name,
+                "content": artifact.content,
+            })),
+            Ok(other) => text_err(unexpected_response(&other)),
+            Err(e) => struct_err(&e),
+        }
     }
 
     #[tool(description = "Export a SKILL.md package for a community")]
     fn export_skill(
         &self,
-        Parameters(args): Parameters<ExportSkillArgs>,
+        Parameters(args): Parameters<RawArgs>,
     ) -> Result<CallToolResult, McpError> {
-        let description = args
-            .description
-            .as_deref()
-            .unwrap_or("Exported Agent Skill");
-        let out_path = std::path::Path::new(&args.out);
-        self.with_service_mut(|svc| {
-            match ArtifactUseCase::export_skill(svc, &args.community, description, out_path) {
-                Ok(package) => text_ok(json!({
-                    "name": package.name,
-                    "path": package.package_path.to_string_lossy(),
-                })),
-                Err(e) => struct_err(&e),
-            }
-        })
+        let req: ExportSkillRequest = parse_args(
+            &args.0,
+            &[("community", "community_id"), ("out", "out_path")],
+            &[],
+        )?;
+        match self.dispatch(Request::ExportSkill(req)) {
+            Ok(Response::Skill(package)) => text_ok(json!({
+                "name": package.name,
+                "path": package.package_path.to_string_lossy(),
+            })),
+            Ok(other) => text_err(unexpected_response(&other)),
+            Err(e) => struct_err(&e),
+        }
     }
 
     #[tool(description = "Push space changes to shared folder")]
     fn sync_push(
         &self,
-        Parameters(args): Parameters<SyncArgs>,
+        Parameters(args): Parameters<RawArgs>,
     ) -> Result<CallToolResult, McpError> {
-        let actor = args.actor.as_deref().unwrap_or("mcp_actor");
-        let folder_path = std::path::Path::new(&args.folder);
-        self.with_service_mut(
-            |svc| match SyncUseCase::sync_push(svc, actor, folder_path) {
-                Ok(report) => text_ok(json!({
-                    "pushed_files": report.pushed_files,
-                    "pushed_objects": report.pushed_objects,
-                })),
-                Err(e) => struct_err(&e),
-            },
-        )
+        // The MCP surface has historically defaulted to `mcp_actor`; keep
+        // that instead of the protocol's `default_actor`.
+        let req: SyncPushRequest =
+            parse_args(&args.0, &[("actor", "actor_id")], &[("actor_id", "mcp_actor")])?;
+        match self.dispatch(Request::SyncPush(req)) {
+            Ok(Response::Pushed(report)) => text_ok(json!({
+                "pushed_files": report.pushed_files,
+                "pushed_objects": report.pushed_objects,
+            })),
+            Ok(other) => text_err(unexpected_response(&other)),
+            Err(e) => struct_err(&e),
+        }
     }
 
     #[tool(description = "Pull changes from shared folder into space")]
     fn sync_pull(
         &self,
-        Parameters(args): Parameters<SyncArgs>,
+        Parameters(args): Parameters<RawArgs>,
     ) -> Result<CallToolResult, McpError> {
-        let actor = args.actor.as_deref().unwrap_or("mcp_actor");
-        let folder_path = std::path::Path::new(&args.folder);
-        self.with_service_mut(
-            |svc| match SyncUseCase::sync_pull(svc, actor, folder_path) {
-                Ok(report) => text_ok(json!({
-                    "pulled_files": report.pulled_files,
-                    "merged_files": report.merged_files,
-                    "conflicts_count": report.conflicts.len(),
-                })),
-                Err(e) => struct_err(&e),
-            },
-        )
+        // The MCP surface has historically defaulted to `mcp_actor`; keep
+        // that instead of the protocol's `default_actor`.
+        let req: SyncPullRequest =
+            parse_args(&args.0, &[("actor", "actor_id")], &[("actor_id", "mcp_actor")])?;
+        match self.dispatch(Request::SyncPull(req)) {
+            Ok(Response::Pulled(report)) => text_ok(json!({
+                "pulled_files": report.pulled_files,
+                "merged_files": report.merged_files,
+                "conflicts_count": report.conflicts.len(),
+            })),
+            Ok(other) => text_err(unexpected_response(&other)),
+            Err(e) => struct_err(&e),
+        }
     }
 
     #[tool(description = "List active sync conflicts in space")]
-    fn sync_conflicts(&self) -> Result<CallToolResult, McpError> {
-        self.with_service(|svc| match SyncUseCase::list_conflicts(svc) {
-            Ok(conflicts) => match serde_json::to_value(&conflicts) {
-                Ok(v) => text_ok(v),
-                Err(e) => text_err(format!("Internal sync_conflicts serialization error: {e}")),
-            },
+    fn sync_conflicts(
+        &self,
+        Parameters(args): Parameters<RawArgs>,
+    ) -> Result<CallToolResult, McpError> {
+        let _ = args;
+        match self.dispatch(Request::ListConflicts(ListConflictsRequest {})) {
+            Ok(Response::Conflicts(conflicts)) => payload_ok(&conflicts),
+            Ok(other) => text_err(unexpected_response(&other)),
             Err(e) => struct_err(&e),
-        })
+        }
     }
 
     #[tool(description = "Run space integrity diagnostics")]
     fn source_doctor(
         &self,
-        Parameters(args): Parameters<SpaceArgs>,
+        Parameters(args): Parameters<RawArgs>,
     ) -> Result<CallToolResult, McpError> {
-        self.with_service(|svc| match InspectUseCase::source_doctor(svc) {
-            Ok(report) => match serde_json::to_value(&report) {
-                Ok(v) => text_ok(v),
-                Err(e) => text_err(format!("Internal source_doctor serialization error: {e}")),
-            },
+        let _ = args;
+        match self.dispatch(Request::SourceDoctor(SourceDoctorRequest {})) {
+            Ok(Response::Doctor(report)) => payload_ok(&report),
+            Ok(other) => text_err(unexpected_response(&other)),
             Err(e) => struct_err(&e),
-        })
+        }
     }
 
     #[tool(description = "List background jobs and tasks")]
-    fn job_list(&self) -> Result<CallToolResult, McpError> {
-        self.with_service(|svc| match InspectUseCase::list_jobs(svc) {
-            Ok(jobs) => match serde_json::to_value(&jobs) {
-                Ok(v) => text_ok(v),
-                Err(e) => text_err(format!("Internal job_list serialization error: {e}")),
-            },
+    fn job_list(&self, Parameters(args): Parameters<RawArgs>) -> Result<CallToolResult, McpError> {
+        let _ = args;
+        match self.dispatch(Request::ListJobs(ListJobsRequest {})) {
+            Ok(Response::Jobs(jobs)) => payload_ok(&jobs),
+            Ok(other) => text_err(unexpected_response(&other)),
             Err(e) => struct_err(&e),
-        })
+        }
     }
 
     #[tool(description = "Check artifact freshness against source files")]
     fn artifact_stale(
         &self,
-        Parameters(args): Parameters<SpaceArgs>,
+        Parameters(args): Parameters<RawArgs>,
     ) -> Result<CallToolResult, McpError> {
-        self.with_service(|svc| match InspectUseCase::check_artifact_freshness(svc) {
-            Ok(report) => match serde_json::to_value(&report) {
-                Ok(v) => text_ok(v),
-                Err(e) => text_err(format!("Internal artifact_stale serialization error: {e}")),
-            },
+        let _ = args;
+        match self.dispatch(Request::ArtifactFreshness(ArtifactFreshnessRequest {})) {
+            Ok(Response::Freshness(report)) => payload_ok(&report),
+            Ok(other) => text_err(unexpected_response(&other)),
             Err(e) => struct_err(&e),
-        })
+        }
     }
 
     /// List the capabilities the current build exposes. The payload is
@@ -1027,13 +807,10 @@ impl NotezMcpServer {
         let limit = args.limit.unwrap_or(50);
         let status = self.watch.status(&space);
         let events = self.watch.events(&space, limit);
-        match serde_json::to_value(serde_json::json!({
+        text_ok(json!({
             "status": status,
             "events": events,
-        })) {
-            Ok(v) => text_ok(v),
-            Err(e) => text_err(format!("watch_status serialization: {e}")),
-        }
+        }))
     }
 }
 
@@ -1048,13 +825,36 @@ impl ServerHandler for NotezMcpServer {
                  `notifications/initialized` is not required.",
             )
     }
-}
 
-// Silence unused warnings for the `Json` re-export carried over from the
-// legacy server. Available for any future structured-output tools.
-#[allow(dead_code)]
-fn _unused_reexports() {
-    let _ = std::any::type_name::<Json<()>>();
+    /// Advertise protocol-derived input schemas. Handlers take raw JSON to
+    /// accept legacy argument names, so patch each tool's catch-all schema
+    /// with the schema generated from its protocol request type.
+    async fn list_tools(
+        &self,
+        _request: Option<PaginatedRequestParams>,
+        _context: rmcp::service::RequestContext<rmcp::RoleServer>,
+    ) -> Result<ListToolsResult, McpError> {
+        let mut tools = self.tool_router.list_all();
+        for tool_def in &mut tools {
+            if let Some(schema) = TOOL_SCHEMAS.get(tool_def.name.as_ref()) {
+                tool_def.input_schema = Arc::new(schema.clone());
+            }
+        }
+        Ok(ListToolsResult {
+            meta: None,
+            next_cursor: None,
+            tools,
+        })
+    }
+
+    /// Same schema patching as [`Self::list_tools`], for single-tool lookups.
+    fn get_tool(&self, name: &str) -> Option<Tool> {
+        let mut tool_def = self.tool_router.get(name).cloned()?;
+        if let Some(schema) = TOOL_SCHEMAS.get(name) {
+            tool_def.input_schema = Arc::new(schema.clone());
+        }
+        Some(tool_def)
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

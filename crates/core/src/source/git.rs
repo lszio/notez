@@ -45,25 +45,30 @@ impl SourceAdapter for GitSourceAdapter {
         let mut resources = Vec::new();
         let mut relations = Vec::new();
         let mut link_occurrences = Vec::new();
-
         for path in entries {
             let ext = path
                 .extension()
                 .and_then(|e| e.to_str())
                 .unwrap_or_default();
-            if ext == "org" {
-                let doc = OrgScanner::scan(&path, &self.config.id)?;
-                resources.extend(doc.resources);
-                relations.extend(doc.links);
-                link_occurrences.extend(doc.link_occurrences);
+            // M4 v1: inline shim around the pure parser. The adapter
+            // crate owns the public `parse_path` for third-party
+            // callers; core transports stay self-contained to avoid
+            // a `notez-core -> adapter -> notez-core` cycle.
+            let doc = if ext == "org" {
+                let bytes = std::fs::read(&path).map_err(SourceError::Io)?;
+                OrgScanner::parse_bytes(&bytes, &self.config.id, &path.to_string_lossy())
+                    .map_err(SourceError::Document)?
             } else if ext == "md" {
-                let doc = MarkdownScanner::scan(&path, &self.config.id)?;
-                resources.extend(doc.resources);
-                relations.extend(doc.links);
-                link_occurrences.extend(doc.link_occurrences);
-            }
+                let bytes = std::fs::read(&path).map_err(SourceError::Io)?;
+                MarkdownScanner::parse_bytes(&bytes, &self.config.id, &path.to_string_lossy())
+                    .map_err(SourceError::MarkdownDocument)?
+            } else {
+                continue;
+            };
+            resources.extend(doc.resources);
+            relations.extend(doc.links);
+            link_occurrences.extend(doc.link_occurrences);
         }
-
         Ok(ScannedSource {
             source_id: self.config.id.clone(),
             resources,

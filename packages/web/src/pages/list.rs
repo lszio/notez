@@ -320,7 +320,7 @@ fn WatchPanel(active_path: Option<String>) -> Element {
                 form {
                     action: "/api/sources/watch/stop",
                     method: "post",
-                    input { r#type: "hidden", name: "path", value: "{path_str}" }
+                    input { r#type: "hidden", name: "source_root", value: "{path_str}" }
                     button { r#type: "submit", "stop watching" }
                 }
             }

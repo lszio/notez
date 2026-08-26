@@ -1,4 +1,4 @@
-use crate::preview::{
+use crate::{
     PdfPage, PreviewContext, PreviewError, PreviewModel, Previewer, PreviewerCatalog,
 };
 use bytes::Bytes;

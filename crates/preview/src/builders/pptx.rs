@@ -1,4 +1,4 @@
-use crate::preview::{PreviewContext, PreviewError, PreviewModel, Previewer, Slide};
+use crate::{PreviewContext, PreviewError, PreviewModel, Previewer, Slide};
 use bytes::Bytes;
 use quick_xml::Reader;
 use quick_xml::events::Event;

@@ -96,6 +96,10 @@ impl WatchKind {
 /// One filesystem event observed by the watcher.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WatchEvent {
+    /// Monotonically increasing sequence number assigned when the
+    /// event was recorded. Consumers use it to take deltas across
+    /// polls without replaying the whole buffer.
+    pub seq: u64,
     /// Wall-clock timestamp of when the event was observed.
     pub at: SystemTime,
     pub kind: WatchKind,
@@ -137,6 +141,8 @@ impl WatchHandle {
 /// The shared watcher. Cheap to construct, safe to share via `Arc`.
 pub struct WatchService {
     handles: Mutex<HashMap<PathBuf, WatchHandle>>,
+    /// Source of monotonic `WatchEvent::seq` values.
+    next_seq: std::sync::atomic::AtomicU64,
 }
 
 impl WatchService {
@@ -144,7 +150,14 @@ impl WatchService {
     pub fn new() -> Arc<Self> {
         Arc::new(Self {
             handles: Mutex::new(HashMap::new()),
+            next_seq: std::sync::atomic::AtomicU64::new(1),
         })
+    }
+
+    /// Allocate the next event sequence number.
+    fn take_seq(&self) -> u64 {
+        self.next_seq
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
     }
 
     /// Start watching `source_root` recursively.
@@ -293,6 +306,7 @@ fn build_watcher(svc: Arc<WatchService>) -> Result<RecommendedWatcher, WatchErro
                     };
                     if let Some(h) = handles.get_mut(&canonical_key) {
                         h.record(WatchEvent {
+                            seq: svc.take_seq(),
                             at: SystemTime::now(),
                             kind,
                             path: p,

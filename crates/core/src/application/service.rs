@@ -1,4 +1,5 @@
 use crate::application::context::SourceContext;
+use crate::domain::{ProjectionReader, ProjectionWrite};
 use crate::config::SourceInstanceConfig;
 use crate::domain::{
     LinkDiagnostic, LinkOccurrence, ProjectionStore, QueryPage, ResolutionStatus, ResolvedRelation,
@@ -51,6 +52,10 @@ pub enum ApplicationError {
         existing: ResourceRef,
         candidate: ResourceRef,
     },
+    /// A protocol request could not be interpreted: malformed ref,
+    /// unknown kind, missing required field. Every surface surfaces
+    /// this identically instead of re-implementing validation.
+    InvalidRequest { message: String },
 }
 
 /// Classification of storage-layer failures.
@@ -117,6 +122,9 @@ impl std::fmt::Display for ApplicationError {
                     "address uniqueness: already bound to {existing}; cannot rebind to {candidate}"
                 )
             }
+            ApplicationError::InvalidRequest { message } => {
+                write!(f, "invalid request: {message}")
+            }
         }
     }
 }
@@ -176,6 +184,10 @@ impl serde::Serialize for ApplicationError {
                 map.serialize_entry("addr", addr)?;
                 map.serialize_entry("existing", existing)?;
                 map.serialize_entry("candidate", candidate)?;
+            }
+            ApplicationError::InvalidRequest { message } => {
+                map.serialize_entry("kind", "invalid_request")?;
+                map.serialize_entry("message", message)?;
             }
         }
         map.end()
@@ -315,6 +327,14 @@ impl<'de> serde::Deserialize<'de> for ApplicationError {
                         .map_err(D::Error::custom)?,
                 })
             }
+            "invalid_request" => {
+                let message = value
+                    .get("message")
+                    .ok_or_else(|| D::Error::custom("ApplicationError: missing `message`"))?;
+                Ok(ApplicationError::InvalidRequest {
+                    message: serde_json::from_value(message.clone()).map_err(D::Error::custom)?,
+                })
+            }
             other => Err(D::Error::custom(format!(
                 "ApplicationError: unknown kind tag `{other}`"
             ))),
@@ -333,14 +353,14 @@ impl std::fmt::Display for StorageErrorKind {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum ResolveResult {
     Found(ResourceRef),
     NotFound,
     Ambiguous(Vec<ResourceRef>),
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct ScanReport {
     pub scanned_files: usize,
     pub scanned_resources: usize,
@@ -354,6 +374,9 @@ pub struct ApplicationFacade<S: ProjectionStore> {
     pub(crate) source: Option<SourceContext>,
     pub(crate) capability_catalog: crate::capability::CapabilityCatalog,
     pub(crate) source_registry: crate::source::SourceRegistry,
+    pub(crate) journal: Box<dyn crate::domain::journal::EventJournal>,
+    pub(crate) audit: Box<dyn crate::domain::audit::AuditLog>,
+    pub(crate) clock: Box<dyn crate::application::ports::Clock>,
 }
 
 /// Backwards-compatible alias for [`ApplicationFacade`]. New code should
@@ -361,7 +384,15 @@ pub struct ApplicationFacade<S: ProjectionStore> {
 /// downstream consumers can keep their imports stable across the rename.
 pub type ApplicationService<S = crate::storage::SqliteProjection> = ApplicationFacade<S>;
 
-impl<S: ProjectionStore> ApplicationFacade<S> {
+impl<S> ApplicationFacade<S>
+where
+    S: ProjectionStore,
+    S: ProjectionReader<Error = crate::storage::StorageError>
+        + ProjectionWrite<Error = crate::storage::StorageError>,
+{
+    /// Build a facade with the default in-memory state: built-in rule
+    /// engine, built-in source factory registry, null journal/audit
+    /// adapters (writes pass through unchecked), and the system clock.
     pub fn new(store: S) -> Self {
         Self {
             store,
@@ -370,9 +401,11 @@ impl<S: ProjectionStore> ApplicationFacade<S> {
             source: None,
             capability_catalog: crate::capability::CapabilityCatalog::with_builtins(),
             source_registry: crate::source::SourceRegistry::with_builtins(),
+            journal: Box::new(crate::domain::journal::NullJournal::default()),
+            audit: Box::new(crate::domain::audit::NullAuditLog::default()),
+            clock: Box::new(crate::application::ports::SystemClock),
         }
     }
-
     /// Construct an `ApplicationFacade` bound to an explicit
     /// [`SourceContext`]. The space is the single source of truth for the
     /// service's filesystem root and resolved configuration; the service
@@ -386,9 +419,11 @@ impl<S: ProjectionStore> ApplicationFacade<S> {
             source: Some(source),
             capability_catalog: crate::capability::CapabilityCatalog::with_builtins(),
             source_registry: crate::source::SourceRegistry::with_builtins(),
+            journal: Box::new(crate::domain::journal::NullJournal::default()),
+            audit: Box::new(crate::domain::audit::NullAuditLog::default()),
+            clock: Box::new(crate::application::ports::SystemClock),
         }
     }
-
     /// Construct an `ApplicationFacade` with a caller-supplied source
     /// factory registry. The default constructors register the six
     /// built-in factories; this constructor is for tests and for
@@ -402,9 +437,11 @@ impl<S: ProjectionStore> ApplicationFacade<S> {
             source: None,
             capability_catalog: crate::capability::CapabilityCatalog::with_builtins(),
             source_registry: registry,
+            journal: Box::new(crate::domain::journal::NullJournal::default()),
+            audit: Box::new(crate::domain::audit::NullAuditLog::default()),
+            clock: Box::new(crate::application::ports::SystemClock),
         }
     }
-
     /// Register an additional `SourceAdapterFactory`. Used by tests
     /// and by third-party composition roots that need to handle
     /// `SourceKind::Other(...)` variants.
@@ -460,7 +497,49 @@ impl<S: ProjectionStore> ApplicationFacade<S> {
         &self.capability_catalog
     }
 
-    /// Render the active capability catalog as a JSON array using the
+    /// Actor principal for audit/journal records. Returns the
+    /// process-level principal placeholder until per-call identity
+    /// propagation lands in the protocol dispatch layer.
+    pub fn actor_principal(&self) -> String {
+        "default".to_string()
+    }
+
+    pub fn now_unix_millis(&self) -> i64 {
+        use crate::application::ports::Clock;
+        self.clock
+            .now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as i64)
+            .unwrap_or_default()
+    }
+
+    /// Replace the event journal adapter. Used by the composition root
+    /// to install the durable sqlite-backed journal.
+    pub fn attach_journal(
+        &mut self,
+        journal: impl crate::domain::journal::EventJournal + 'static,
+    ) {
+        self.journal = Box::new(journal);
+    }
+
+    /// Replace the audit log adapter.
+    pub fn attach_audit(
+        &mut self,
+        audit: impl crate::domain::audit::AuditLog + 'static,
+    ) {
+        self.audit = Box::new(audit);
+    }
+
+    /// Borrow the journal adapter (downcast to trait object).
+    fn journal_ref(&self) -> &dyn crate::domain::journal::EventJournal {
+        &*self.journal
+    }
+
+    /// Borrow the audit adapter.
+    fn audit_ref(&self) -> &dyn crate::domain::audit::AuditLog {
+        &*self.audit
+    }
+
     /// shared [`crate::capability::catalog_to_json_array`] helper. This
     /// is the canonical "list capabilities" payload used by both the
     /// CLI `list-capabilities` subcommand and the MCP
@@ -830,3 +909,4 @@ impl<S: ProjectionStore> ApplicationFacade<S> {
         self.scan_native()
     }
 }
+

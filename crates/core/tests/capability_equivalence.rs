@@ -58,8 +58,11 @@ fn every_use_case_trait_has_a_corresponding_builtin_capability() {
     // The 9 use-case trait ids. The catalog is a HashMap so iteration
     // order is not stable; look up each expected id rather than
     // indexing positionally.
+    //
+    // `scan` mutates the persisted projection (replace_source), so its
+    // honest mutability is `write`, not `read`.
     let expected: [(&str, &str); 9] = [
-        ("scan", "read"),
+        ("scan", "write"),
         ("resource", "write"),
         ("link", "read"),
         ("task", "write"),

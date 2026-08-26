@@ -1,3 +1,12 @@
+//! Projection ports.
+//!
+//! [`ProjectionStore`] is the full read+write contract a projection
+//! backend must honour. **Every method is required** — there are no
+//! default bodies, so a store that cannot persist something fails at
+//! compile time, never silently drops data at runtime (the historical
+//! no-op defaults hid data loss).
+//!
+use crate::domain::conflict::ConflictRecord;
 use crate::domain::link::{LinkOccurrence, ResolutionStatus, ResolvedRelation};
 use crate::domain::resource::{
     Resource, ResourceKind, ResourceRef, ResourceRelation, SegmentRecord,
@@ -24,7 +33,7 @@ impl Selector {
     pub fn kind(kind: ResourceKind) -> Self {
         Self {
             kind: Some(kind),
-            ..Default::default()
+            ..Self::default()
         }
     }
 
@@ -53,17 +62,49 @@ pub struct Projection {
 impl Projection {
     pub fn summary() -> Self {
         Self {
-            fields: vec![
-                "ref".to_string(),
-                "title".to_string(),
-                "revision".to_string(),
-            ],
+            fields: vec!["ref".into(), "title".into(), "revision".into()],
         }
     }
 }
-pub trait ProjectionStore {
+
+/// Read-only projection queries.
+
+pub trait ProjectionReader {
     type Error: std::error::Error + Send + Sync + 'static;
 
+    fn get(&self, r#ref: &ResourceRef) -> Result<Option<Resource>, Self::Error>;
+    fn query(&self, selector: &Selector) -> Result<QueryPage, Self::Error>;
+    fn query_segments(&self, attachment_ref: &str) -> Result<Vec<SegmentRecord>, Self::Error>;
+    fn query_link_occurrences(
+        &self,
+        source_ref: &ResourceRef,
+    ) -> Result<Vec<LinkOccurrence>, Self::Error>;
+    fn query_resolved_relations(
+        &self,
+        source_ref: &ResourceRef,
+    ) -> Result<Vec<ResolvedRelation>, Self::Error>;
+    /// Returns `None` when the source has no diagnostics rows at all,
+    /// distinguishing "never written" from "written as empty".
+    fn list_link_diagnostics(
+        &self,
+        source_ref: &ResourceRef,
+    ) -> Result<Option<Vec<LinkDiagnostic>>, Self::Error>;
+    /// 跨 Space 同一对象查询：返回所有 `object_id` 匹配的资源。
+    fn find_by_object(
+        &self,
+        object_id: &crate::domain::ObjectIdentity,
+    ) -> Result<Vec<Resource>, Self::Error>;
+    /// List persisted sync conflict records, newest first.
+    fn list_conflicts(&self) -> Result<Vec<ConflictRecord>, Self::Error>;
+}
+
+/// Projection writes. Required methods only: an implementation that
+/// cannot honour one of these must say so by returning `Err`, never
+/// by inheriting a silent no-op.
+pub trait ProjectionWrite {
+    type Error: std::error::Error + Send + Sync + 'static;
+
+    /// Atomically swap one source's slice of the projection.
     fn replace_source(
         &mut self,
         source_id: &str,
@@ -72,111 +113,58 @@ pub trait ProjectionStore {
         link_occurrences: Vec<LinkOccurrence>,
     ) -> Result<(), Self::Error>;
 
-    fn get(&self, r#ref: &ResourceRef) -> Result<Option<Resource>, Self::Error>;
+    /// Insert or update a single resource keyed by its `ResourceRef`.
+    fn upsert_resource(&mut self, resource: &Resource) -> Result<(), Self::Error>;
 
-    fn query(&self, selector: &Selector) -> Result<QueryPage, Self::Error>;
-
-    /// Insert or update a single resource keyed by its `ResourceRef`. Default
-    /// no-op so test stubs don't break. Real projections (e.g. SQLite) MUST
-    /// override this to make per-resource writes possible without a full
-    /// source rescan.
-    fn upsert_resource(&mut self, _resource: &Resource) -> Result<(), Self::Error> {
-        Ok(())
-    }
-
-    /// Delete a single resource by its `ResourceRef`. Idempotent: deleting an
-    /// absent resource is not an error.
-    fn delete_resource(&mut self, _r_ref: &ResourceRef) -> Result<(), Self::Error> {
-        Ok(())
-    }
+    /// Delete a single resource by its `ResourceRef`. Idempotent.
+    fn delete_resource(&mut self, r_ref: &ResourceRef) -> Result<(), Self::Error>;
 
     fn clear(&mut self) -> Result<(), Self::Error>;
-    fn insert_segments(&mut self, _segments: &[SegmentRecord]) -> Result<(), Self::Error> {
-        Ok(())
-    }
 
-    fn query_segments(&self, _attachment_ref: &str) -> Result<Vec<SegmentRecord>, Self::Error> {
-        Ok(Vec::new())
-    }
+    fn insert_segments(&mut self, segments: &[SegmentRecord]) -> Result<(), Self::Error>;
 
     fn replace_link_occurrences(
         &mut self,
-        _source_id: &str,
-        _occurrences: Vec<LinkOccurrence>,
-    ) -> Result<(), Self::Error> {
-        Ok(())
-    }
-
-    fn query_link_occurrences(
-        &self,
-        _source_ref: &ResourceRef,
-    ) -> Result<Vec<LinkOccurrence>, Self::Error> {
-        Ok(Vec::new())
-    }
+        source_id: &str,
+        occurrences: Vec<LinkOccurrence>,
+    ) -> Result<(), Self::Error>;
 
     fn replace_resolved_relations(
         &mut self,
-        _source_id: &str,
-        _relations: Vec<ResolvedRelation>,
-    ) -> Result<(), Self::Error> {
-        Ok(())
-    }
-
-    fn query_resolved_relations(
-        &self,
-        _source_ref: &ResourceRef,
-    ) -> Result<Vec<ResolvedRelation>, Self::Error> {
-        Ok(Vec::new())
-    }
-
-    /// Persist the resolution status and candidate list alongside each
-    /// occurrence. Implementations may store this on the same `link_occurrences`
-    /// row, a sidecar table, or in a diagnostic log. The input is keyed by the
-    /// raw occurrence text; implementations match occurrences in insertion
-    /// order.
-    fn write_link_diagnostics(
-        &mut self,
-        _source_id: &str,
-        _diagnostics: &[(LinkOccurrence, ResolutionStatus, Vec<ResourceRef>)],
-    ) -> Result<(), Self::Error> {
-        Ok(())
-    }
-
-    /// Fetch diagnostics for a single source. Returns `None` when the source
-    /// has no rows (so callers can distinguish "no link columns" from
-    /// "zero diagnostics written").
-    fn list_link_diagnostics(
-        &self,
-        _source_ref: &ResourceRef,
-    ) -> Result<Option<Vec<LinkDiagnostic>>, Self::Error> {
-        Ok(None)
-    }
-
-    /// 跨 Space 同一对象查询：返回所有 `object_id` 匹配的资源。
-    /// 默认空实现（测试替身无需关心），`SqliteProjection` 必须 override。
-    fn find_by_object(
-        &self,
-        _object_id: &crate::domain::ObjectIdentity,
-    ) -> Result<Vec<crate::domain::Resource>, Self::Error> {
-        Ok(Vec::new())
-    }
-
-    /// Persist sync conflict records (spec §7). Upsert keyed by
-    /// `logical_path`; the latest detection wins per path. Required — a
-    /// store that silently drops conflicts would hide sync failures.
-    fn replace_conflicts(
-        &mut self,
-        records: &[crate::domain::ConflictRecord],
+        source_id: &str,
+        relations: Vec<ResolvedRelation>,
     ) -> Result<(), Self::Error>;
 
-    /// List persisted sync conflict records, newest first.
-    fn list_conflicts(&self) -> Result<Vec<crate::domain::ConflictRecord>, Self::Error>;
+    /// Persist resolution status/candidates alongside each occurrence.
+    fn write_link_diagnostics(
+        &mut self,
+        source_id: &str,
+        diagnostics: &[(LinkOccurrence, ResolutionStatus, Vec<ResourceRef>)],
+    ) -> Result<(), Self::Error>;
+
+    /// Upsert conflict records keyed by `logical_path`; latest wins.
+    fn replace_conflicts(
+        &mut self,
+        records: &[crate::domain::conflict::ConflictRecord],
+    ) -> Result<(), Self::Error>;
 }
+
+/// Full projection contract: reads + required writes.
+pub trait ProjectionStore: ProjectionReader + ProjectionWrite {}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct QueryPage {
     pub items: Vec<Resource>,
     pub next_cursor: Option<String>,
+}
+
+impl QueryPage {
+    pub fn empty() -> Self {
+        Self {
+            items: Vec::new(),
+            next_cursor: None,
+        }
+    }
 }
 
 /// Diagnostic record for a single link occurrence: the original occurrence plus

@@ -2,30 +2,47 @@
 //! by the long-running start loop.
 
 use crate::commands;
+use notez_core::domain::{ProjectionReader, ProjectionWrite};
 
 /// Run the `notez watch` subcommand.
 pub fn run_watch(args: commands::WatchArgs, source_root: &std::path::Path) {
-    use notez_core::application::WatchService;
+    use notez_core::application::{WatchError, WatchService};
     let svc = WatchService::new();
     match args.command {
         None | Some(commands::WatchCommands::Start) => {
+            match svc.start(source_root) {
+                Ok(_) => {}
+                Err(WatchError::AlreadyActive(_)) => {
+                    eprintln!(
+                        "watch already active for {}; following existing events.",
+                        source_root.display()
+                    );
+                }
+                Err(e) => {
+                    eprintln!("failed to start watch: {e}");
+                    std::process::exit(5);
+                }
+            }
             let running = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
-            let mut printed: usize = 0;
+            install_sigint_handler(running.clone());
+            // Delta cursor: only print events with a sequence number
+            // newer than the last one we printed, so ring-buffer
+            // eviction never replays or swallows events.
+            let mut last_seq: u64 = 0;
             while running.load(std::sync::atomic::Ordering::SeqCst) {
                 std::thread::sleep(std::time::Duration::from_millis(500));
                 let events = svc.events(source_root, 200);
-                if events.len() < printed {
-                    printed = 0;
-                }
-                for ev in events.iter().skip(printed) {
+                for ev in events.iter().filter(|e| e.seq > last_seq) {
                     let secs = ev
                         .at
                         .duration_since(std::time::UNIX_EPOCH)
                         .map(|d| d.as_secs())
                         .unwrap_or(0);
-                    println!("[{}] {:?} {}", secs, ev.kind, ev.path.display());
+                    println!("[#{} {}] {:?} {}", ev.seq, secs, ev.kind, ev.path.display());
                 }
-                printed = events.len();
+                if let Some(max) = events.iter().map(|e| e.seq).max() {
+                    last_seq = max;
+                }
             }
             svc.stop(source_root);
             eprintln!("watch stopped.");

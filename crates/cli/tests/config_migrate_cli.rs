@@ -1,4 +1,5 @@
 use std::path::PathBuf;
+use notez_core::domain::{ProjectionReader, ProjectionWrite};
 
 fn notez() -> assert_cmd::Command {
     assert_cmd::Command::cargo_bin("notez").unwrap()

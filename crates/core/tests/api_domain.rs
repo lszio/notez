@@ -59,8 +59,60 @@ impl Error for ContractFailure {}
 
 struct FailingStore;
 
-impl ProjectionStore for FailingStore {
-    type Error = ContractFailure;
+impl notez_core::domain::ProjectionReader for FailingStore {
+    type Error = notez_core::storage::StorageError;
+
+    fn get(&self, _r_ref: &ResourceRef) -> Result<Option<Resource>, Self::Error> {
+        Err(notez_core::storage::StorageError::InvalidData("contract failure".into()))
+    }
+
+    fn query(&self, _selector: &Selector) -> Result<QueryPage, Self::Error> {
+        Err(notez_core::storage::StorageError::InvalidData("contract failure".into()))
+    }
+
+    fn list_conflicts(&self) -> Result<Vec<notez_core::domain::ConflictRecord>, Self::Error> {
+        Err(notez_core::storage::StorageError::InvalidData("contract failure".into()))
+    }
+
+    fn query_segments(
+        &self,
+        _attachment_ref: &str,
+    ) -> Result<Vec<notez_core::domain::SegmentRecord>, Self::Error> {
+        Err(notez_core::storage::StorageError::InvalidData("contract failure".into()))
+    }
+
+    fn query_link_occurrences(
+        &self,
+        _source_ref: &ResourceRef,
+    ) -> Result<Vec<LinkOccurrence>, Self::Error> {
+        Err(notez_core::storage::StorageError::InvalidData("contract failure".into()))
+    }
+
+    fn query_resolved_relations(
+        &self,
+        _source_ref: &ResourceRef,
+    ) -> Result<Vec<notez_core::domain::ResolvedRelation>, Self::Error> {
+        Err(notez_core::storage::StorageError::InvalidData("contract failure".into()))
+    }
+
+    fn list_link_diagnostics(
+        &self,
+        _source_ref: &ResourceRef,
+    ) -> Result<Option<Vec<notez_core::domain::LinkDiagnostic>>, Self::Error> {
+        Err(notez_core::storage::StorageError::InvalidData("contract failure".into()))
+    }
+
+    fn find_by_object(
+        &self,
+        _object_id: &notez_core::domain::ObjectIdentity,
+    ) -> Result<Vec<Resource>, Self::Error> {
+        Err(notez_core::storage::StorageError::InvalidData("contract failure".into()))
+    }
+
+}
+
+impl notez_core::domain::ProjectionWrite for FailingStore {
+    type Error = notez_core::storage::StorageError;
 
     fn replace_source(
         &mut self,
@@ -69,42 +121,66 @@ impl ProjectionStore for FailingStore {
         _relations: Vec<ResourceRelation>,
         _link_occurrences: Vec<LinkOccurrence>,
     ) -> Result<(), Self::Error> {
-        Err(ContractFailure)
-    }
-
-    fn get(&self, _r_ref: &ResourceRef) -> Result<Option<Resource>, Self::Error> {
-        Err(ContractFailure)
-    }
-
-    fn query(&self, _selector: &Selector) -> Result<QueryPage, Self::Error> {
-        Err(ContractFailure)
+        Err(notez_core::storage::StorageError::InvalidData("contract failure".into()))
     }
 
     fn upsert_resource(&mut self, _resource: &Resource) -> Result<(), Self::Error> {
-        Err(ContractFailure)
+        Err(notez_core::storage::StorageError::InvalidData("contract failure".into()))
     }
 
     fn delete_resource(&mut self, _r_ref: &ResourceRef) -> Result<(), Self::Error> {
-        Err(ContractFailure)
+        Err(notez_core::storage::StorageError::InvalidData("contract failure".into()))
     }
 
     fn clear(&mut self) -> Result<(), Self::Error> {
-        Err(ContractFailure)
+        Err(notez_core::storage::StorageError::InvalidData("contract failure".into()))
     }
 
     fn replace_conflicts(
         &mut self,
         _records: &[notez_core::domain::ConflictRecord],
     ) -> Result<(), Self::Error> {
-        Err(ContractFailure)
+        Err(notez_core::storage::StorageError::InvalidData("contract failure".into()))
     }
 
-    fn list_conflicts(&self) -> Result<Vec<notez_core::domain::ConflictRecord>, Self::Error> {
-        Err(ContractFailure)
+    fn insert_segments(
+        &mut self,
+        _segments: &[notez_core::domain::SegmentRecord],
+    ) -> Result<(), Self::Error> {
+        Err(notez_core::storage::StorageError::InvalidData("contract failure".into()))
+    }
+
+    fn replace_link_occurrences(
+        &mut self,
+        _source_id: &str,
+        _occurrences: Vec<LinkOccurrence>,
+    ) -> Result<(), Self::Error> {
+        Err(notez_core::storage::StorageError::InvalidData("contract failure".into()))
+    }
+
+    fn replace_resolved_relations(
+        &mut self,
+        _source_id: &str,
+        _relations: Vec<notez_core::domain::ResolvedRelation>,
+    ) -> Result<(), Self::Error> {
+        Err(notez_core::storage::StorageError::InvalidData("contract failure".into()))
+    }
+
+    fn write_link_diagnostics(
+        &mut self,
+        _source_id: &str,
+        _diagnostics: &[(
+            LinkOccurrence,
+            notez_core::domain::ResolutionStatus,
+            Vec<ResourceRef>,
+        )],
+    ) -> Result<(), Self::Error> {
+        Err(notez_core::storage::StorageError::InvalidData("contract failure".into()))
     }
 }
 
 struct MarkerParser;
+impl notez_core::domain::ProjectionStore for FailingStore {}
 
 impl FormatParser for MarkerParser {
     fn supports(&self, _mime_type: &str) -> bool {
@@ -494,9 +570,9 @@ fn application_scan_rejects_missing_registry_and_storage_errors_are_preserved() 
             .unwrap_err(),
     ] {
         assert!(
-            matches!(err, ApplicationError::Storage { kind: _, ref message } if message == "contract failure")
+            matches!(err, ApplicationError::Storage { kind: _, ref message } if message.contains("contract failure"))
         );
-        assert_eq!(err.to_string(), "storage error (sqlite): contract failure");
+        assert!(err.to_string().contains("contract failure"), "{err}");
     }
 }
 
@@ -578,7 +654,7 @@ fn application_main_paths_surface_storage_errors() {
         service.delete_resource(&doc.r#ref).unwrap_err(),
     ] {
         assert!(
-            matches!(err, ApplicationError::Storage { kind: _, ref message } if message == "contract failure")
+            matches!(err, ApplicationError::Storage { kind: _, ref message } if message.contains("contract failure"))
         );
     }
 
@@ -591,7 +667,7 @@ fn application_main_paths_surface_storage_errors() {
         service.para_overview().unwrap_err(),
     ] {
         assert!(
-            matches!(err, ApplicationError::Storage { kind: _, ref message } if message == "contract failure")
+            matches!(err, ApplicationError::Storage { kind: _, ref message } if message.contains("contract failure"))
         );
     }
 }

@@ -1,4 +1,4 @@
-use crate::preview::{PreviewContext, PreviewError, PreviewModel, Previewer};
+use crate::{PreviewContext, PreviewError, PreviewModel, Previewer};
 
 /// Previewer for Mermaid diagrams embedded in Org (or Markdown) sources.
 ///

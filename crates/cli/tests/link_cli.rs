@@ -1,4 +1,5 @@
 use std::process::Command;
+use notez_core::domain::{ProjectionReader, ProjectionWrite};
 
 fn notez() -> Command {
     Command::new(env!("CARGO_BIN_EXE_notez"))

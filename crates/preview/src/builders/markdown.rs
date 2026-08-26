@@ -1,4 +1,4 @@
-use crate::preview::{PreviewContext, PreviewError, PreviewModel, Previewer};
+use crate::{PreviewContext, PreviewError, PreviewModel, Previewer};
 use pulldown_cmark::{Options, Parser, html::push_html};
 
 /// Previewer for Markdown documents.

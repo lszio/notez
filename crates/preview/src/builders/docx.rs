@@ -26,7 +26,7 @@
 //! empty result. ZIP errors (the bytes are not a DOCX container or
 //! `word/document.xml` is missing) are also surfaced.
 
-use crate::preview::{DocxParagraph, PreviewContext, PreviewError, PreviewModel, Previewer};
+use crate::{DocxParagraph, PreviewContext, PreviewError, PreviewModel, Previewer};
 use bytes::Bytes;
 use quick_xml::Reader;
 use quick_xml::events::Event;
@@ -241,8 +241,8 @@ impl ParagraphBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::{Resource, ResourceKind, ResourceRef};
-    use crate::preview::PreviewerCatalog;
+    use notez_core::domain::{Resource, ResourceKind, ResourceRef};
+    use crate::PreviewerCatalog;
     use std::collections::BTreeMap;
     use std::path::PathBuf;
 

@@ -1,33 +1,7 @@
-use crate::domain::community::Community;
-use serde::{Deserialize, Serialize};
-use std::fs;
-use std::io;
-use std::path::Path;
+//! Community-use-case persistence wrapper.
+//!
+//! The JSON-on-disk cache lives in `storage::cache::SpaceCommunitiesConfig`
+//! (infrastructure layer). This module re-exports the typed shape for
+//! application-side callers and provides no behavior of its own.
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
-pub struct SpaceCommunitiesConfig {
-    pub communities: Vec<Community>,
-}
-
-impl SpaceCommunitiesConfig {
-    pub fn load(source_root: &Path) -> Result<Self, io::Error> {
-        let path = source_root.join(".notez/communities.json");
-        if !path.exists() {
-            return Ok(Self::default());
-        }
-        let content = fs::read_to_string(path)?;
-        let cfg = serde_json::from_str(&content).unwrap_or_default();
-        Ok(cfg)
-    }
-
-    pub fn save(&self, source_root: &Path) -> Result<(), io::Error> {
-        let dot_notez = source_root.join(".notez");
-        if !dot_notez.exists() {
-            fs::create_dir_all(&dot_notez)?;
-        }
-        let path = dot_notez.join("communities.json");
-        let content = serde_json::to_string_pretty(self)?;
-        fs::write(path, content)?;
-        Ok(())
-    }
-}
+pub use crate::storage::cache::SpaceCommunitiesConfig;

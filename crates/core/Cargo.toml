@@ -1,5 +1,5 @@
 [package]
-name = "core"
+name = "notez-core"
 version = "0.1.0"
 edition = "2024"
 description = "notez core: domain model, storage, document/source parsers, application services, preview catalog"
@@ -22,12 +22,17 @@ zip            = { version = "0.6", default-features = false, features = ["defla
 quick-xml      = "0.36"
 csv            = "1.3"
 bytes          = "1"
+notez-protocol = { path = "../protocol" }
 walkdir        = { workspace = true }
 tempfile       = "3"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 rusqlite = { workspace = true }
 notify   = "6"
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+getrandom_03 = { package = "getrandom", version = "0.3", features = ["wasm_js"] }
+getrandom    = { version = "0.4", features = ["wasm_js"] }
 
 [dev-dependencies]
 orgmode  = { path = "../adapters/orgmode" }

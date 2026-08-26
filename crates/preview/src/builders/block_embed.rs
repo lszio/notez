@@ -1,5 +1,5 @@
-use crate::domain::{ResourceKind, ResourceRef};
-use crate::preview::{PreviewContext, PreviewError, PreviewModel, Previewer};
+use notez_core::domain::{ResourceKind, ResourceRef};
+use crate::{PreviewContext, PreviewError, PreviewModel, Previewer};
 use std::hash::{DefaultHasher, Hash, Hasher};
 
 /// Previewer for `[[block:<ref-id>]]` embed references within a document body.

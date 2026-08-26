@@ -49,14 +49,33 @@ fn main() {
             std::env::set_var("IP", "127.0.0.1");
         }
     }
-    // Dioxus ServeConfig needs to read index.html from disk; we
-    // can't construct `IndexHtml` manually because it's
-    // pub(crate). So we write the compiled-in string to a
-    // temporary directory and point Dioxus at it.
-    let temp_dir = std::env::temp_dir().join(format!("notez-web-{}", std::process::id()));
-    std::fs::create_dir_all(&temp_dir).unwrap();
-    std::fs::write(temp_dir.join("index.html"), INDEX_HTML).unwrap();
-    unsafe { std::env::set_var("DIOXUS_PUBLIC_PATH", &temp_dir); }
+    // M6 hydration: prefer the dx build output directory, which
+    // contains both index.html AND the hydrated client payload
+    // (`public/wasm/web_bg.wasm` + loader). Only fall back to the
+    // embedded-HTML temp dir for plain `cargo run` builds where no
+    // client was compiled.
+    let exe_public = std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.parent().map(|d| d.join("public")))
+        .filter(|p| p.join("wasm").join("web_bg.wasm").exists());
+    let temp_dir;
+    let public_path = match exe_public {
+        Some(p) => {
+            println!("[notez-web] serving hydrated client assets from {}", p.display());
+            p
+        }
+        None => {
+            eprintln!(
+                "[notez-web] no hydrated client found next to binary; \
+                 serving SSR-only (build with `dx build --platform web`)"
+            );
+            temp_dir = std::env::temp_dir().join(format!("notez-web-{}", std::process::id()));
+            std::fs::create_dir_all(&temp_dir).unwrap();
+            std::fs::write(temp_dir.join("index.html"), INDEX_HTML).unwrap();
+            temp_dir
+        }
+    };
+    unsafe { std::env::set_var("DIOXUS_PUBLIC_PATH", &public_path); }
 
     let state = WebState::new();
     let _ = serve(move || {
@@ -76,5 +95,13 @@ fn main() {
     });
 }
 
+/// WASM client entry: hydrate the SSR output. The server renders the
+/// full page via `serve_dioxus_application`; this client boots the same
+/// `notez_web::app` component tree on top of it, which is what turns
+/// the previously inert signal handlers (palette, list filters) into
+/// live interactions.
 #[cfg(target_arch = "wasm32")]
-fn main() {}
+fn main() {
+    // Re-exported closure keeps parity with the server's app tree.
+    dioxus::launch(notez_web::app);
+}

@@ -1,4 +1,4 @@
-use crate::preview::{PreviewContext, PreviewError, PreviewModel, Previewer, QueryRequest};
+use crate::{PreviewContext, PreviewError, PreviewModel, Previewer, QueryRequest};
 
 /// Previewer for `#+BEGIN_SRC query` source blocks.
 ///

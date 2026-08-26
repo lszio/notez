@@ -1,12 +1,13 @@
 use crate::domain::{
-    LinkOccurrence, LinkTarget, ObjectIdentity, ProjectionStore, QueryPage, ResolutionStatus,
-    ResolvedRelation, Resource, ResourceRef, ResourceRelation, SegmentRecord, Selector, TextSpan,
+    LinkDiagnostic, LinkOccurrence, LinkTarget, ObjectIdentity, ProjectionReader, ProjectionStore,
+    ProjectionWrite, QueryPage, ResolutionStatus, ResolvedRelation, Resource, ResourceRef,
+    ResourceRelation, SegmentRecord, Selector, TextSpan,
 };
 use rusqlite::{Connection, OptionalExtension, params};
 use std::collections::BTreeMap;
 use std::path::Path;
+use std::sync::Mutex;
 use thiserror::Error;
-
 #[derive(Error, Debug)]
 pub enum StorageError {
     #[error("SQLite error: {0}")]
@@ -34,6 +35,25 @@ impl SqliteProjection {
         let mut store = Self { conn };
         store.init_schema()?;
         Ok(store)
+    }
+
+    /// Hand the underlying connection to another adapter (e.g. the
+    /// journal) and return it wrapped for `Send` use.
+    pub fn open_for_adapter(
+        path: &Path,
+    ) -> Result<Mutex<Connection>, StorageError> {
+        let conn = Connection::open(path)?;
+        let mut tmp = Self { conn };
+        tmp.init_schema()?;
+        Ok(Mutex::new(tmp.into_inner()))
+    }
+
+    /// Consume the projection, yielding its connection. The caller is
+    /// responsible for further schema migrations on the returned
+    /// handle (the projection has already initialised the schema on
+    /// `open`/`in_memory`).
+    pub fn into_inner(self) -> Connection {
+        self.conn
     }
 
     fn init_schema(&mut self) -> Result<(), StorageError> {
@@ -116,6 +136,7 @@ impl SqliteProjection {
         self.migrate_to_v2()?;
         self.migrate_to_v3()?;
         self.migrate_to_v4()?;
+        self.migrate_to_v5()?;
         Ok(())
     }
 
@@ -211,6 +232,44 @@ impl SqliteProjection {
         )?;
         Ok(())
     }
+
+    fn migrate_to_v5(&mut self) -> Result<(), StorageError> {
+        if self.user_version()? >= 5 {
+            return Ok(());
+        }
+        self.conn.execute_batch(
+            "
+            CREATE TABLE IF NOT EXISTS event_journal (
+                sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+                change_id TEXT NOT NULL UNIQUE,
+                actor_principal TEXT NOT NULL,
+                actor_space TEXT,
+                actor_source TEXT,
+                at_unix_millis INTEGER NOT NULL,
+                source_id TEXT NOT NULL,
+                op_json TEXT NOT NULL,
+                targets_json TEXT NOT NULL,
+                expected_revision TEXT,
+                payload_json TEXT NOT NULL DEFAULT '{}'
+            );
+            CREATE INDEX IF NOT EXISTS idx_event_journal_actor ON event_journal(actor_principal);
+            CREATE INDEX IF NOT EXISTS idx_event_journal_at ON event_journal(at_unix_millis);
+            CREATE TABLE IF NOT EXISTS audit_records (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                change_id TEXT NOT NULL,
+                principal TEXT NOT NULL,
+                action TEXT NOT NULL,
+                target_ref TEXT NOT NULL,
+                outcome_json TEXT NOT NULL,
+                recorded_at_unix_millis INTEGER NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_audit_target ON audit_records(target_ref);
+            CREATE INDEX IF NOT EXISTS idx_audit_change ON audit_records(change_id);
+            PRAGMA user_version = 5;
+            ",
+        )?;
+        Ok(())
+    }
     pub fn insert_segments(&mut self, segments: &[SegmentRecord]) -> Result<(), StorageError> {
         let tx = self.conn.transaction()?;
         {
@@ -259,120 +318,8 @@ impl SqliteProjection {
         Ok(results)
     }
 }
-impl ProjectionStore for SqliteProjection {
+impl ProjectionReader for SqliteProjection {
     type Error = StorageError;
-    fn replace_source(
-        &mut self,
-        source_id: &str,
-        resources: Vec<Resource>,
-        relations: Vec<ResourceRelation>,
-        link_occurrences: Vec<LinkOccurrence>,
-    ) -> Result<(), StorageError> {
-        let tx = self.conn.transaction()?;
-
-        tx.execute(
-            "DELETE FROM resources WHERE source_id = ?1",
-            params![source_id],
-        )?;
-        tx.execute(
-            "DELETE FROM relations WHERE source_id = ?1",
-            params![source_id],
-        )?;
-        tx.execute(
-            "DELETE FROM link_occurrences WHERE source_id = ?1",
-            params![source_id],
-        )?;
-
-        {
-            let mut stmt_res = tx.prepare(
-                "INSERT INTO resources (ref, kind, title, revision, source_id, locator, properties_json, object_id, content_hash, primary_source_id)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
-                 ON CONFLICT(ref) DO UPDATE SET
-                     kind = excluded.kind,
-                     title = excluded.title,
-                     revision = excluded.revision,
-                     source_id = excluded.source_id,
-                     locator = excluded.locator,
-                     properties_json = excluded.properties_json,
-                     object_id = excluded.object_id,
-                     content_hash = excluded.content_hash,
-                     primary_source_id = excluded.primary_source_id",
-            )?;
-
-            for res in resources {
-                let ref_str = res.r#ref.to_string();
-                let kind_str = res.kind.as_str();
-                let props_json = serde_json::to_string(&res.properties)?;
-                // When the caller didn't populate primary_source_id (empty),
-                // default it to this scan's source_id, i.e. the scanned
-                // source IS the primary source by default (only references
-                // set it to a different source).
-                let primary_source_id = if res.primary_source_id.is_empty() {
-                    source_id.to_string()
-                } else {
-                    res.primary_source_id.clone()
-                };
-                stmt_res.execute(params![
-                    ref_str,
-                    kind_str,
-                    res.title,
-                    res.revision,
-                    source_id,
-                    res.locator,
-                    props_json,
-                    res.object_id.to_string(),
-                    String::new(), // content_hash placeholder; filled by scan path
-                    primary_source_id,
-                ])?;
-            }
-        }
-
-        {
-            let mut stmt_rel = tx.prepare(
-                "INSERT INTO relations (source_ref, relation, target_ref, source_id, relation_type, direction, evidence_json, created_at, creator)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
-            )?;
-
-            for rel in relations {
-                let evidence_json = serde_json::to_string(&rel.evidence_json)?;
-                stmt_rel.execute(params![
-                    rel.source_ref.to_string(),
-                    rel.relation,
-                    rel.target_ref.to_string(),
-                    source_id,
-                    rel.relation_type.to_string(),
-                    rel.direction.to_string(),
-                    evidence_json,
-                    rel.created_at.clone(),
-                    rel.creator.clone(),
-                ])?;
-            }
-        }
-
-        {
-            let mut stmt_occ = tx.prepare(
-                "INSERT INTO link_occurrences (source_ref, target_json, raw, display_text, span_line, span_col_start, span_col_end, source_id)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-            )?;
-
-            for occ in link_occurrences {
-                let target_json = serde_json::to_string(&occ.target)?;
-                stmt_occ.execute(params![
-                    occ.source_ref.to_string(),
-                    target_json,
-                    occ.raw,
-                    occ.display_text,
-                    occ.span.line as i64,
-                    occ.span.col_start as i64,
-                    occ.span.col_end as i64,
-                    source_id,
-                ])?;
-            }
-        }
-
-        tx.commit()?;
-        Ok(())
-    }
 
     fn get(&self, r#ref: &ResourceRef) -> Result<Option<Resource>, StorageError> {
         let ref_str = r#ref.to_string();
@@ -444,6 +391,7 @@ impl ProjectionStore for SqliteProjection {
             Ok(None)
         }
     }
+
     fn query(&self, selector: &Selector) -> Result<QueryPage, StorageError> {
         let mut sql = "SELECT ref, kind, title, revision, source_id, locator, properties_json, object_id, primary_source_id FROM resources WHERE 1=1".to_string();
         let mut query_params: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
@@ -613,100 +561,8 @@ impl ProjectionStore for SqliteProjection {
         Ok(items)
     }
 
-    fn upsert_resource(&mut self, resource: &Resource) -> Result<(), StorageError> {
-        let ref_str = resource.r#ref.to_string();
-        let kind_str = resource.kind.as_str();
-        let props_json = serde_json::to_string(&resource.properties)?;
-        // Default empty primary_source_id to the resource's own source_id
-        // so single-resource upserts (writeback, manual inserts) follow the
-        // same "self is primary unless explicitly marked as reference" rule
-        // that `replace_source` applies.
-        let primary_source_id = if resource.primary_source_id.is_empty() {
-            resource.source_id.clone()
-        } else {
-            resource.primary_source_id.clone()
-        };
-        self.conn.execute(
-            "INSERT INTO resources (ref, kind, title, revision, source_id, locator, properties_json, object_id, primary_source_id)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
-             ON CONFLICT(ref) DO UPDATE SET
-                 kind = excluded.kind,
-                 title = excluded.title,
-                 revision = excluded.revision,
-                 source_id = excluded.source_id,
-                 locator = excluded.locator,
-                 properties_json = excluded.properties_json,
-                 object_id = excluded.object_id,
-                 primary_source_id = excluded.primary_source_id",
-            params![
-                ref_str,
-                kind_str,
-                resource.title,
-                resource.revision,
-                resource.source_id,
-                resource.locator,
-                props_json,
-                resource.object_id.to_string(),
-                primary_source_id,
-            ],
-        )?;
-        Ok(())
-    }
-    fn delete_resource(&mut self, r_ref: &ResourceRef) -> Result<(), StorageError> {
-        let ref_str = r_ref.to_string();
-        self.conn
-            .execute("DELETE FROM resources WHERE ref = ?1", params![ref_str])?;
-        Ok(())
-    }
-
-    fn clear(&mut self) -> Result<(), StorageError> {
-        self.conn.execute("DELETE FROM resources", [])?;
-        self.conn.execute("DELETE FROM relations", [])?;
-        self.conn.execute("DELETE FROM link_occurrences", [])?;
-        self.conn.execute("DELETE FROM resolved_relations", [])?;
-        Ok(())
-    }
-    fn insert_segments(&mut self, segments: &[SegmentRecord]) -> Result<(), StorageError> {
-        self.insert_segments(segments)
-    }
-
     fn query_segments(&self, attachment_ref: &str) -> Result<Vec<SegmentRecord>, StorageError> {
         self.query_segments(attachment_ref)
-    }
-
-    fn replace_link_occurrences(
-        &mut self,
-        source_id: &str,
-        occurrences: Vec<LinkOccurrence>,
-    ) -> Result<(), StorageError> {
-        let tx = self.conn.transaction()?;
-        tx.execute(
-            "DELETE FROM link_occurrences WHERE source_id = ?1",
-            params![source_id],
-        )?;
-
-        {
-            let mut stmt_occ = tx.prepare(
-                "INSERT INTO link_occurrences (source_ref, target_json, raw, display_text, span_line, span_col_start, span_col_end, source_id)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-            )?;
-
-            for occ in occurrences {
-                let target_json = serde_json::to_string(&occ.target)?;
-                stmt_occ.execute(params![
-                    occ.source_ref.to_string(),
-                    target_json,
-                    occ.raw,
-                    occ.display_text,
-                    occ.span.line as i64,
-                    occ.span.col_start as i64,
-                    occ.span.col_end as i64,
-                    source_id,
-                ])?;
-            }
-        }
-        tx.commit()?;
-        Ok(())
     }
 
     fn query_link_occurrences(
@@ -767,47 +623,6 @@ impl ProjectionStore for SqliteProjection {
         Ok(results)
     }
 
-    fn replace_resolved_relations(
-        &mut self,
-        source_id: &str,
-        relations: Vec<ResolvedRelation>,
-    ) -> Result<(), StorageError> {
-        let tx = self.conn.transaction()?;
-        tx.execute(
-            "DELETE FROM resolved_relations WHERE source_id = ?1",
-            params![source_id],
-        )?;
-
-        {
-            let mut stmt = tx.prepare(
-                "INSERT INTO resolved_relations (source_ref, target_ref, target_json, status, candidates_json, source_id, relation_type, direction, evidence_json, created_at, creator)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
-            )?;
-
-            for rel in relations {
-                let target_json = serde_json::to_string(&rel.target)?;
-                let status_str = serde_json::to_string(&rel.status)?;
-                let candidates_json = serde_json::to_string(&rel.candidates)?;
-                stmt.execute(params![
-                    rel.source_ref.to_string(),
-                    rel.target_ref.to_string(),
-                    target_json,
-                    status_str,
-                    candidates_json,
-                    source_id,
-                    rel.relation_type.to_string(),
-                    rel.direction.to_string(),
-                    serde_json::to_string(&rel.evidence_json)?,
-                    rel.created_at.clone(),
-                    rel.creator.clone(),
-                ])?;
-            }
-        }
-
-        tx.commit()?;
-        Ok(())
-    }
-
     fn query_resolved_relations(
         &self,
         source_ref: &ResourceRef,
@@ -857,53 +672,6 @@ impl ProjectionStore for SqliteProjection {
             });
         }
         Ok(results)
-    }
-
-    fn write_link_diagnostics(
-        &mut self,
-        source_id: &str,
-        diagnostics: &[(LinkOccurrence, ResolutionStatus, Vec<ResourceRef>)],
-    ) -> Result<(), StorageError> {
-        let tx = self.conn.transaction()?;
-        tx.execute(
-            "DELETE FROM link_diagnostics WHERE source_id = ?1",
-            params![source_id],
-        )?;
-        let mut stmt = tx.prepare(
-            "INSERT INTO link_diagnostics (source_ref, source_id, status, candidates_json, raw)
-             VALUES (?1, ?2, ?3, ?4, ?5)",
-        )?;
-        for (occ, status, candidates) in diagnostics {
-            let status_str = serde_json::to_string(status)?;
-            let candidates_json = serde_json::to_string(candidates)?;
-            stmt.execute(params![
-                occ.source_ref.to_string(),
-                source_id,
-                status_str,
-                candidates_json,
-                occ.raw,
-            ])?;
-        }
-        drop(stmt);
-        // Mirror onto link_occurrences so list_link_diagnostics can join
-        // without a sidecar read. Match by raw text within a source.
-        tx.execute(
-            "UPDATE link_occurrences SET status = 'unresolved', candidates_json = '[]' WHERE source_id = ?1",
-            params![source_id],
-        )?;
-        let mut stmt_update = tx.prepare(
-            "UPDATE link_occurrences
-                SET status = ?1, candidates_json = ?2
-              WHERE source_id = ?3 AND raw = ?4",
-        )?;
-        for (occ, status, candidates) in diagnostics {
-            let status_str = serde_json::to_string(status)?;
-            let candidates_json = serde_json::to_string(candidates)?;
-            stmt_update.execute(params![status_str, candidates_json, source_id, occ.raw,])?;
-        }
-        drop(stmt_update);
-        tx.commit()?;
-        Ok(())
     }
 
     fn list_link_diagnostics(
@@ -980,32 +748,6 @@ impl ProjectionStore for SqliteProjection {
         Ok(if any { Some(results) } else { None })
     }
 
-    fn replace_conflicts(
-        &mut self,
-        records: &[crate::domain::ConflictRecord],
-    ) -> Result<(), StorageError> {
-        let tx = self.conn.transaction()?;
-        {
-            let mut stmt = tx.prepare(
-                "INSERT OR REPLACE INTO conflicts
-                    (logical_path, mine_hash, theirs_hash, conflict_text, status, detected_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-            )?;
-            for r in records {
-                stmt.execute(params![
-                    r.logical_path,
-                    r.mine_hash,
-                    r.theirs_hash,
-                    r.conflict_text,
-                    r.status,
-                    r.detected_at as i64,
-                ])?;
-            }
-        }
-        tx.commit()?;
-        Ok(())
-    }
-
     fn list_conflicts(&self) -> Result<Vec<crate::domain::ConflictRecord>, StorageError> {
         let mut stmt = self.conn.prepare(
             "SELECT logical_path, mine_hash, theirs_hash, conflict_text, status, detected_at
@@ -1035,4 +777,334 @@ impl ProjectionStore for SqliteProjection {
         }
         Ok(out)
     }
+
 }
+
+impl ProjectionWrite for SqliteProjection {
+    type Error = StorageError;
+
+    fn replace_source(
+        &mut self,
+        source_id: &str,
+        resources: Vec<Resource>,
+        relations: Vec<ResourceRelation>,
+        link_occurrences: Vec<LinkOccurrence>,
+    ) -> Result<(), StorageError> {
+        let tx = self.conn.transaction()?;
+
+        tx.execute(
+            "DELETE FROM resources WHERE source_id = ?1",
+            params![source_id],
+        )?;
+        tx.execute(
+            "DELETE FROM relations WHERE source_id = ?1",
+            params![source_id],
+        )?;
+        tx.execute(
+            "DELETE FROM link_occurrences WHERE source_id = ?1",
+            params![source_id],
+        )?;
+
+        {
+            let mut stmt_res = tx.prepare(
+                "INSERT INTO resources (ref, kind, title, revision, source_id, locator, properties_json, object_id, content_hash, primary_source_id)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+                 ON CONFLICT(ref) DO UPDATE SET
+                     kind = excluded.kind,
+                     title = excluded.title,
+                     revision = excluded.revision,
+                     source_id = excluded.source_id,
+                     locator = excluded.locator,
+                     properties_json = excluded.properties_json,
+                     object_id = excluded.object_id,
+                     content_hash = excluded.content_hash,
+                     primary_source_id = excluded.primary_source_id",
+            )?;
+
+            for res in resources {
+                let ref_str = res.r#ref.to_string();
+                let kind_str = res.kind.as_str();
+                let props_json = serde_json::to_string(&res.properties)?;
+                // When the caller didn't populate primary_source_id (empty),
+                // default it to this scan's source_id, i.e. the scanned
+                // source IS the primary source by default (only references
+                // set it to a different source).
+                let primary_source_id = if res.primary_source_id.is_empty() {
+                    source_id.to_string()
+                } else {
+                    res.primary_source_id.clone()
+                };
+                stmt_res.execute(params![
+                    ref_str,
+                    kind_str,
+                    res.title,
+                    res.revision,
+                    source_id,
+                    res.locator,
+                    props_json,
+                    res.object_id.to_string(),
+                    String::new(), // content_hash placeholder; filled by scan path
+                    primary_source_id,
+                ])?;
+            }
+        }
+
+        {
+            let mut stmt_rel = tx.prepare(
+                "INSERT INTO relations (source_ref, relation, target_ref, source_id, relation_type, direction, evidence_json, created_at, creator)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            )?;
+
+            for rel in relations {
+                let evidence_json = serde_json::to_string(&rel.evidence_json)?;
+                stmt_rel.execute(params![
+                    rel.source_ref.to_string(),
+                    rel.relation,
+                    rel.target_ref.to_string(),
+                    source_id,
+                    rel.relation_type.to_string(),
+                    rel.direction.to_string(),
+                    evidence_json,
+                    rel.created_at.clone(),
+                    rel.creator.clone(),
+                ])?;
+            }
+        }
+
+        {
+            let mut stmt_occ = tx.prepare(
+                "INSERT INTO link_occurrences (source_ref, target_json, raw, display_text, span_line, span_col_start, span_col_end, source_id)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            )?;
+
+            for occ in link_occurrences {
+                let target_json = serde_json::to_string(&occ.target)?;
+                stmt_occ.execute(params![
+                    occ.source_ref.to_string(),
+                    target_json,
+                    occ.raw,
+                    occ.display_text,
+                    occ.span.line as i64,
+                    occ.span.col_start as i64,
+                    occ.span.col_end as i64,
+                    source_id,
+                ])?;
+            }
+        }
+
+        tx.commit()?;
+        Ok(())
+    }
+
+    fn upsert_resource(&mut self, resource: &Resource) -> Result<(), StorageError> {
+        let ref_str = resource.r#ref.to_string();
+        let kind_str = resource.kind.as_str();
+        let props_json = serde_json::to_string(&resource.properties)?;
+        // Default empty primary_source_id to the resource's own source_id
+        // so single-resource upserts (writeback, manual inserts) follow the
+        // same "self is primary unless explicitly marked as reference" rule
+        // that `replace_source` applies.
+        let primary_source_id = if resource.primary_source_id.is_empty() {
+            resource.source_id.clone()
+        } else {
+            resource.primary_source_id.clone()
+        };
+        self.conn.execute(
+            "INSERT INTO resources (ref, kind, title, revision, source_id, locator, properties_json, object_id, primary_source_id)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+             ON CONFLICT(ref) DO UPDATE SET
+                 kind = excluded.kind,
+                 title = excluded.title,
+                 revision = excluded.revision,
+                 source_id = excluded.source_id,
+                 locator = excluded.locator,
+                 properties_json = excluded.properties_json,
+                 object_id = excluded.object_id,
+                 primary_source_id = excluded.primary_source_id",
+            params![
+                ref_str,
+                kind_str,
+                resource.title,
+                resource.revision,
+                resource.source_id,
+                resource.locator,
+                props_json,
+                resource.object_id.to_string(),
+                primary_source_id,
+            ],
+        )?;
+        Ok(())
+    }
+
+    fn delete_resource(&mut self, r_ref: &ResourceRef) -> Result<(), StorageError> {
+        let ref_str = r_ref.to_string();
+        self.conn
+            .execute("DELETE FROM resources WHERE ref = ?1", params![ref_str])?;
+        Ok(())
+    }
+
+    fn clear(&mut self) -> Result<(), StorageError> {
+        self.conn.execute("DELETE FROM resources", [])?;
+        self.conn.execute("DELETE FROM relations", [])?;
+        self.conn.execute("DELETE FROM link_occurrences", [])?;
+        self.conn.execute("DELETE FROM resolved_relations", [])?;
+        Ok(())
+    }
+
+    fn insert_segments(&mut self, segments: &[SegmentRecord]) -> Result<(), StorageError> {
+        self.insert_segments(segments)
+    }
+
+    fn replace_link_occurrences(
+        &mut self,
+        source_id: &str,
+        occurrences: Vec<LinkOccurrence>,
+    ) -> Result<(), StorageError> {
+        let tx = self.conn.transaction()?;
+        tx.execute(
+            "DELETE FROM link_occurrences WHERE source_id = ?1",
+            params![source_id],
+        )?;
+
+        {
+            let mut stmt_occ = tx.prepare(
+                "INSERT INTO link_occurrences (source_ref, target_json, raw, display_text, span_line, span_col_start, span_col_end, source_id)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            )?;
+
+            for occ in occurrences {
+                let target_json = serde_json::to_string(&occ.target)?;
+                stmt_occ.execute(params![
+                    occ.source_ref.to_string(),
+                    target_json,
+                    occ.raw,
+                    occ.display_text,
+                    occ.span.line as i64,
+                    occ.span.col_start as i64,
+                    occ.span.col_end as i64,
+                    source_id,
+                ])?;
+            }
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    fn replace_resolved_relations(
+        &mut self,
+        source_id: &str,
+        relations: Vec<ResolvedRelation>,
+    ) -> Result<(), StorageError> {
+        let tx = self.conn.transaction()?;
+        tx.execute(
+            "DELETE FROM resolved_relations WHERE source_id = ?1",
+            params![source_id],
+        )?;
+
+        {
+            let mut stmt = tx.prepare(
+                "INSERT INTO resolved_relations (source_ref, target_ref, target_json, status, candidates_json, source_id, relation_type, direction, evidence_json, created_at, creator)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+            )?;
+
+            for rel in relations {
+                let target_json = serde_json::to_string(&rel.target)?;
+                let status_str = serde_json::to_string(&rel.status)?;
+                let candidates_json = serde_json::to_string(&rel.candidates)?;
+                stmt.execute(params![
+                    rel.source_ref.to_string(),
+                    rel.target_ref.to_string(),
+                    target_json,
+                    status_str,
+                    candidates_json,
+                    source_id,
+                    rel.relation_type.to_string(),
+                    rel.direction.to_string(),
+                    serde_json::to_string(&rel.evidence_json)?,
+                    rel.created_at.clone(),
+                    rel.creator.clone(),
+                ])?;
+            }
+        }
+
+        tx.commit()?;
+        Ok(())
+    }
+
+    fn write_link_diagnostics(
+        &mut self,
+        source_id: &str,
+        diagnostics: &[(LinkOccurrence, ResolutionStatus, Vec<ResourceRef>)],
+    ) -> Result<(), StorageError> {
+        let tx = self.conn.transaction()?;
+        tx.execute(
+            "DELETE FROM link_diagnostics WHERE source_id = ?1",
+            params![source_id],
+        )?;
+        let mut stmt = tx.prepare(
+            "INSERT INTO link_diagnostics (source_ref, source_id, status, candidates_json, raw)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+        )?;
+        for (occ, status, candidates) in diagnostics {
+            let status_str = serde_json::to_string(status)?;
+            let candidates_json = serde_json::to_string(candidates)?;
+            stmt.execute(params![
+                occ.source_ref.to_string(),
+                source_id,
+                status_str,
+                candidates_json,
+                occ.raw,
+            ])?;
+        }
+        drop(stmt);
+        // Mirror onto link_occurrences so list_link_diagnostics can join
+        // without a sidecar read. Match by raw text within a source.
+        tx.execute(
+            "UPDATE link_occurrences SET status = 'unresolved', candidates_json = '[]' WHERE source_id = ?1",
+            params![source_id],
+        )?;
+        let mut stmt_update = tx.prepare(
+            "UPDATE link_occurrences
+                SET status = ?1, candidates_json = ?2
+              WHERE source_id = ?3 AND raw = ?4",
+        )?;
+        for (occ, status, candidates) in diagnostics {
+            let status_str = serde_json::to_string(status)?;
+            let candidates_json = serde_json::to_string(candidates)?;
+            stmt_update.execute(params![status_str, candidates_json, source_id, occ.raw,])?;
+        }
+        drop(stmt_update);
+        tx.commit()?;
+        Ok(())
+    }
+
+    fn replace_conflicts(
+        &mut self,
+        records: &[crate::domain::ConflictRecord],
+    ) -> Result<(), StorageError> {
+        let tx = self.conn.transaction()?;
+        {
+            let mut stmt = tx.prepare(
+                "INSERT OR REPLACE INTO conflicts
+                    (logical_path, mine_hash, theirs_hash, conflict_text, status, detected_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            )?;
+            for r in records {
+                stmt.execute(params![
+                    r.logical_path,
+                    r.mine_hash,
+                    r.theirs_hash,
+                    r.conflict_text,
+                    r.status,
+                    r.detected_at as i64,
+                ])?;
+            }
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+}
+
+// Reads + writes: the full store contract.
+impl ProjectionStore for SqliteProjection {}

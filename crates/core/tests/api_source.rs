@@ -1,4 +1,4 @@
-use notez_core::domain::{LinkOccurrence, Resource, ResourceKind, ResourceRef, ResourceRelation};
+use notez_core::domain::{LinkOccurrence, Resource, ResourceKind, ResourceRef, ResourceRelation, ProjectionReader, ProjectionWrite};
 use notez_core::source::protocol::{
     FormatParser, ParsedEntity, ParserError, RawEntity, SourceTransport, TransportError,
 };

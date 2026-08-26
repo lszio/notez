@@ -44,12 +44,18 @@ if ! grep -q '"kind":"block"' "$TEMP_DIR/blocks.json"; then
     exit 1
 fi
 
-echo "Testing MCP block query transcript..."
+echo "Testing MCP heading query (valid kind) and asserting output..."
 cat <<EOF > "$TEMP_DIR/mcp_req.jsonl"
-{"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}}
-{"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "query", "arguments": {"kind": "block"}}}
+{"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-11-25", "capabilities": {}, "clientInfo": {"name": "notez-acceptance", "version": "0.0.1"}}}
+{"jsonrpc": "2.0", "method": "notifications/initialized"}
+{"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "query", "arguments": {"kind": "heading"}}}
 EOF
 
 "$NOTEZ_BIN" --space "$SPACE_DIR" mcp serve < "$TEMP_DIR/mcp_req.jsonl" > "$TEMP_DIR/mcp_blocks.json"
+
+if ! grep -q 'heading:01J00000000000000000000034' "$TEMP_DIR/mcp_blocks.json"; then
+    echo "Error: MCP query did not surface the seeded heading ref!"
+    exit 1
+fi
 
 echo "evolution acceptance: PASS"

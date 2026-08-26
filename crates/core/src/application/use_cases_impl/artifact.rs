@@ -7,12 +7,17 @@ use crate::application::service::{
     ApplicationError, ApplicationFacade, DocumentErrorKind, StorageErrorKind,
 };
 use crate::application::use_cases::{ArtifactUseCase, ResourceUseCase};
+use crate::domain::{ProjectionReader, ProjectionWrite};
 use crate::application::write_check;
 use crate::artifact::{DerivedArtifact, SkillPackage};
 use crate::domain::{ProjectionStore, Resource, Selector};
 use std::path::Path;
 
-impl<S: ProjectionStore> ArtifactUseCase for ApplicationFacade<S> {
+impl<S> ArtifactUseCase for ApplicationFacade<S>
+where
+    S: ProjectionStore,
+    S: ProjectionReader<Error = crate::storage::StorageError>
+        + ProjectionWrite<Error = crate::storage::StorageError>, {
     fn derive_artifact(
         &self,
         community_id: &str,

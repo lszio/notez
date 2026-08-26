@@ -1,6 +1,7 @@
 //! Contract tests for `ScanUseCase`.
 
 use notez_core::application::ApplicationFacade;
+use notez_core::domain::{ProjectionReader, ProjectionWrite};
 use notez_core::application::use_cases::ScanUseCase;
 use notez_core::domain::ResourceKind;
 use notez_core::domain::Selector;

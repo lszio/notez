@@ -19,6 +19,7 @@
 //! surface the gap.
 
 use std::collections::{BTreeMap, BTreeSet};
+use crate::domain::{ProjectionReader, ProjectionWrite};
 
 use crate::application::service::ApplicationFacade;
 use crate::application::use_cases::{LinkUseCase, ResourceUseCase, ScanUseCase};
@@ -89,6 +90,8 @@ impl Graph {
     ) -> Result<Self, crate::application::ApplicationError>
     where
         S: ProjectionStore,
+        S: ProjectionReader<Error = crate::storage::StorageError>
+            + ProjectionWrite<Error = crate::storage::StorageError>,
     {
         let page = facade.query(&Selector::new())?;
         let resources: Vec<Resource> = page.items;
@@ -166,6 +169,8 @@ impl Graph {
     ) -> Result<Self, crate::application::ApplicationError>
     where
         S: ProjectionStore,
+        S: ProjectionReader<Error = crate::storage::StorageError>
+            + ProjectionWrite<Error = crate::storage::StorageError>,
     {
         let focus = focus_ref.to_string();
         let page = facade.query(&Selector::new())?;

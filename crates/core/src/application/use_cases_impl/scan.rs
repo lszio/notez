@@ -9,9 +9,14 @@ use crate::application::service::{
     ApplicationError, ApplicationFacade, ScanReport, StorageErrorKind,
 };
 use crate::application::use_cases::ScanUseCase;
-use crate::domain::ProjectionStore;
+use crate::domain::{ProjectionReader, ProjectionStore, ProjectionWrite};
 
-impl<S: ProjectionStore> ScanUseCase for ApplicationFacade<S> {
+impl<S> ScanUseCase for ApplicationFacade<S>
+where
+    S: ProjectionStore,
+    S: ProjectionReader<Error = crate::storage::StorageError>
+        + ProjectionWrite<Error = crate::storage::StorageError>,
+{
     fn scan_native(&mut self) -> Result<ScanReport, ApplicationError> {
         use crate::application::link_resolution::resolve_and_store_links;
         use crate::source::SourceAdapter;
@@ -60,7 +65,15 @@ impl<S: ProjectionStore> ScanUseCase for ApplicationFacade<S> {
             .len();
         let scanned_resources = scanned.resources.len();
         let link_occurrences = scanned.link_occurrences.clone();
-        self.store
+        let journaling = crate::application::projector::Journaling::from_parts(
+            self.journal.as_ref(),
+            self.audit.as_ref(),
+            self.actor_principal(),
+            self.now_unix_millis(),
+        );
+        let mut projector =
+            crate::application::projector::Projector::new(&mut self.store, &journaling);
+        projector
             .replace_source(
                 "native",
                 std::mem::take(&mut scanned.resources),

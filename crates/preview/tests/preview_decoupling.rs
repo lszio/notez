@@ -4,8 +4,8 @@
 //! `ApplicationService<SqliteProjection>`; preview must render strictly
 //! from data passed in by the caller.
 
-use notez_core::domain::{Resource, ResourceKind, ResourceRef};
-use notez_core::preview::{PreviewContext, PreviewModel, PreviewerCatalog, default_catalog};
+use notez_core::domain::{Resource, ResourceKind, ResourceRef, ProjectionReader, ProjectionWrite};
+use notez_preview::{PreviewContext, PreviewModel, PreviewerCatalog, default_catalog};
 
 fn make_ctx<'a>(
     bytes: &'static [u8],

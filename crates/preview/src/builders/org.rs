@@ -1,6 +1,6 @@
 use super::org_html::render_org_html;
-use crate::domain::ResourceKind;
-use crate::preview::{PreviewContext, PreviewError, PreviewModel, Previewer};
+use notez_core::domain::ResourceKind;
+use crate::{PreviewContext, PreviewError, PreviewModel, Previewer};
 
 /// Previewer for Org-mode documents, headings, and blocks.
 ///

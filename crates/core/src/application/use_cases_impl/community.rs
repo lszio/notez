@@ -6,10 +6,14 @@
 use crate::application::service::{ApplicationError, ApplicationFacade, StorageErrorKind};
 use crate::application::use_cases::CommunityUseCase;
 use crate::application::write_check;
-use crate::domain::ProjectionStore;
+use crate::domain::query::{ProjectionReader, ProjectionStore, ProjectionWrite};
 use crate::domain::community::Community;
 
-impl<S: ProjectionStore> CommunityUseCase for ApplicationFacade<S> {
+impl<S> CommunityUseCase for ApplicationFacade<S>
+where
+    S: ProjectionStore,
+    S: ProjectionReader<Error = crate::storage::StorageError>
+        + ProjectionWrite<Error = crate::storage::StorageError>, {
     fn create_community(
         &self,
         community: crate::domain::community::Community,
