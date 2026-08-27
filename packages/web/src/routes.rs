@@ -138,15 +138,30 @@ pub async fn mutation_auth_middleware(
             || path.starts_with("/api/sources/watch/")
             || path == "/api/janet/eval");
     if !is_mutation { return next.run(req).await; }
-    let bound_public = std::env::var("IP").ok()
+    let bound_public = std::env::var("IP")
+        .ok()
         .and_then(|ip| ip.parse::<std::net::IpAddr>().ok())
         .is_some_and(|ip| !ip.is_loopback());
-    let loopback = req.extensions().get::<std::net::SocketAddr>()
-        .map(|a| a.ip().is_loopback()).unwrap_or(!bound_public);
-    let expected = std::env::var("NOTEZ_WEB_TOKEN").ok().filter(|v| !v.trim().is_empty());
-    let supplied = req.headers().get("x-notez-token").and_then(|v| v.to_str().ok())
-        .or_else(|| req.headers().get(axum::http::header::AUTHORIZATION)
-            .and_then(|v| v.to_str().ok()).and_then(|v| v.strip_prefix("Bearer ")));
+    // Dioxus does not reliably populate a peer SocketAddr for every local
+    // SSR request. When the server itself is loopback-bound, the transport
+    // is local by construction and must remain usable without a token.
+    // Public binds require an explicit token even when peer metadata is absent.
+    if !bound_public {
+        return next.run(req).await;
+    }
+    let supplied = req
+        .headers()
+        .get("x-notez-token")
+        .and_then(|v| v.to_str().ok())
+        .or_else(|| {
+            req.headers()
+                .get(axum::http::header::AUTHORIZATION)
+                .and_then(|v| v.to_str().ok())
+                .and_then(|v| v.strip_prefix("Bearer "))
+        });
+    let expected = std::env::var("NOTEZ_WEB_TOKEN")
+        .ok()
+        .filter(|v| !v.trim().is_empty());
     if expected.as_deref().is_some_and(|token| supplied == Some(token)) {
         next.run(req).await
     } else {

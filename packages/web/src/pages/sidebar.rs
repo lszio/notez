@@ -92,7 +92,8 @@ pub fn SpaceSidebar(active_path: Option<String>) -> Element {
                 }
 
                 details { class: "side-add", style: "margin-top:0.5rem;",
-                    summary { "+ register a space" }
+                    summary { "+ register a local workspace" }
+                    p { class: "side-add-help", "Type: local workspace · Markdown and Org are detected automatically" }
                     form {
                         class: "side-add-form",
                         action: "/api/sources/register",
