@@ -100,42 +100,48 @@ cli-web *args:
 cli-build:
     cargo {{_cargo_profile}} build -p {{cli_pkg}} --bin notez
 
-# ---- Web (v0.1 Dioxus fullstack SSR) ----------------------------------------
-
-# Run the notez web SSR server with hot reload (`dx serve --platform server`).
+# ---- Web (SSR with the checked-in public shell) -----------------------------
 #
-# We use `--platform server`, not `--platform web`, because notez's web
-# client is pure SSR HTML (forms + GET links, no client-side hydration).
-# `packages/web/src/main.rs` ships an empty `#[cfg(target_arch = "wasm32")]
-# fn main() {}` stub on purpose. The project never produces a useful
-# WebAssembly client binary.
-#
-# If you change this to `--platform web`, dx will additionally compile a
-# `wasm32-unknown-unknown` client and run `wasm-bindgen` on it. That fails
-# on this repo with `error: failed to find intrinsics to enable clone_ref
-# function` (wasm-bindgen 0.2.127's externref pass auto-enables when the
-# wasm target_features section lists `reference-types`, which rustc emits
-# unconditionally for wasm32 — even when the binary has zero wasm-bindgen
-# imports). There is no client-side code to recover, so just stay on
-# `--platform server`.
+# `dx serve --platform server` serves Dioxus' generated SSR shell and does not
+# include this project's `public/index.html` custom shell. That drops the
+# inline stylesheet and progressive-enhancement scripts. Launch the built
+# server binary instead; dioxus::serve resolves `public/` beside the binary.
 #
 # Override bind with `HOST=0.0.0.0 PORT=3030 just web`.
+
 web:
     #!/usr/bin/env bash
     set -euo pipefail
     if [ -n "{{space}}" ]; then export NOTEZ_SPACE_ROOT="{{space}}"; fi
-    echo "→ starting web SSR on http://{{host}}:{{port}}"
-    cd "{{web_pkg}}" 2>/dev/null || cd "packages/{{web_pkg}}"
-    if command -v dx >/dev/null 2>&1; then
-        # `dx serve --platform server` ignores the legacy `IP`/`PORT`
-        # env vars and defaults to `127.0.0.1:8080`. Forward the host/port
-        # from this recipe via the explicit CLI flags instead.
-        exec dx serve --platform server --addr "{{host}}" --port "{{port}}"
-    else
-        export IP="{{host}}"
-        export PORT="{{port}}"
-        cargo {{_cargo_profile}} run -p {{web_pkg}} --bin {{web_pkg}}
-    fi
+    export IP="{{host}}"
+    export PORT="{{port}}"
+    exec cargo {{_cargo_profile}} run -p {{web_pkg}} --bin {{web_pkg}}
+
+# Use the Dioxus CLI explicitly when hot reload is preferred. This mode does
+# not provide the checked-in custom HTML shell and is therefore not the normal
+# SSR launch path.
+web-dx:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [ -n "{{space}}" ]; then export NOTEZ_SPACE_ROOT="{{space}}"; fi
+    exec dx serve --platform server --addr "{{host}}" --port "{{port}}"
+
+# Legacy Dioxus CLI notes retained here for users who need hot reload.
+# The normal `web` recipe intentionally uses the native server binary.
+#
+# `dx serve --platform server` can still be used via `just web-dx`.
+#
+# The native server serves the custom shell, styles, and progressive enhancement.
+#
+# If you change this to `--platform web`, dx additionally compiles the client.
+#
+# The repository's browser client currently uses a fresh mount, not hydration.
+#
+# Keep this distinction explicit so a successful CLI build is not mistaken for
+# a fully hydrated client.
+#
+# End of web launch notes.
+#
 
 # Build the web client only (no run).
 web-build:
