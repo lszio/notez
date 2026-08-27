@@ -103,6 +103,31 @@ impl<'j> Journaling<'j> {
         Ok((change, seq))
     }
 
+    /// Record a [`ChangeOp::Writeback`] Change (plus its audit row)
+    /// for a mutation that hits the authoritative source *outside*
+    /// the projection store — raw document writes, adapter
+    /// write-backs. The projection itself is refreshed by the caller
+    /// afterwards.
+    pub fn record_writeback(
+        &self,
+        source_id: &str,
+        target: ResourceRef,
+        expected_revision: Option<String>,
+        payload: serde_json::Value,
+    ) -> Result<u64, JournalBuildError> {
+        let (change, seq) = self.record(
+            ChangeOp::Writeback,
+            source_id.to_string(),
+            vec![target],
+            expected_revision,
+            payload,
+        )?;
+        self.audit_success(&change, change.targets.first().cloned().unwrap_or(
+            ResourceRef::new(crate::domain::ResourceKind::Document, ulid::Ulid::nil()),
+        ));
+        Ok(seq)
+    }
+
     fn audit_success(&self, change: &Change, target: ResourceRef) {
         let record = AuditRecord {
             change_id: change.id,
@@ -159,7 +184,8 @@ impl<'a, 'j, S: ProjectionWrite> Projector<'a, 'j, S> {
     }
 
     /// Bulk replace one source's slice; one Change for the whole
-    /// transaction, one audit row per affected target.
+    /// transaction, one audit row per affected target. The journal op
+    /// defaults to [`ChangeOp::Rebuilt`].
     pub fn replace_source(
         &mut self,
         source_id: &str,
@@ -167,24 +193,45 @@ impl<'a, 'j, S: ProjectionWrite> Projector<'a, 'j, S> {
         relations: Vec<crate::domain::ResourceRelation>,
         occurrences: Vec<LinkOccurrence>,
     ) -> Result<WriteOutcome, ProjectorError<S::Error>> {
+        self.replace_source_op(
+            ChangeOp::Rebuilt,
+            source_id,
+            resources,
+            relations,
+            occurrences,
+            serde_json::Value::Null,
+        )
+    }
+
+    /// [`Self::replace_source`] with an explicit journal op and a
+    /// free-form detail object merged into the Change payload. Scan
+    /// paths record [`ChangeOp::Scan`], task transitions record
+    /// [`ChangeOp::TransitionTask`], and so on.
+    pub fn replace_source_op(
+        &mut self,
+        op: ChangeOp,
+        source_id: &str,
+        resources: Vec<Resource>,
+        relations: Vec<crate::domain::ResourceRelation>,
+        occurrences: Vec<LinkOccurrence>,
+        detail: serde_json::Value,
+    ) -> Result<WriteOutcome, ProjectorError<S::Error>> {
         let targets: Vec<ResourceRef> = resources
             .iter()
             .map(|r| r.r#ref.clone())
             .chain(relations.iter().map(|r| r.target_ref.clone()))
             .collect();
-        let count_payload = serde_json::json!({
+        let mut payload = serde_json::json!({
             "source_id": source_id,
             "resource_count": resources.len(),
             "relation_count": relations.len(),
             "occurrence_count": occurrences.len(),
         });
-        let (change, seq) = self.j.record(
-            ChangeOp::Rebuilt,
-            source_id.to_string(),
-            targets.clone(),
-            None,
-            count_payload,
-        )?;
+        if !detail.is_null() {
+            payload["detail"] = detail;
+        }
+        let (change, seq) =
+            self.j.record(op, source_id.to_string(), targets.clone(), None, payload)?;
         self.store
             .replace_source(source_id, resources, relations, occurrences)
             .map_err(ProjectorError::Store)?;
@@ -335,6 +382,29 @@ impl<'a, 'j, S: ProjectionWrite> Projector<'a, 'j, S> {
         )?;
         self.store
             .replace_conflicts(records)
+            .map_err(ProjectorError::Store)?;
+        Ok(WriteOutcome {
+            sequence: Some(seq),
+            audited: false,
+        })
+    }
+    /// Remove adjudicated conflict records while preserving the journal spine.
+    pub fn remove_conflicts(
+        &mut self,
+        logical_paths: &[String],
+    ) -> Result<WriteOutcome, ProjectorError<S::Error>> {
+        let (change, seq) = self.j.record(
+            ChangeOp::ReplaceConflicts,
+            String::new(),
+            vec![],
+            None,
+            serde_json::json!({
+                "operation": "remove",
+                "logical_paths": logical_paths,
+            }),
+        )?;
+        self.store
+            .remove_conflicts(logical_paths)
             .map_err(ProjectorError::Store)?;
         Ok(WriteOutcome {
             sequence: Some(seq),

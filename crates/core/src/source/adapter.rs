@@ -32,6 +32,7 @@ pub enum SourceKind {
     Anytype,
     AppleNotes,
     AppleCalendar,
+    NotezRest,
     Other(String),
 }
 
@@ -44,6 +45,7 @@ impl SourceKind {
             SourceKind::Anytype => "anytype",
             SourceKind::AppleNotes => "apple_notes",
             SourceKind::AppleCalendar => "apple_calendar",
+            SourceKind::NotezRest => "notez-rest",
             SourceKind::Other(name) => name.as_str(),
         }
     }
@@ -71,6 +73,7 @@ impl<'de> serde::Deserialize<'de> for SourceKind {
             "anytype" => SourceKind::Anytype,
             "apple_notes" => SourceKind::AppleNotes,
             "apple_calendar" => SourceKind::AppleCalendar,
+            "notez-rest" => SourceKind::NotezRest,
             other => {
                 if other.is_empty() {
                     return Err(serde::de::Error::custom(
@@ -117,6 +120,8 @@ pub struct SourceConfig {
     pub path: PathBuf,
     pub read_only: bool,
     #[serde(default)]
+    pub url: Option<String>,
+    #[serde(default)]
     pub include_paths: Vec<PathBuf>,
     #[serde(default)]
     pub exclude_paths: Vec<PathBuf>,
@@ -133,6 +138,7 @@ impl SourceConfig {
             kind,
             path: path.into(),
             read_only,
+            url: None,
             include_paths: Vec::new(),
             exclude_paths: Vec::new(),
         }
@@ -149,6 +155,17 @@ pub struct ScannedSource {
 pub trait SourceAdapter {
     fn config(&self) -> &SourceConfig;
     fn scan(&self) -> Result<ScannedSource, SourceError>;
+
+    /// Optional structured read ports used by remote sources.
+    fn list_resources(&self) -> Result<Vec<Resource>, SourceError> {
+        Err(SourceError::Other("list operation not supported by this source adapter".into()))
+    }
+    fn read_resource(&self, _locator: &str) -> Result<Option<Resource>, SourceError> {
+        Err(SourceError::Other("read operation not supported by this source adapter".into()))
+    }
+    fn search_resources(&self, _query: &str, _limit: usize) -> Result<Vec<Resource>, SourceError> {
+        Err(SourceError::Other("search operation not supported by this source adapter".into()))
+    }
 
     fn capabilities(&self) -> SourceCapabilities {
         SourceCapabilities {
@@ -303,26 +320,16 @@ mod tests {
 
     #[test]
     fn source_kind_other_round_trips_via_serde() {
-        // Other variant: serialise as the bare string.
         let k = SourceKind::Other("notion".to_string());
         let s = serde_json::to_string(&k).unwrap();
         assert_eq!(s, "\"notion\"");
-
-        // Untagged deserialisation: a bare string becomes Other.
         let parsed: SourceKind = serde_json::from_str("\"notion\"").unwrap();
         assert_eq!(parsed, k);
     }
 
     #[test]
     fn source_kind_built_in_variants_round_trip_via_serde() {
-        for k in [
-            SourceKind::Native,
-            SourceKind::Git,
-            SourceKind::Obsidian,
-            SourceKind::Anytype,
-            SourceKind::AppleNotes,
-            SourceKind::AppleCalendar,
-        ] {
+        for k in [SourceKind::Native, SourceKind::Git, SourceKind::Obsidian, SourceKind::Anytype, SourceKind::AppleNotes, SourceKind::AppleCalendar, SourceKind::NotezRest] {
             let s = serde_json::to_string(&k).unwrap();
             let parsed: SourceKind = serde_json::from_str(&s).unwrap();
             assert_eq!(parsed, k, "round-trip failed for {k:?}");

@@ -92,7 +92,15 @@ where
             .collect();
         native_resources.push(resource);
 
-        self.store
+        let journaling = crate::application::projector::Journaling::from_parts(
+            self.journal.as_ref(),
+            self.audit.as_ref(),
+            self.actor_principal(),
+            self.now_unix_millis(),
+        );
+        let mut projector =
+            crate::application::projector::Projector::new(&mut self.store, &journaling);
+        projector
             .replace_source("native", native_resources, vec![], vec![])
             .map_err(|e| ApplicationError::Storage {
                 kind: StorageErrorKind::Sqlite,
@@ -108,6 +116,8 @@ where
     ) -> Result<Vec<crate::domain::SegmentRecord>, ApplicationError> {
         let source_root = self.require_space_root()?;
 
+
+        write_check::check_capability(self, "attachment")?;
         use crate::artifact::{Extractor, ImageMetadataExtractor, SegmentSlicer, TextExtractor};
         let res = <Self as crate::application::use_cases::ResourceUseCase>::read(self, att_ref)?
             .ok_or_else(|| ApplicationError::NotFound {
@@ -156,11 +166,18 @@ where
                     )),
                 })?
         };
-
         let slicer = SegmentSlicer::default();
         let records = slicer.slice(&att_ref.to_string(), &extracted_content.text);
 
-        self.store
+        let journaling = crate::application::projector::Journaling::from_parts(
+            self.journal.as_ref(),
+            self.audit.as_ref(),
+            self.actor_principal(),
+            self.now_unix_millis(),
+        );
+        let mut projector =
+            crate::application::projector::Projector::new(&mut self.store, &journaling);
+        projector
             .insert_segments(&records)
             .map_err(|e| ApplicationError::Storage {
                 kind: StorageErrorKind::Sqlite,

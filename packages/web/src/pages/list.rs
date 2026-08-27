@@ -1,11 +1,13 @@
 //! Resource list page.
 
 use dioxus::prelude::*;
+use ui::notez::NzBadge;
+use ui::notez::NzInput;
 
 use crate::model::ResourceRow;
 use crate::pages::ui::KindIcon;
 use crate::pages::use_space_layout;
-use crate::router::{encode_space, ListQuery};
+use crate::router::{encode_space, route_for_space_list_with_query, ListQuery};
 use crate::server::list_resources;
 use crate::space_ctx::{SpaceState, SpaceStatus};
 
@@ -21,6 +23,38 @@ impl SortKey {
             "kind" => SortKey::Kind,
             "locator" => SortKey::Locator,
             _ => SortKey::Title,
+        }
+    }
+}
+
+/// Presentation mode for the query result set. Every mode renders the
+/// same typed `ResourceRow` data — the choice only changes layout.
+/// Persisted in the URL (`?mode=…`) so a view survives reloads and
+/// deep links. Unknown values fall back to the default list mode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ListMode {
+    List,
+    Table,
+    Cards,
+    Stream,
+}
+
+impl ListMode {
+    fn parse(s: &str) -> ListMode {
+        match s {
+            "table" => ListMode::Table,
+            "cards" => ListMode::Cards,
+            "stream" => ListMode::Stream,
+            _ => ListMode::List,
+        }
+    }
+
+    fn as_str(self) -> &'static str {
+        match self {
+            ListMode::List => "list",
+            ListMode::Table => "table",
+            ListMode::Cards => "cards",
+            ListMode::Stream => "stream",
         }
     }
 }
@@ -45,6 +79,7 @@ pub fn ListPage(encoded: String, query: ListQuery) -> Element {
     use_effect(move || resource_ref_ctx.set(None));
     let active_path = space().map(|s| s.path.clone());
     let active_path_for_forms = active_path.clone();
+    let active_path_for_view = active_path.clone();
 
     let resources = use_server_future(move || {
         let p = active_path.clone();
@@ -55,6 +90,11 @@ pub fn ListPage(encoded: String, query: ListQuery) -> Element {
             }
         }
     })?;
+
+    // Snapshot the URL query for the "this view lives in the URL"
+    // deep link before the seed closures below move the fields out
+    // of `query`.
+    let view_query = query.clone();
 
     // Seed the search/filter signals from the URL query so deep
     // links like `/list?kind=attachment&sort=mtime` produce the
@@ -85,6 +125,10 @@ pub fn ListPage(encoded: String, query: ListQuery) -> Element {
             query.source.clone()
         }
     });
+    // Mode is URL-persisted (no signal): the segmented control
+    // navigates with the full current view state, so reloads and
+    // deep links reproduce the same presentation.
+    let mode = ListMode::parse(&view_query.mode);
 
     let rows: Vec<ResourceRow> = match resources() {
         Some(Ok(r)) => r,
@@ -151,6 +195,21 @@ pub fn ListPage(encoded: String, query: ListQuery) -> Element {
     }
 
     let current_encoded = space().map(|s| s.encoded.clone()).unwrap_or_default();
+    // Mode-switch links carry the LIVE filter state (what the user is
+    // looking at right now) plus the new mode, so the URL always
+    // round-trips the full view. The view-note deep link, by contrast,
+    // points at the canonical URL of the current page.
+    let space_path_for_view = active_path_for_view.clone().unwrap_or_default();
+    let mode_href = |m: ListMode| -> String {
+        route_for_space_list_with_query(&space_path_for_view, &ListQuery {
+            q: q_filter(),
+            kind: kind_filter(),
+            sort: sort_key(),
+            source: source_filter(),
+            mode: m.as_str().to_string(),
+        })
+    };
+    let current_url = route_for_space_list_with_query(&space_path_for_view, &view_query);
     // Source coverage of the visible results — how many rows come from
     // each source, so a filtered view always shows where the data lives.
     let mut source_counts: std::collections::BTreeMap<String, usize> = std::collections::BTreeMap::new();
@@ -196,13 +255,13 @@ pub fn ListPage(encoded: String, query: ListQuery) -> Element {
                     style: "flex:1; display:flex; gap:0.6rem; align-items:center;",
                     div { class: "control",
                         span { class: "control-label", "find" }
-                        input {
-                            class: "grow",
-                            r#type: "search",
-                            name: "q",
+                        NzInput {
                             placeholder: "title, ref, or locator…",
-                            value: "{q_filter}",
-                            oninput: move |e| q_filter.set(e.value()),
+                            value: q_filter(),
+                            name: "q".to_string(),
+                            input_type: "search".to_string(),
+                            aria_label: "Filter by title, ref, or locator".to_string(),
+                            oninput: move |e: dioxus::prelude::FormEvent| q_filter.set(e.value()),
                         }
                     }
                     div { class: "control",
@@ -251,6 +310,11 @@ pub fn ListPage(encoded: String, query: ListQuery) -> Element {
                                 option { value: "{s}", selected: source_filter() == *s, "{s}" }
                             }
                         }
+                    }
+                    input {
+                        r#type: "hidden",
+                        name: "mode",
+                        value: "{mode.as_str()}",
                     }
                     button {
                         class: "control-action",
@@ -301,12 +365,28 @@ pub fn ListPage(encoded: String, query: ListQuery) -> Element {
                 }
             }
 
-                         div { class: "results-head",
-                 span { class: "col-ref", "ref" }
-                 span { class: "col-title", "title" }
-                 span { class: "col-loc", "locator" }
-             }
-             div { class: "source-coverage",
+            div { class: "results-toolbar",
+                div { class: "mode-tabs", role: "group", "aria-label": "Result view mode",
+                    ModeTab { mode, current: ListMode::List, href: mode_href(ListMode::List), label: "list" }
+                    ModeTab { mode, current: ListMode::Table, href: mode_href(ListMode::Table), label: "table" }
+                    ModeTab { mode, current: ListMode::Cards, href: mode_href(ListMode::Cards), label: "cards" }
+                    ModeTab { mode, current: ListMode::Stream, href: mode_href(ListMode::Stream), label: "stream" }
+                }
+                div { class: "view-note",
+                    span { class: "view-note-label", "saved view" }
+                    span { class: "view-note-state", "unsaved" }
+                    a { class: "view-note-link mono-sm", href: "{current_url}", "this view lives in the URL — share the link" }
+                }
+            }
+
+            if mode == ListMode::List {
+                div { class: "results-head",
+                    span { class: "col-ref", "ref" }
+                    span { class: "col-title", "title" }
+                    span { class: "col-loc", "locator" }
+                }
+            }
+            div { class: "source-coverage",
                  span { class: "source-coverage-label", "sources" }
                  for (sid, n) in source_counts.iter() {
                      span { class: "source-coverage-item",
@@ -334,11 +414,31 @@ pub fn ListPage(encoded: String, query: ListQuery) -> Element {
                             }
                         }
                     },
-                    Some(Ok(_)) => rsx! {
-                        for r in visible.iter() {
-                            ResultRow {
-                                row: (*r).clone(),
-                                current: current_encoded.clone(),
+                    Some(Ok(_)) => match mode {
+                        ListMode::List => rsx! {
+                            for r in visible.iter() {
+                                ResultRow {
+                                    row: (*r).clone(),
+                                    current: current_encoded.clone(),
+                                }
+                            }
+                        },
+                        ListMode::Table => {
+                            let rows: Vec<ResourceRow> = visible.iter().map(|r| (*r).clone()).collect();
+                            rsx! {
+                                ModeTable { rows, current: current_encoded.clone() }
+                            }
+                        }
+                        ListMode::Cards => {
+                            let rows: Vec<ResourceRow> = visible.iter().map(|r| (*r).clone()).collect();
+                            rsx! {
+                                ModeCards { rows, current: current_encoded.clone() }
+                            }
+                        }
+                        ListMode::Stream => {
+                            let rows: Vec<ResourceRow> = visible.iter().map(|r| (*r).clone()).collect();
+                            rsx! {
+                                ModeStream { rows, current: current_encoded.clone() }
                             }
                         }
                     },
@@ -394,13 +494,169 @@ fn ResultRow(row: ResourceRow, current: String) -> Element {
             }
             span { class: "col-title",
                 a { href: "{ref_link}", "{row.title}" }
-                span { class: "source-badge",
-                    class: if editable { "source-badge-editable" } else { "source-badge-readonly" },
-                    if editable { "✎ " } else { "· " }
-                    "{row.source_id}"
+                if editable {
+                    NzBadge { text: format!("✎ {}", row.source_id.clone()), tone: "ok".to_string() }
+                } else {
+                    NzBadge { text: format!("· {}", row.source_id.clone()), tone: "warn".to_string() }
                 }
             }
             span { class: "col-loc", "{row.locator}" }
+        }
+    }
+}
+
+/// One segment of the mode switcher. Renders as a link so the choice
+/// is URL-persisted; the active mode is marked with `aria-current`
+/// and the `is-current` class.
+#[component]
+fn ModeTab(mode: ListMode, current: ListMode, href: String, label: &'static str) -> Element {
+    let cls = if mode == current {
+        "doc-mode-tab mode-tab is-current"
+    } else {
+        "doc-mode-tab mode-tab"
+    };
+    rsx! {
+        a {
+            class: "{cls}",
+            href: "{href}",
+            "aria-current": if mode == current { "true" } else { "false" },
+            "{label}"
+        }
+    }
+}
+
+/// Table mode: the same typed rows in a `<table>` with explicit
+/// columns. Row elements keep the `.result` class and the
+/// `.col-ref` / `.col-title` / `.col-loc` hooks so the existing
+/// SSR-only fallback JS (live `q` filtering + palette corpus) keeps
+/// working across every mode.
+#[component]
+fn ModeTable(rows: Vec<ResourceRow>, current: String) -> Element {
+    rsx! {
+        table { class: "results-table",
+            thead {
+                tr {
+                    th { scope: "col", "kind" }
+                    th { scope: "col", "ref" }
+                    th { scope: "col", "title" }
+                    th { scope: "col", "locator" }
+                    th { scope: "col", "source" }
+                }
+            }
+            tbody {
+                for row in rows.iter() {
+                    TableRow { row: row.clone(), current: current.clone() }
+                }
+            }
+        }
+    }
+}
+
+#[component]
+fn TableRow(row: ResourceRow, current: String) -> Element {
+    let ref_link = format!(
+        "/source/{}/resource/{}",
+        current,
+        encode_space(&row.ref_str)
+    );
+    rsx! {
+        tr { class: "result result-table-row",
+            td { class: "col-kind", KindIcon { kind: row.kind.clone() } }
+            td { class: "col-ref", a { href: "{ref_link}", "{row.ref_str}" } }
+            td { class: "col-title", a { href: "{ref_link}", "{row.title}" } }
+            td { class: "col-loc", "{row.locator}" }
+            td { class: "col-source mono-sm", "{row.source_id}" }
+        }
+    }
+}
+
+/// Cards mode: one card per resource, same fields as the list row.
+#[component]
+fn ModeCards(rows: Vec<ResourceRow>, current: String) -> Element {
+    rsx! {
+        div { class: "results-cards",
+            for row in rows.iter() {
+                CardRow { row: row.clone(), current: current.clone() }
+            }
+        }
+    }
+}
+
+#[component]
+fn CardRow(row: ResourceRow, current: String) -> Element {
+    let ref_link = format!(
+        "/source/{}/resource/{}",
+        current,
+        encode_space(&row.ref_str)
+    );
+    rsx! {
+        div { class: "result result-card",
+            span { class: "col-title",
+                a { href: "{ref_link}", "{row.title}" }
+            }
+            span { class: "col-ref",
+                KindIcon { kind: row.kind.clone() }
+                a { href: "{ref_link}", "{row.ref_str}" }
+            }
+            span { class: "col-loc", "{row.locator}" }
+            span { class: "col-source mono-sm", "{row.source_id}" }
+        }
+    }
+}
+
+/// Stream mode: the most compact rendering — one line per resource.
+#[component]
+fn ModeStream(rows: Vec<ResourceRow>, current: String) -> Element {
+    rsx! {
+        div { class: "results-stream",
+            for row in rows.iter() {
+                StreamRow { row: row.clone(), current: current.clone() }
+            }
+        }
+    }
+}
+
+#[component]
+fn StreamRow(row: ResourceRow, current: String) -> Element {
+    let ref_link = format!(
+        "/source/{}/resource/{}",
+        current,
+        encode_space(&row.ref_str)
+    );
+    rsx! {
+        div { class: "result result-stream",
+            span { class: "col-ref",
+                KindIcon { kind: row.kind.clone() }
+                a { href: "{ref_link}", "{row.ref_str}" }
+            }
+            span { class: "col-title", a { href: "{ref_link}", "{row.title}" } }
+            span { class: "col-loc", "{row.locator}" }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn list_mode_parse_known_values() {
+        assert_eq!(ListMode::parse("table"), ListMode::Table);
+        assert_eq!(ListMode::parse("cards"), ListMode::Cards);
+        assert_eq!(ListMode::parse("stream"), ListMode::Stream);
+        assert_eq!(ListMode::parse(""), ListMode::List);
+    }
+
+    #[test]
+    fn list_mode_parse_unknown_falls_back_to_list() {
+        assert_eq!(ListMode::parse("bogus"), ListMode::List);
+        assert_eq!(ListMode::parse("LIST"), ListMode::List);
+    }
+
+    #[test]
+    fn list_mode_as_str_round_trips() {
+        for mode in [ListMode::List, ListMode::Table, ListMode::Cards, ListMode::Stream] {
+            assert_eq!(ListMode::parse(mode.as_str()), mode);
         }
     }
 }

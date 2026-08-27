@@ -8,11 +8,11 @@ use std::fs;
 use std::path::Path;
 use std::process::exit;
 
-use super::{Service, exit_code_for};
-use crate::commands::{ConfigCommands, ConfigSubcommand, WorkspaceCommands, WorkspaceSubcommand};
-use notez_core::application::use_cases::InspectUseCase;
+use super::{exit_code_for, Service};
 use notez_core::config::{SelectedSource, SourceConfig};
-
+use notez_core::application::dispatcher::{ApplicationDispatcher, Response};
+use notez_protocol::request::{Request, ScanNativeRequest, SourceDoctorRequest};
+use crate::commands::{ConfigCommands, ConfigSubcommand, WorkspaceCommands, WorkspaceSubcommand};
 pub fn run_workspace(json: bool, service: &mut Service, sub: WorkspaceSubcommand, cwd: &Path) {
     let WorkspaceSubcommand { command } = sub;
     // Admin commands operate on the global registry; re-discover
@@ -26,8 +26,10 @@ pub fn run_workspace(json: bool, service: &mut Service, sub: WorkspaceSubcommand
         exit(2);
     });
     match command {
-        WorkspaceCommands::Rebuild => match service.rebuild() {
-            Ok(report) => {
+        WorkspaceCommands::Rebuild => match ApplicationDispatcher::new(service)
+            .dispatch(Request::ScanNative(ScanNativeRequest {}))
+        {
+            Ok(Response::Scan(report)) => {
                 if json {
                     println!(
                         "{}",
@@ -49,10 +51,13 @@ pub fn run_workspace(json: bool, service: &mut Service, sub: WorkspaceSubcommand
                 eprintln!("Rebuild error: {e}");
                 exit(exit_code_for(&e));
             }
+            other => unreachable!("unexpected dispatcher response: {other:?}"),
         },
 
-        WorkspaceCommands::Doctor => match InspectUseCase::source_doctor(service) {
-            Ok(report) => {
+        WorkspaceCommands::Doctor => match ApplicationDispatcher::new(service)
+            .dispatch(Request::SourceDoctor(SourceDoctorRequest {}))
+        {
+            Ok(Response::Doctor(report)) => {
                 if json {
                     println!("{}", serde_json::to_string(&report).unwrap());
                 } else {
@@ -66,7 +71,9 @@ pub fn run_workspace(json: bool, service: &mut Service, sub: WorkspaceSubcommand
                 eprintln!("Source doctor error: {e}");
                 exit(exit_code_for(&e));
             }
+            other => unreachable!("unexpected dispatcher response: {other:?}"),
         },
+
         WorkspaceCommands::List => {
             let mut sources = Vec::new();
             if let Some(global) = &paths.global_config {

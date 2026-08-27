@@ -4,11 +4,18 @@
 //! previously inlined in `service.rs`; moving them here is the first
 //! step of the `0.5.x-A1+A3` use-case impl split (spec
 //! `docs/superpowers/specs/2026-08-09-0.5x-a1-a3-usecase-impl-split-and-write-checks-design.org`).
+//!
+//! Every mutation goes through the [`Projector`] so each scan records
+//! a [`ChangeOp::Scan`] Change plus the link-resolution Changes in the
+//! event journal.
 
+use crate::application::link_resolution::LinkResolver;
+use crate::application::projector::{Journaling, Projector};
 use crate::application::service::{
     ApplicationError, ApplicationFacade, ScanReport, StorageErrorKind,
 };
-use crate::application::use_cases::ScanUseCase;
+use crate::application::use_cases::{ResourceUseCase, ScanUseCase};
+use crate::domain::change::ChangeOp;
 use crate::domain::{ProjectionReader, ProjectionStore, ProjectionWrite};
 
 impl<S> ScanUseCase for ApplicationFacade<S>
@@ -18,7 +25,6 @@ where
         + ProjectionWrite<Error = crate::storage::StorageError>,
 {
     fn scan_native(&mut self) -> Result<ScanReport, ApplicationError> {
-        use crate::application::link_resolution::resolve_and_store_links;
         use crate::source::SourceAdapter;
         use crate::source::native::NativeSourceAdapter;
 
@@ -35,6 +41,7 @@ where
             kind: crate::source::SourceKind::Native,
             path: source_root.to_path_buf(),
             read_only: false,
+            url: None,
             include_paths: vec![],
             exclude_paths: vec![],
         };
@@ -65,39 +72,67 @@ where
             .len();
         let scanned_resources = scanned.resources.len();
         let link_occurrences = scanned.link_occurrences.clone();
-        let journaling = crate::application::projector::Journaling::from_parts(
-            self.journal.as_ref(),
-            self.audit.as_ref(),
-            self.actor_principal(),
-            self.now_unix_millis(),
-        );
-        let mut projector =
-            crate::application::projector::Projector::new(&mut self.store, &journaling);
-        projector
-            .replace_source(
-                "native",
-                std::mem::take(&mut scanned.resources),
-                std::mem::take(&mut scanned.relations),
-                link_occurrences.clone(),
-            )
-            .map_err(|e| ApplicationError::Storage {
-                kind: StorageErrorKind::Sqlite,
-                message: e.to_string(),
-            })?;
 
-        resolve_and_store_links(&mut self.store, "native", link_occurrences)?;
+        // Phase 1: swap the source slice, journaling a Scan Change.
+        {
+            let journaling = Journaling::from_parts(
+                self.journal.as_ref(),
+                self.audit.as_ref(),
+                self.actor_principal(),
+                self.now_unix_millis(),
+            );
+            let mut projector = Projector::new(&mut self.store, &journaling);
+            projector
+                .replace_source_op(
+                    ChangeOp::Scan,
+                    "native",
+                    std::mem::take(&mut scanned.resources),
+                    std::mem::take(&mut scanned.relations),
+                    link_occurrences.clone(),
+                    serde_json::Value::Null,
+                )
+                .map_err(|e| ApplicationError::Storage {
+                    kind: StorageErrorKind::Sqlite,
+                    message: e.to_string(),
+                })?;
+        }
+
+        // Phase 2: resolve links against the fresh rows and journal the
+        // resulting relations + diagnostics.
+        {
+            let (relations, diagnostics) =
+                LinkResolver::compute(&self.store, "native", &link_occurrences)?;
+            let journaling = Journaling::from_parts(
+                self.journal.as_ref(),
+                self.audit.as_ref(),
+                self.actor_principal(),
+                self.now_unix_millis(),
+            );
+            let mut projector = Projector::new(&mut self.store, &journaling);
+            projector
+                .replace_resolved_relations("native", relations)
+                .map_err(|e| ApplicationError::Storage {
+                    kind: StorageErrorKind::Sqlite,
+                    message: e.to_string(),
+                })?;
+            projector
+                .write_link_diagnostics("native", &diagnostics)
+                .map_err(|e| ApplicationError::Storage {
+                    kind: StorageErrorKind::Sqlite,
+                    message: e.to_string(),
+                })?;
+        }
 
         let mut resolved_count = 0;
-        let page = <Self as crate::application::use_cases::ResourceUseCase>::query(
-            self,
-            &crate::domain::Selector::new(),
-        )?;
+        let page = <Self as ResourceUseCase>::query(self, &crate::domain::Selector::new())?;
         for res in page.items {
             if res.source_id == "native" {
-                let rels = self
-                    .store
-                    .query_resolved_relations(&res.r#ref)
-                    .unwrap_or_default();
+                let rels = self.store.query_resolved_relations(&res.r#ref).map_err(
+                    |e| ApplicationError::Storage {
+                        kind: StorageErrorKind::Sqlite,
+                        message: e.to_string(),
+                    },
+                )?;
                 resolved_count += rels.len();
             }
         }
@@ -128,6 +163,7 @@ where
             kind: crate::source::SourceKind::Native,
             path: source_root.to_path_buf(),
             read_only: false,
+            url: None,
             include_paths: vec![],
             exclude_paths,
         };
@@ -141,29 +177,13 @@ where
 
         total_resources += native_scanned.resources.len();
 
-        self.store
-            .replace_source(
-                "native",
-                native_scanned.resources,
-                native_scanned.relations,
-                native_scanned.link_occurrences.clone(),
-            )
-            .map_err(|e| ApplicationError::Storage {
-                kind: StorageErrorKind::Sqlite,
-                message: e.to_string(),
-            })?;
-
-        crate::application::link_resolution::resolve_and_store_links(
-            &mut self.store,
+        self.scan_and_project_source(
             "native",
-            native_scanned.link_occurrences,
+            native_scanned.resources,
+            native_scanned.relations,
+            &native_scanned.link_occurrences,
         )?;
 
-        let sources_cfg = crate::application::federation::SourceInstancesCache::load(&source_root)
-            .map_err(|e| ApplicationError::Storage {
-                kind: StorageErrorKind::InvalidState,
-                message: e.to_string(),
-            })?;
         for src_cfg in sources_cfg.sources {
             let adapter = self
                 .source_registry
@@ -179,35 +199,24 @@ where
 
             total_resources += scanned.resources.len();
 
-            self.store
-                .replace_source(
-                    &src_cfg.id,
-                    scanned.resources,
-                    scanned.relations,
-                    scanned.link_occurrences.clone(),
-                )
-                .map_err(|e| ApplicationError::Storage {
-                    kind: StorageErrorKind::Sqlite,
-                    message: e.to_string(),
-                })?;
-
-            crate::application::link_resolution::resolve_and_store_links(
-                &mut self.store,
+            self.scan_and_project_source(
                 &src_cfg.id,
-                scanned.link_occurrences,
+                scanned.resources,
+                scanned.relations,
+                &scanned.link_occurrences,
             )?;
         }
 
         let mut resolved_count = 0;
-        let page = <Self as crate::application::use_cases::ResourceUseCase>::query(
-            self,
-            &crate::domain::Selector::new(),
-        )?;
+        let page = <Self as ResourceUseCase>::query(self, &crate::domain::Selector::new())?;
         for res in page.items {
             let rels = self
                 .store
                 .query_resolved_relations(&res.r#ref)
-                .unwrap_or_default();
+                .map_err(|e| ApplicationError::Storage {
+                    kind: StorageErrorKind::Sqlite,
+                    message: e.to_string(),
+                })?;
             resolved_count += rels.len();
         }
 
@@ -216,5 +225,71 @@ where
             scanned_resources: total_resources,
             scanned_relations: resolved_count,
         })
+    }
+}
+
+impl<S> ApplicationFacade<S>
+where
+    S: ProjectionStore,
+    S: ProjectionReader<Error = crate::storage::StorageError>
+        + ProjectionWrite<Error = crate::storage::StorageError>,
+{
+    /// Project one scanned source through the event-spine pipeline:
+    /// a [`ChangeOp::Scan`]-tagged source swap followed by the
+    /// journalled link-resolution writes.
+    fn scan_and_project_source(
+        &mut self,
+        source_id: &str,
+        resources: Vec<crate::domain::Resource>,
+        relations: Vec<crate::domain::ResourceRelation>,
+        link_occurrences: &[crate::domain::LinkOccurrence],
+    ) -> Result<(), ApplicationError> {
+        // Phase 1: swap the source slice, journaling a Scan Change.
+        {
+            let journaling = Journaling::from_parts(
+                self.journal.as_ref(),
+                self.audit.as_ref(),
+                self.actor_principal(),
+                self.now_unix_millis(),
+            );
+            let mut projector = Projector::new(&mut self.store, &journaling);
+            projector
+                .replace_source_op(
+                    ChangeOp::Scan,
+                    source_id,
+                    resources,
+                    relations,
+                    link_occurrences.to_vec(),
+                    serde_json::Value::Null,
+                )
+                .map_err(|e| ApplicationError::Storage {
+                    kind: StorageErrorKind::Sqlite,
+                    message: e.to_string(),
+                })?;
+        }
+
+        // Phase 2: resolve links against the fresh rows and journal the
+        // resulting relations + diagnostics.
+        let (relations, diagnostics) = LinkResolver::compute(&self.store, source_id, link_occurrences)?;
+        let journaling = Journaling::from_parts(
+            self.journal.as_ref(),
+            self.audit.as_ref(),
+            self.actor_principal(),
+            self.now_unix_millis(),
+        );
+        let mut projector = Projector::new(&mut self.store, &journaling);
+        projector
+            .replace_resolved_relations(source_id, relations)
+            .map_err(|e| ApplicationError::Storage {
+                kind: StorageErrorKind::Sqlite,
+                message: e.to_string(),
+            })?;
+        projector
+            .write_link_diagnostics(source_id, &diagnostics)
+            .map_err(|e| ApplicationError::Storage {
+                kind: StorageErrorKind::Sqlite,
+                message: e.to_string(),
+            })?;
+        Ok(())
     }
 }

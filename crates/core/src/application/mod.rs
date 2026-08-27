@@ -15,6 +15,7 @@ pub use sync_app::ActiveConflicts;
 pub mod community_app;
 pub mod federation;
 pub mod ports;
+pub mod wire;
 pub use ports::{BlobStore, Clock, FilesystemBlobStore, SystemClock};
 pub use attachment::ExtractionResult;
 pub mod dispatcher;
@@ -22,6 +23,14 @@ pub mod projector;
 pub use community_app::SpaceCommunitiesConfig;
 pub use federation::SourceInstancesCache;
 pub mod service;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod janet;
+#[cfg(not(target_arch = "wasm32"))]
+pub use janet::{JanetScriptError, NativeJanetExecutor, DEFAULT_RESULT_LIMIT, DEFAULT_TIMEOUT_MS};
+#[cfg(not(target_arch = "wasm32"))]
+pub use service::JanetQuerySnapshot;
+#[cfg(not(target_arch = "wasm32"))]
+pub use service::JanetExecutor;
 pub mod use_cases;
 pub mod use_cases_impl;
 #[cfg(not(target_arch = "wasm32"))]
@@ -67,7 +76,6 @@ pub mod graph;
 pub use graph::{Graph, GraphEdge, GraphNode, MAX_NODES, layout_force};
 pub mod task_para;
 pub use context::SourceContext;
-pub use link_resolution::{LinkReindexReport, LinkResolver};
 pub use service::{
     ApplicationError, ApplicationFacade, ApplicationService, DocumentErrorKind, ResolveResult,
     ScanReport, StorageErrorKind,

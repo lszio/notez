@@ -215,6 +215,7 @@ fn runtime_merge_resolves_paths_and_applies_global_env_cli_precedence() {
             kind: SourceKind::Native,
             path: PathBuf::from("notes"),
             read_only: false,
+            url: None,
             include_paths: vec![PathBuf::from("notes/include")],
             exclude_paths: vec![PathBuf::from("notes/exclude")],
         }],
@@ -326,6 +327,7 @@ fn migration_apply_writes_new_sources_noops_empty_plan_and_reports_io_errors() {
             kind: SourceKind::Native,
             path: dir.path().join("docs"),
             read_only: false,
+            url: None,
             include_paths: vec![],
             exclude_paths: vec![],
         }],
@@ -343,6 +345,7 @@ fn migration_apply_writes_new_sources_noops_empty_plan_and_reports_io_errors() {
         kind: SourceKind::Native,
         path: dir.path().join("docs"),
         read_only: false,
+        url: None,
         include_paths: vec![],
         exclude_paths: vec![],
     });

@@ -172,16 +172,14 @@ fn PaletteBody() -> Element {
                 e.prevent_default();
                 let cur = selected.cloned();
                 if let Some(hit) = flat_hits.get(cur) {
+                    let href = hit_href(&decoded_space, hit);
+                    // Navigate directly: the palette mounts outside
+                    // the Router (use_navigator would panic), so the
+                    // href is applied via document.eval — a no-op on
+                    // the SSR server, a real navigation on the client.
+                    let _ = dioxus::document::eval(&format!("window.location.href = {href:?};"));
                     open.set(false);
-                    // No navigator available; rely on the inline
-                    // script's `keydown` listener to focus the
-                    // <a class="palette-hit-link"> of the selected
-                    // row + dispatch Enter via DOM (TODO PR9.5).
                 }
-                // Also clear the open signal so the inline script's
-                // CSS class toggle (added by PR9) stays in sync.
-                // The browser-side JS will see is-open removed.
-                // (The PR9 script also flips the class on its own.)
                 open.set(false);
             }
             _ => {}

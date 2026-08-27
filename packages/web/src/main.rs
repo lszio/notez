@@ -22,12 +22,12 @@ fn build_router() -> Result<axum::Router, anyhow::Error> {
 
 #[cfg(feature = "server")]
 fn main() {
-    // NOTE: `dioxus::serve` blocks internally (block_on); it must NOT
-    // run inside a tokio runtime.
-    // Bind address comes from IP/PORT env (dx / our scripts set these);
-    // `dioxus::serve` resolves it via fullstack_address_or_localhost.
-    // Blocks forever; internally binds via fullstack_address_or_localhost
-    // unless IP/PORT env are set (dx injects them in dev).
+    // Never expose a manually launched server by default. Deployments that
+    // intentionally bind publicly must set IP explicitly and configure
+    // NOTEZ_WEB_TOKEN for mutation routes.
+    if std::env::var_os("IP").is_none() {
+        unsafe { std::env::set_var("IP", "127.0.0.1"); }
+    }
     dioxus::serve(move || {
         let built = build_router();
         async move { built }

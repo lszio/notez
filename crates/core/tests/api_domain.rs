@@ -142,6 +142,9 @@ impl notez_core::domain::ProjectionWrite for FailingStore {
     ) -> Result<(), Self::Error> {
         Err(notez_core::storage::StorageError::InvalidData("contract failure".into()))
     }
+    fn remove_conflicts(&mut self, _logical_paths: &[String]) -> Result<(), Self::Error> {
+        Err(notez_core::storage::StorageError::InvalidData("contract failure".into()))
+    }
 
     fn insert_segments(
         &mut self,

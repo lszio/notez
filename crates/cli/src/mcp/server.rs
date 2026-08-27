@@ -13,9 +13,9 @@
 //! sole interpreter of the protocol (ref/kind parsing, write checks). On
 //! success the tool serializes the *unwrapped* payload from the [`Response`]
 //! envelope, so every tool's text output stays wire-compatible with earlier
-//! releases. A few service-level tools (`source_list`, `source_add`,
-//! `watch_*`, `list_capabilities`) have no protocol request yet and keep
-//! calling the application service directly.
+//! A few service-level tools (`source_list`, `source_add`, `watch_*`,
+//! `list_capabilities`) have no protocol request yet and keep calling the
+//! application service directly. `source_doctor` is protocol-backed.
 //!
 //! Input schemas advertised via `tools/list` are generated from the protocol
 //! request types with `schemars::schema_for!`; there are no hand-written
@@ -25,15 +25,16 @@ use std::collections::BTreeMap;
 use std::sync::{Arc, LazyLock, Mutex};
 
 use notez_core::application::dispatcher::{ApplicationDispatcher, Response};
-use notez_core::application::{ApplicationService, ResolveResult};
+use notez_core::application::ApplicationService;
 use notez_core::storage::SqliteProjection;
+use notez_protocol::response::ResolveResult;
 use notez_protocol::request::{
     AddAttachmentRequest, AgendaRequest, ArtifactFreshnessRequest, CreateCommunityRequest,
-    DeriveArtifactRequest, DiagnoseLinkRequest, ExportSkillRequest, ExtractAttachmentRequest,
-    InspectRulesRequest, ListConflictsRequest, ListJobsRequest, ListLinksRequest,
-    QueryResourcesRequest, QuerySegmentsRequest, ReadResourceRequest, ReindexLinksRequest,
-    Request, ResolveLinksRequest, ResolveRequest, SourceDoctorRequest, SyncPullRequest,
-    SyncPushRequest, TransitionTaskRequest,
+    DeriveArtifactRequest, DiagnoseLinkRequest, ExecuteJanetRequest, ExportSkillRequest,
+    ExtractAttachmentRequest, InspectRulesRequest, ListConflictsRequest, ListJobsRequest,
+    ListLinksRequest, QueryResourcesRequest, QuerySegmentsRequest, ReadResourceRequest,
+    ReindexLinksRequest, Request, ResolveLinksRequest, ResolveRequest, SourceDoctorRequest,
+    SyncPullRequest, SyncPushRequest, TransitionTaskRequest,
 };
 use rmcp::{
     ErrorData as McpError, ServerHandler, ServiceExt,
@@ -150,6 +151,7 @@ static TOOL_SCHEMAS: LazyLock<BTreeMap<&'static str, JsonObject>> = LazyLock::ne
         ),
         ("query", schema_of::<QueryResourcesRequest>()),
         ("query_segments", schema_of::<QuerySegmentsRequest>()),
+        ("execute_janet", schema_of::<ExecuteJanetRequest>()),
         ("read", schema_of::<ReadResourceRequest>()),
         ("resolve", schema_of::<ResolveRequest>()),
         ("source_doctor", schema_of::<SourceDoctorRequest>()),
@@ -200,6 +202,7 @@ fn struct_err(err: &notez_core::application::ApplicationError) -> Result<CallToo
         notez_core::application::ApplicationError::RevisionConflict { .. } => "revision_conflict",
         notez_core::application::ApplicationError::AddressUniqueness { .. } => "address_uniqueness",
         notez_core::application::ApplicationError::InvalidRequest { .. } => "invalid_request",
+        notez_core::application::ApplicationError::Janet { .. } => "janet",
     };
     text_err(serde_json::json!({ "kind": kind, "message": err.to_string() }).to_string())
 }
@@ -533,22 +536,26 @@ impl NotezMcpServer {
         }
     }
 
-    #[tool(description = "List configured sources in the space")]
     fn source_list(
         &self,
-        Parameters(_args): Parameters<SpaceArgs>,
+        Parameters(args): Parameters<SpaceArgs>,
     ) -> Result<CallToolResult, McpError> {
+        if args.space.is_some() {
+            return text_err("source_list does not support selecting a different space");
+        }
         self.with_service(|svc| match svc.list_sources() {
             Ok(sources) => payload_ok(&sources),
             Err(e) => struct_err(&e),
         })
     }
-
     #[tool(description = "Add an external source to the space")]
     fn source_add(
         &self,
         Parameters(args): Parameters<SourceAddArgs>,
     ) -> Result<CallToolResult, McpError> {
+        if args.space.is_some() {
+            return text_err("source_add does not support selecting a different space");
+        }
         let kind = match args.kind.as_str() {
             "native" => notez_core::source::SourceKind::Native,
             "git" => notez_core::source::SourceKind::Git,
@@ -571,6 +578,7 @@ impl NotezMcpServer {
             id: args.id.clone(),
             kind,
             path: std::path::PathBuf::from(&args.path),
+            url: None,
             read_only: args.read_only.unwrap_or(false),
             include_paths,
             exclude_paths,
@@ -673,7 +681,7 @@ impl NotezMcpServer {
         match self.dispatch(Request::ExportSkill(req)) {
             Ok(Response::Skill(package)) => text_ok(json!({
                 "name": package.name,
-                "path": package.package_path.to_string_lossy(),
+                "path": package.package_path,
             })),
             Ok(other) => text_err(unexpected_response(&other)),
             Err(e) => struct_err(&e),
@@ -774,6 +782,21 @@ impl NotezMcpServer {
     #[tool(description = "List the capabilities the current build exposes")]
     fn list_capabilities(&self) -> Result<CallToolResult, McpError> {
         self.with_service(|svc| text_ok(svc.capabilities_json()))
+    }
+
+    /// Execute a restricted, read-only Janet query through the protocol
+    /// dispatcher. The MCP layer never constructs a Janet VM.
+    #[tool(description = "Execute a restricted read-only Janet query")]
+    fn execute_janet(
+        &self,
+        Parameters(args): Parameters<RawArgs>,
+    ) -> Result<CallToolResult, McpError> {
+        let req: ExecuteJanetRequest = parse_args(&args.0, &[], &[])?;
+        match self.dispatch(Request::ExecuteJanet(req)) {
+            Ok(Response::Janet(result)) => payload_ok(&result),
+            Ok(other) => text_err(unexpected_response(&other)),
+            Err(error) => struct_err(&error),
+        }
     }
 
     #[tool(description = "Start watching a space root for filesystem events")]

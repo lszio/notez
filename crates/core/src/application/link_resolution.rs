@@ -132,19 +132,27 @@ impl LinkResolver {
         })
     }
 
-    /// Resolve all occurrences and persist the resulting diagnostics + resolved
-    /// relations. Returns the list of (occurrence, status, candidates) tuples
-    /// for the caller to record.
-    pub fn resolve_all<S: ProjectionStore>(
-        store: &mut S,
+    /// Resolve every occurrence against the store **without mutating
+    /// it**: returns the computed resolved relations plus the
+    /// (occurrence, status, candidates) diagnostics tuples. Callers
+    /// persist both through the [`Projector`](crate::application::projector::Projector)
+    /// so the writes land in the event journal.
+    pub fn compute<S: ProjectionStore>(
+        store: &S,
         source_id: &str,
-        occurrences: Vec<LinkOccurrence>,
-    ) -> Result<Vec<(LinkOccurrence, ResolutionStatus, Vec<ResourceRef>)>, ApplicationError> {
+        occurrences: &[LinkOccurrence],
+    ) -> Result<
+        (
+            Vec<ResolvedRelation>,
+            Vec<(LinkOccurrence, ResolutionStatus, Vec<ResourceRef>)>,
+        ),
+        ApplicationError,
+    > {
         let mut resolved_relations = Vec::new();
         let mut diagnostics = Vec::with_capacity(occurrences.len());
 
         for occ in occurrences {
-            let (status, target_ref, candidates) = Self::resolve(store, &occ)?;
+            let (status, target_ref, candidates) = Self::resolve(store, occ)?;
             let now_secs = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .map(|duration| duration.as_secs())
@@ -172,40 +180,19 @@ impl LinkResolver {
                 });
             }
         }
-        store
-            .replace_resolved_relations(source_id, resolved_relations)
-            .map_err(|e| ApplicationError::Storage {
-                kind: crate::application::StorageErrorKind::Sqlite,
-                message: e.to_string(),
-            })?;
-        store
-            .write_link_diagnostics(source_id, &diagnostics)
-            .map_err(|e| ApplicationError::Storage {
-                kind: crate::application::StorageErrorKind::Sqlite,
-                message: e.to_string(),
-            })?;
-        Ok(diagnostics)
+        Ok((resolved_relations, diagnostics))
     }
 }
 
-/// Backwards-compatible wrapper kept for older callers.
-pub fn resolve_and_store_links<S: ProjectionStore>(
-    store: &mut S,
-    source_id: &str,
-    occurrences: Vec<LinkOccurrence>,
-) -> Result<(), ApplicationError> {
-    let _ = LinkResolver::resolve_all(store, source_id, occurrences)?;
-    Ok(())
-}
-
-/// Reindex every source in the projection, returning aggregate status counts.
-pub fn reindex_links<S: ProjectionStore>(
-    store: &mut S,
-    occurrences_by_source: Vec<(String, Vec<LinkOccurrence>)>,
+/// Reindex aggregate counts from computed resolutions, without
+/// touching the store.
+pub fn reindex_report<S: ProjectionStore>(
+    store: &S,
+    occurrences_by_source: &[(String, Vec<LinkOccurrence>)],
 ) -> Result<LinkReindexReport, ApplicationError> {
     let mut report = LinkReindexReport::default();
     for (source_id, occurrences) in occurrences_by_source {
-        let diags = LinkResolver::resolve_all(store, &source_id, occurrences)?;
+        let (_rels, diags) = LinkResolver::compute(store, source_id, occurrences)?;
         report.scanned += diags.len();
         for (_occ, status, _cands) in diags {
             match status {

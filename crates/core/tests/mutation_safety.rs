@@ -39,14 +39,7 @@ impl FormatParser for PlainParser {
 }
 
 fn build_config() -> SourceConfig {
-    SourceConfig {
-        id: "native".to_string(),
-        kind: SourceKind::Native,
-        path: PathBuf::from("/space"),
-        read_only: false,
-        include_paths: vec![],
-        exclude_paths: vec![],
-    }
+    SourceConfig { id: "native".to_string(), kind: SourceKind::Native, path: PathBuf::from("/space"), read_only: false, url: None, include_paths: vec![], exclude_paths: vec![] }
 }
 
 /// A projection that allows writes but tracks every call. Used to assert
@@ -174,6 +167,10 @@ impl notez_core::domain::ProjectionWrite for CountingStore {
         records: &[notez_core::domain::ConflictRecord],
     ) -> Result<(), Self::Error> {
         notez_core::domain::ProjectionWrite::replace_conflicts(&mut self.base, records)
+            .map_err(|e| CountingError(e.to_string()))
+    }
+    fn remove_conflicts(&mut self, logical_paths: &[String]) -> Result<(), Self::Error> {
+        notez_core::domain::ProjectionWrite::remove_conflicts(&mut self.base, logical_paths)
             .map_err(|e| CountingError(e.to_string()))
     }
 }
@@ -314,14 +311,7 @@ fn composed_source_adapter_rejects_write_when_read_only() {
     // This test documents the *current* behaviour and asserts that the
     // adapter surfaces a SourceError when transport.mutate fails — it does
     // not paper over the failure.
-    let cfg = SourceConfig {
-        id: "native".to_string(),
-        kind: SourceKind::Native,
-        path: PathBuf::from("/space"),
-        read_only: true,
-        include_paths: vec![],
-        exclude_paths: vec![],
-    };
+    let cfg = SourceConfig { id: "native".to_string(), kind: SourceKind::Native, path: PathBuf::from("/space"), read_only: true, url: None, include_paths: vec![], exclude_paths: vec![] };
     let transport =
         ComposedSourceAdapter::new(cfg, Box::new(FailingTransport), vec![Box::new(PlainParser)]);
     let err = transport

@@ -36,12 +36,7 @@ impl SourceRegistry {
         Self::default()
     }
 
-    /// Construct a registry pre-populated with the three built-in
-    /// factories backed by real adapters. This is the default state used
-    /// by `ApplicationFacade::new` and `ApplicationFacade::with_source`.
-    /// Stub-backed factories (`AnytypeFactory`, `AppleNotesFactory`,
-    /// `AppleCalendarFactory`) are available but not registered here;
-    /// their adapters fail every operation honestly.
+    /// Construct a registry pre-populated with built-in factories.
     pub fn with_builtins() -> Self {
         let mut r = Self::new();
         r.register(Box::new(NativeFactory));
@@ -49,7 +44,6 @@ impl SourceRegistry {
         r.register(Box::new(ObsidianFactory));
         r
     }
-
     /// Register `factory` for its `SourceKind`. If a factory is already
     /// registered for that kind, the new one replaces it (last writer
     /// wins).
@@ -115,6 +109,14 @@ impl SourceAdapterFactory for ObsidianFactory {
     }
     fn build(&self, config: SourceConfig) -> Result<Box<dyn SourceAdapter>, SourceError> {
         Ok(Box::new(crate::source::ObsidianSourceAdapter::new(config)))
+    }
+}
+
+pub struct NotezRestFactory;
+impl SourceAdapterFactory for NotezRestFactory {
+    fn kind(&self) -> SourceKind { SourceKind::NotezRest }
+    fn build(&self, config: SourceConfig) -> Result<Box<dyn SourceAdapter>, SourceError> {
+        Ok(Box::new(crate::source::NotezRestSourceAdapter::new(config)))
     }
 }
 

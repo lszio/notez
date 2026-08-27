@@ -9,16 +9,12 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Redirect, Response};
 use axum::routing::{get, post};
 use toml;
-use notez_core::application::{
-    ApplicationError, ApplicationFacade, ApplicationService, SourceContext, WatchError, WatchService,
-};
-use notez_core::config::{
-    web_space::{resolve_source as core_resolve_space, WebSourceError},
-    GlobalConfig, SourceRegistration,
-};
- use notez_core::storage::SqliteProjection;
- use serde::Deserialize;
-
+use notez_core::application::{ApplicationError, ApplicationFacade, SourceContext, WatchError, WatchService};
+use notez_core::config::{web_space::{resolve_source as core_resolve_space, WebSourceError}, GlobalConfig, SourceRegistration};
+use notez_core::storage::SqliteProjection;
+use notez_core::application::dispatcher::{ApplicationDispatcher, Response as DispatchResponse};
+use notez_protocol::request::{Request, ScanNativeRequest};
+use serde::Deserialize;
 use crate::server::{SaveFailure, SaveOutcome};
 use crate::router::{decode_space, route_for_space_list};
 /// Process-global watch service.
@@ -67,8 +63,9 @@ impl WebState {
             }
         }
         let sel = core_resolve_space(&canonical).map_err(WebRouteError::from)?;
-        let handle = notez_composition::native::open_selected(&sel, None)
+        let mut handle = notez_composition::native::open_selected(&sel, None)
             .map_err(|e| WebRouteError::Internal(e.to_string()))?;
+        handle.facade.attach_janet_executor(notez_core::application::NativeJanetExecutor);
         let facade = Arc::new(Mutex::new(handle.facade));
         self.facades
             .lock()
@@ -81,14 +78,15 @@ impl WebState {
 #[derive(Debug)]
 pub enum WebRouteError {
     Invalid(String),
+    Unauthorized(String),
     Internal(String),
     Status(StatusCode, String),
 }
-
 impl std::fmt::Display for WebRouteError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Invalid(m) => write!(f, "invalid: {m}"),
+            Self::Unauthorized(m) => write!(f, "unauthorized: {m}"),
             Self::Internal(m) => write!(f, "internal: {m}"),
             Self::Status(c, m) => write!(f, "{c}: {m}"),
         }
@@ -117,12 +115,45 @@ impl IntoResponse for WebRouteError {
     fn into_response(self) -> Response {
         let (status, msg) = match &self {
             Self::Invalid(m) => (StatusCode::BAD_REQUEST, m.clone()),
+            Self::Unauthorized(m) => (StatusCode::UNAUTHORIZED, m.clone()),
             Self::Internal(m) => (StatusCode::INTERNAL_SERVER_ERROR, m.clone()),
             Self::Status(c, m) => (*c, m.clone()),
         };
         (status, msg).into_response()
     }
 }
+
+/// Mutation authentication policy: loopback (or direct in-process) requests
+/// remain compatible with local acceptance; non-loopback requests require
+/// NOTEZ_WEB_TOKEN via Bearer authorization or X-Notez-Token.
+pub async fn mutation_auth_middleware(
+    req: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    let path = req.uri().path();
+    let is_mutation = req.method() == axum::http::Method::POST
+        && (path == "/api/sources/register"
+            || path == "/api/sources/scan"
+            || path == "/api/sources/document/edit"
+            || path.starts_with("/api/sources/watch/")
+            || path == "/api/janet/eval");
+    if !is_mutation { return next.run(req).await; }
+    let bound_public = std::env::var("IP").ok()
+        .and_then(|ip| ip.parse::<std::net::IpAddr>().ok())
+        .is_some_and(|ip| !ip.is_loopback());
+    let loopback = req.extensions().get::<std::net::SocketAddr>()
+        .map(|a| a.ip().is_loopback()).unwrap_or(!bound_public);
+    let expected = std::env::var("NOTEZ_WEB_TOKEN").ok().filter(|v| !v.trim().is_empty());
+    let supplied = req.headers().get("x-notez-token").and_then(|v| v.to_str().ok())
+        .or_else(|| req.headers().get(axum::http::header::AUTHORIZATION)
+            .and_then(|v| v.to_str().ok()).and_then(|v| v.strip_prefix("Bearer ")));
+    if expected.as_deref().is_some_and(|token| supplied == Some(token)) {
+        next.run(req).await
+    } else {
+        WebRouteError::Unauthorized("mutation requires NOTEZ_WEB_TOKEN".into()).into_response()
+    }
+}
+
 
 #[derive(Debug, Deserialize)]
 pub struct RegisterForm {
@@ -205,12 +236,12 @@ fn resolve_form_space(form: &SpaceForm) -> Result<PathBuf, WebRouteError> {
 fn do_scan(state: &WebState, form: SpaceForm) -> Result<Redirect, WebRouteError> {
     let source_root = resolve_form_space(&form)?;
     let facade = state.facade_for(&source_root)?;
-    let report = {
-        let mut guard = facade.lock().map_err(|e| WebRouteError::Internal(format!("facade lock: {e}")))?;
-        ApplicationService::scan_native(&mut *guard)?
-    };
-    let _ = report;
-    Ok(Redirect::to(&route_for_space_list(&source_root.to_string_lossy())))
+    let mut guard = facade.lock().map_err(|e| WebRouteError::Internal(format!("facade lock: {e}")))?;
+    match ApplicationDispatcher::new(&mut *guard).dispatch(Request::ScanNative(ScanNativeRequest {})) {
+        Ok(DispatchResponse::Scan(_)) => Ok(Redirect::to(&route_for_space_list(&source_root.to_string_lossy()))),
+        Ok(other) => Err(WebRouteError::Internal(format!("unexpected scan response: {other:?}"))),
+        Err(e) => Err(e.into()),
+    }
 }
 
 fn do_watch_start(state: &WebState, form: SpaceForm) -> Result<Redirect, WebRouteError> {
@@ -257,26 +288,16 @@ fn save_failure_parts(f: &SaveFailure) -> (String, String) {
 }
 
 fn do_edit_document(_state: &WebState, form: DocumentEditForm) -> Result<Redirect, WebRouteError> {
-    let space_path = PathBuf::from(&form.source_root);
+    let base = crate::router::route_for_space_resource(&form.source_root, &form.ref_str);
     let r_ref = match notez_core::domain::ResourceRef::parse(&form.ref_str) {
         Ok(r) => r,
-        Err(e) => {
-            let base = crate::router::route_for_space_resource(&form.source_root, &form.ref_str);
-            let err = e.to_string();
-            let msg = urlencoding::encode(&err);
-            return Ok(Redirect::to(&format!("{base}?edit_err=invalid_ref&edit_msg={msg}")));
-        }
+        Err(e) => return Ok(Redirect::to(&format!("{base}?edit_err=invalid_ref&edit_msg={}", urlencoding::encode(&e.to_string())))),
     };
-    let outcome = crate::server::update_document_impl(&space_path, &r_ref, &form.expected_revision, &form.content)
-        .unwrap_or_else(|e| SaveOutcome::Failed(SaveFailure::Internal { message: e }));
-    let base = crate::router::route_for_space_resource(&form.source_root, &form.ref_str);
+    let outcome = crate::server::update_document_impl(PathBuf::from(&form.source_root).as_path(), &r_ref, &form.expected_revision, &form.content)
+        .map_err(WebRouteError::Internal)?;
     match outcome {
         SaveOutcome::Saved { .. } => Ok(Redirect::to(&format!("{base}?edited=1"))),
-        SaveOutcome::Failed(f) => {
-            let (kind, msg) = save_failure_parts(&f);
-            let enc = urlencoding::encode(&msg);
-            Ok(Redirect::to(&format!("{base}?edit_err={kind}&edit_msg={enc}")))
-        }
+        SaveOutcome::Failed(f) => { let (kind, msg) = save_failure_parts(&f); Ok(Redirect::to(&format!("{base}?edit_err={kind}&edit_msg={}", urlencoding::encode(&msg)))) }
     }
 }
 
@@ -286,33 +307,14 @@ pub struct JanetEvalForm {
 }
 
 fn do_janet_eval(form: JanetEvalForm) -> Result<axum::response::Response, WebRouteError> {
-    let (status, body) = match crate::janet::eval_janet(&form.script) {
-        Ok(v) => {
-            let json = serde_json::to_string_pretty(&v).unwrap_or_default();
-            (
-                StatusCode::OK,
-                format!(
-                    "<!doctype html><html><head><meta charset='utf-8'><title>Notez · janet</title></head><body style='font-family:monospace'><h1>janet result</h1><pre class='janet-result'>{}</pre></body></html>",
-                    html_escape::encode_text(&json)
-                ),
-            )
-        }
-        Err(e) => (
-            StatusCode::BAD_REQUEST,
-            format!(
-                "<!doctype html><html><head><meta charset='utf-8'><title>Notez · janet error</title></head><body style='font-family:monospace'><h1>janet error</h1><pre class='janet-error'>{}</pre></body></html>",
-                html_escape::encode_text(&e)
-            ),
-        ),
+    let (status, body) = match crate::janet::eval_janet_checked(&form.script) {
+        Ok(v) => (StatusCode::OK, format!("<!doctype html><html><body><h1>janet result</h1><pre class='janet-result'>{}</pre></body></html>", html_escape::encode_text(&serde_json::to_string_pretty(&v).unwrap_or_default()))),
+        Err(e) => (StatusCode::BAD_REQUEST, format!("<!doctype html><html><body><h1>janet error</h1><pre class='janet-error' data-kind='{}'>{}</pre></body></html>", e.kind(), html_escape::encode_text(&e.to_string()))),
     };
     Ok((status, axum::response::Html(body)).into_response())
 }
-
 #[derive(Debug, Deserialize)]
-pub struct AttachmentRawQuery {
-    pub source_root: String,
-    pub locator: String,
-}
+pub struct AttachmentRawQuery { pub source_root: String, pub locator: String }
 
 async fn raw_attachment_get(
     axum::extract::Query(query): axum::extract::Query<AttachmentRawQuery>,
@@ -418,6 +420,7 @@ pub fn build_router(state: WebState) -> axum::Router {
                 async move { do_janet_eval(form) }
             }),
         )
+        .layer(axum::middleware::from_fn(mutation_auth_middleware))
         .layer(axum::middleware::from_fn(auto_watch_middleware))
 }
 

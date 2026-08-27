@@ -146,6 +146,7 @@ fn config(id: &str) -> SourceConfig {
         kind: SourceKind::Native,
         path: PathBuf::from("/space"),
         read_only: true,
+        url: None,
         include_paths: vec![],
         exclude_paths: vec![],
     }

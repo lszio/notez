@@ -34,6 +34,7 @@ fn space_config_with_stub_source(root: &Path) -> SpaceConfig {
             kind: SourceKind::Anytype,
             path: root.to_path_buf(),
             read_only: false,
+            url: None,
             include_paths: vec![],
             exclude_paths: vec![],
         }],

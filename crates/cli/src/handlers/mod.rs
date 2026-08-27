@@ -16,6 +16,7 @@ pub mod sync;
 pub mod task;
 pub mod watch;
 pub mod workspace;
+pub mod janet;
 
 /// The composed application service handed to every command handler.
 pub type Service =
@@ -38,5 +39,6 @@ pub fn exit_code_for(err: &notez_core::application::ApplicationError) -> i32 {
         ApplicationError::RevisionConflict { .. } => 9,
         ApplicationError::AddressUniqueness { .. } => 10,
         ApplicationError::InvalidRequest { .. } => 2,
+        ApplicationError::Janet { .. } => 6,
     }
 }

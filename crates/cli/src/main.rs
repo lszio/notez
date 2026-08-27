@@ -121,6 +121,21 @@ fn main() {
         Commands::Artifact(commands::ArtifactSubcommand {
             command: commands::ArtifactCommands::Stale,
         }) => handlers::community::run_artifact_stale(cli.json, &mut service),
+        Commands::Janet {
+            script,
+            source_id,
+            document_ref,
+            timeout_ms,
+            result_limit,
+        } => handlers::janet::run_janet(
+            cli.json,
+            &mut service,
+            script,
+            source_id,
+            document_ref,
+            timeout_ms,
+            result_limit,
+        ),
         Commands::Mcp(commands::McpSubcommand {
             command: commands::McpCommands::Serve,
         }) => handlers::mcp_cmd::run_mcp(service),

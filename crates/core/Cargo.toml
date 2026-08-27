@@ -28,6 +28,7 @@ tempfile       = "3"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 rusqlite = { workspace = true }
+janetrs = "0.8"
 notify   = "6"
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
@@ -38,6 +39,7 @@ getrandom    = { version = "0.4", features = ["wasm_js"] }
 orgmode  = { path = "../adapters/orgmode" }
 markdown = { path = "../adapters/markdown" }
 tempfile = "3"
+parking_lot = "0.12"
 
 # Note: the Cargo package name remains `core` (workspace and external
 # identifiers), but the Rust library name is `notez_core` so that

@@ -11,7 +11,7 @@ use std::process::exit;
 use super::{Service, exit_code_for};
 use crate::commands;
 use notez_core::application::dispatcher::{ApplicationDispatcher, Response};
-use notez_core::domain::ResourceKind;
+use notez_protocol::response::{AgendaItem, ParaNode, ResourceKind};
 use notez_protocol::request::{
     AgendaRequest, ListJobsRequest, ParaOverviewRequest, ReadResourceRequest,
     Request, TransitionTaskRequest,
@@ -55,6 +55,7 @@ pub fn run_task(
                 r_ref: r_ref.clone(),
                 to_state: to,
                 timestamp,
+                expected_revision: None,
             }));
             match dispatched {
                 Ok(Response::Transition(transition)) => {
@@ -84,7 +85,7 @@ pub fn run_task(
                         println!("{}", serde_json::to_string(&res).unwrap());
                     } else {
                         println!("=== Task Record ===");
-                        println!("Ref:      {}", res.r#ref);
+                        println!("Ref:      {}", res.ref_);
                         println!("Title:    {}", res.title);
                         println!("Locator:  {}", res.locator);
                         println!("Revision: {}", res.revision);
@@ -154,7 +155,7 @@ pub fn run_task(
                                 }
                             } else {
                                 println!(
-                                    "(Content extraction for {} is not supported in CLI detail view)",
+                                    "(Content extraction for {:?} is not supported in CLI detail view)",
                                     res.kind
                                 );
                             }
@@ -181,10 +182,9 @@ pub fn run_task(
                     if json {
                         println!("{}", serde_json::to_string(&agenda).unwrap());
                     } else {
-                        // Group by TODO state
                         let mut by_state: std::collections::BTreeMap<
                             String,
-                            Vec<&notez_core::application::task_para::AgendaItem>,
+                            Vec<&AgendaItem>,
                         > = std::collections::BTreeMap::new();
                         for item in &agenda.items {
                             let state = item.todo.clone().unwrap_or_else(|| "NONE".to_string());
@@ -220,10 +220,9 @@ pub fn run_task(
                     if json {
                         println!("{}", serde_json::to_string(&agenda).unwrap());
                     } else {
-                        // Extract YYYY-MM-DD and group
                         let mut by_date: std::collections::BTreeMap<
                             String,
-                            Vec<(&notez_core::application::task_para::AgendaItem, String)>,
+                            Vec<(&AgendaItem, String)>,
                         > = std::collections::BTreeMap::new();
                         let mut unscheduled = Vec::new();
                         let mut completed = Vec::new();
@@ -337,7 +336,7 @@ pub fn run_task(
                         println!("{}", serde_json::to_string(&para).unwrap());
                     } else {
                         let print_nodes =
-                            |nodes: Vec<notez_core::application::task_para::ParaNode>| {
+                            |nodes: Vec<ParaNode>| {
                                 for node in nodes {
                                     let todo_str = node
                                         .resource
@@ -347,7 +346,7 @@ pub fn run_task(
                                         .unwrap_or_default();
                                     println!(
                                         "- {}{} ({})",
-                                        todo_str, node.resource.title, node.resource.r#ref
+                                        todo_str, node.resource.title, node.resource.ref_
                                     );
                                     for task in node.tasks {
                                         let t_todo = task

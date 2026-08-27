@@ -11,7 +11,7 @@
 
 use dioxus::prelude::*;
 use crate::router::route_for_space_list;
-use crate::server::{list_registered_spaces, RegisteredSpaceDto};
+use crate::server::{list_registered_spaces, list_source_namespaces, RegisteredSpaceDto, SourceNamespaceDto};
 
 /// Old "always-on" sidebar used on the global home page.
 #[component]
@@ -87,6 +87,10 @@ pub fn SpaceSidebar(active_path: Option<String>) -> Element {
                     }
                 }
 
+                if let Some(path) = active_path.as_ref() {
+                    RemoteNamespaces { source_root: path.clone() }
+                }
+
                 details { class: "side-add", style: "margin-top:0.5rem;",
                     summary { "+ register a space" }
                     form {
@@ -127,7 +131,7 @@ pub fn SpaceSidebar(active_path: Option<String>) -> Element {
 }
 
 /// Top-left dropdown that switches the active space. Always visible
-/// in the top nav bar.
+/// /// in the top nav bar.
 #[component]
 pub fn SpaceDropdown(active_path: Option<String>, active_encoded: Option<String>) -> Element {
     let spaces_resource = use_server_future(|| async {
@@ -175,6 +179,11 @@ pub fn SpaceDropdown(active_path: Option<String>, active_encoded: Option<String>
                     }
                     a {
                         class: "nav-source-link",
+                        href: "/source/{enc}/activity",
+                        "this space · activity"
+                    }
+                    a {
+                        class: "nav-source-link",
                         href: "/source/{enc}/graph",
                         "this space · graph"
                     }
@@ -215,6 +224,9 @@ pub fn SpaceDropdown(active_path: Option<String>, active_encoded: Option<String>
                         }
                     }
                 }
+                if let Some(path) = active_path.as_ref() {
+                    RemoteNamespaces { source_root: path.clone() }
+                }
                 details { class: "side-add", style: "margin-top:0.5rem;",
                     summary { "+ register a space" }
                     form {
@@ -246,6 +258,49 @@ pub fn SpaceDropdown(active_path: Option<String>, active_encoded: Option<String>
                         button {
                             r#type: "submit",
                             "register"
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[component]
+fn RemoteNamespaces(source_root: String) -> Element {
+    let remote_resource = use_server_future(move || {
+        let root = source_root.clone();
+        async move { list_source_namespaces(root).await.unwrap_or_default() }
+    })?;
+    let remotes: Vec<SourceNamespaceDto> = remote_resource.cloned().unwrap_or_default();
+    if remotes.is_empty() {
+        return rsx! { Fragment {} };
+    }
+    rsx! {
+        section { class: "side-remotes", aria_label: "remote sources",
+            div { class: "side-head",
+                span { class: "side-label", "remote namespaces" }
+                span { class: "side-count", "({remotes.len()})" }
+            }
+            ul { class: "side-list",
+                for remote in remotes.iter() {
+                    li { class: "side-item remote-source", key: "{remote.id}",
+                        div { class: "side-link",
+                            span { class: "side-link-name", "{remote.id}" }
+                            span { class: "side-link-path mono-sm", "{remote.kind}" }
+                            span { class: "side-tag", "read-only" }
+                            if remote.status == "ready" {
+                                if let Some(caps) = remote.capabilities.as_ref() {
+                                    span { class: "side-tag", "read" }
+                                    if caps.can_import { span { class: "side-tag", "import" } }
+                                    if caps.can_watch { span { class: "side-tag", "watch" } }
+                                }
+                            } else {
+                                span { class: "side-tag is-error", "unavailable" }
+                                if let Some(reason) = remote.reason.as_ref() {
+                                    span { class: "side-link-path err-text", "{reason}" }
+                                }
+                            }
                         }
                     }
                 }

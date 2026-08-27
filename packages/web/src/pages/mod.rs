@@ -1,5 +1,6 @@
 //! Web pages and reusable UI components.
 
+pub mod activity;
 pub mod detail;
 pub mod graph;
 pub mod home;
@@ -15,6 +16,7 @@ pub mod sidebar;
 pub mod space_home;
 pub mod ui;
 
+pub use activity::ActivityPage;
 pub use detail::DetailPage;
 pub use graph::GraphPage;
 pub use home::HomePage;

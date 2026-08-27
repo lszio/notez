@@ -4,14 +4,25 @@
 //! tokens defined in `packages/web/public/index.html`
 //! (`--paper*`, `--ink*`, `--accent*`, `--sp-*`, `--r-*`, …) so
 //! themes (light/dark) apply without touching component code.
+//!
+//! Shared primitives here must stay platform-neutral: they render
+//! plain HTML elements, take optional accessibility props
+//! (`aria_label`, `title`, `name`, …) and never reach for page
+//! classes. Web/Desktop/Mobile all compose these.
 
 use dioxus::prelude::*;
 
 /// Solid primary button. `accent` flips to the accent palette.
+///
+/// `kind` maps to the button `type` attribute (`button` default,
+/// pass `"submit"` inside a form). `aria_label` and `title` are
+/// rendered when non-empty so icon-only buttons stay announced.
 #[component]
 pub fn NzButton(
     #[props(default = "button".to_string())] kind: String,
     accent: bool,
+    #[props(default = "".to_string())] aria_label: String,
+    #[props(default = "".to_string())] title: String,
     children: Element,
 ) -> Element {
     let border = if accent { "var(--accent)" } else { "var(--ink)" };
@@ -19,6 +30,8 @@ pub fn NzButton(
     rsx! {
         button {
             r#type: "{kind}",
+            "aria-label": aria_label,
+            title: title,
             style: "font-family: var(--mono); font-size: 0.8rem; \
                     color: var(--paper); background: {color}; \
                     border: 1px solid {border}; border-radius: var(--r-sm); \
@@ -30,9 +43,17 @@ pub fn NzButton(
 
 /// Outlined secondary button.
 #[component]
-pub fn NzButtonGhost(children: Element) -> Element {
+pub fn NzButtonGhost(
+    #[props(default = "button".to_string())] kind: String,
+    #[props(default = "".to_string())] aria_label: String,
+    #[props(default = "".to_string())] title: String,
+    children: Element,
+) -> Element {
     rsx! {
         button {
+            r#type: "{kind}",
+            "aria-label": aria_label,
+            title: title,
             style: "font-family: var(--mono); font-size: 0.8rem; \
                     color: var(--ink-2); background: transparent; \
                     border: 1px solid var(--ink-rule); border-radius: var(--r-sm); \
@@ -43,17 +64,26 @@ pub fn NzButtonGhost(children: Element) -> Element {
 }
 
 /// Underlined token-style text input.
+///
+/// `name` and `input_type` make the input usable inside native
+/// `<form method="post">` SSR forms (the page-level progressive
+/// enhancement reads `input[name=…]` from the DOM).
 #[component]
 pub fn NzInput(
     placeholder: String,
     #[props(default = "".to_string())] value: String,
+    #[props(default = "".to_string())] name: String,
+    #[props(default = "text".to_string())] input_type: String,
+    #[props(default = "".to_string())] aria_label: String,
     oninput: EventHandler<FormEvent>,
 ) -> Element {
     rsx! {
         input {
-            r#type: "text",
+            r#type: "{input_type}",
+            name: name,
             placeholder: "{placeholder}",
             value: "{value}",
+            "aria-label": aria_label,
             oninput: move |e| oninput.call(e),
             style: "font-family: var(--mono); font-size: 0.85rem; \
                     color: var(--ink); background: transparent; \
@@ -63,7 +93,8 @@ pub fn NzInput(
     }
 }
 
-/// Small uppercase label chip.
+/// Small uppercase label chip. Status is carried by the visible text
+/// (never colour alone); `tone` picks the token.
 #[component]
 pub fn NzBadge(text: String, tone: String) -> Element {
     let color = match tone.as_str() {
@@ -73,8 +104,10 @@ pub fn NzBadge(text: String, tone: String) -> Element {
         "info" => "var(--info)",
         _ => "var(--ink-2)",
     };
+    let title = text.clone();
     rsx! {
         span {
+            title: "{title}",
             style: "font-family: var(--mono); font-size: 0.62rem; \
                     color: {color}; border: 1px solid {color}; \
                     border-radius: var(--r-sm); \

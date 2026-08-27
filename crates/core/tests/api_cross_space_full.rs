@@ -23,6 +23,7 @@ fn cross_space_scan_then_aggregate_by_object_id() {
         kind: SourceKind::Native,
         path: dir.path().to_path_buf(),
         read_only: true,
+        url: None,
         include_paths: vec![],
         exclude_paths: vec![],
     };
@@ -31,6 +32,7 @@ fn cross_space_scan_then_aggregate_by_object_id() {
         kind: SourceKind::Native,
         path: dir.path().to_path_buf(),
         read_only: true,
+        url: None,
         include_paths: vec![],
         exclude_paths: vec![],
     };
@@ -126,6 +128,7 @@ fn cross_space_each_scan_marks_itself_as_primary_and_exposes_primary_source() {
         kind: SourceKind::Native,
         path: dir.path().to_path_buf(),
         read_only: true,
+        url: None,
         include_paths: vec![],
         exclude_paths: vec![],
     };
@@ -134,6 +137,7 @@ fn cross_space_each_scan_marks_itself_as_primary_and_exposes_primary_source() {
         kind: SourceKind::Native,
         path: dir.path().to_path_buf(),
         read_only: true,
+        url: None,
         include_paths: vec![],
         exclude_paths: vec![],
     };

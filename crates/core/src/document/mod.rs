@@ -12,7 +12,7 @@ pub mod content_hash;
 pub use content_hash::{content_hash_of_bytes, content_hash_of_file};
 
 pub mod org;
-pub use org::{DocumentError as OrgDocumentError, OrgScanner};
+pub use org::{DocumentError as OrgDocumentError, OrgEditField, OrgPatchError, OrgScanner, OrgTextEdit, restricted_org_patch, restricted_org_patches};
 
 pub mod markdown;
 pub use markdown::{DocumentError as MarkdownDocumentError, MarkdownScanner};

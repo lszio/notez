@@ -13,6 +13,7 @@ fn make_config(kind: SourceKind, id: &str) -> SourceConfig {
         kind,
         path: PathBuf::from("/space"),
         read_only: true,
+        url: None,
         include_paths: vec![],
         exclude_paths: vec![],
     }

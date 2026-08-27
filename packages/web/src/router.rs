@@ -2,7 +2,7 @@
 
 use base64::Engine;
 use dioxus::prelude::*;
-use crate::pages::{DetailPage, GraphPage, HomePage, ListPage, PreviewPage, SpaceHome};
+use crate::pages::{ActivityPage, DetailPage, GraphPage, HomePage, ListPage, PreviewPage, SpaceHome};
 
 /// Query string for the resource list page. PR7 introduces this so
 /// `?kind=attachment&sort=mtime` deep-links land the user on the
@@ -18,6 +18,10 @@ pub struct ListQuery {
     pub kind: String,
     pub sort: String,
     pub source: String,
+    /// Result presentation mode (`list` / `table` / `cards` /
+    /// `stream`). Empty means the default (`list`). Kept in the URL
+    /// so a view survives reloads and deep links.
+    pub mode: String,
 }
 
 impl std::fmt::Display for ListQuery {
@@ -34,6 +38,9 @@ impl std::fmt::Display for ListQuery {
         }
         if !self.source.is_empty() {
             parts.push(format!("source={}", url_encode(&self.source)));
+        }
+        if !self.mode.is_empty() {
+            parts.push(format!("mode={}", url_encode(&self.mode)));
         }
         if parts.is_empty() {
             Ok(())
@@ -61,6 +68,7 @@ impl From<&str> for ListQuery {
                 "kind" => out.kind = v,
                 "sort" => out.sort = v,
                 "source" => out.source = v,
+                "mode" => out.mode = v,
                 _ => {}
             }
         }
@@ -141,6 +149,8 @@ pub enum Route {
     Space { encoded: String },
     #[route("/source/:encoded/list?:..query", ListPage)]
     List { encoded: String, query: ListQuery },
+    #[route("/source/:encoded/activity", ActivityPage)]
+    Activity { encoded: String },
     #[route("/source/:encoded/resource/:encoded_ref?:..query", DetailPage)]
     Resource { encoded: String, encoded_ref: String, query: DetailQuery },
     #[route("/source/:encoded/graph", GraphPage)]
@@ -187,6 +197,10 @@ pub fn route_for_space_graph(source_root: &str) -> String {
     format!("/source/{}/graph", encode_space(source_root))
 }
 
+pub fn route_for_space_activity(source_root: &str) -> String {
+    format!("/source/{}/activity", encode_space(source_root))
+}
+
 pub fn route_for_space_resource(source_root: &str, ref_str: &str) -> String {
     format!(
         "/source/{}/resource/{}",
@@ -213,5 +227,47 @@ pub fn route_for_space_list_with_query(source_root: &str, query: &ListQuery) -> 
         base
     } else {
         format!("{base}{qs}")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn list_query_round_trips_mode() {
+        let q = ListQuery {
+            q: "org".into(),
+            kind: "document".into(),
+            sort: "title".into(),
+            source: "native".into(),
+            mode: "cards".into(),
+        };
+        let s = q.to_string();
+        assert!(s.contains("mode=cards"), "got: {s}");
+        let back = ListQuery::from(s.as_str());
+        assert_eq!(back, q);
+    }
+
+    #[test]
+    fn list_query_unknown_params_are_ignored() {
+        let q = ListQuery::from("?q=foo&kind=all&wat=1");
+        assert_eq!(q.q, "foo");
+        assert_eq!(q.kind, "all");
+        assert_eq!(q.mode, "");
+    }
+
+    #[test]
+    fn list_query_default_serializes_to_empty_string() {
+        assert_eq!(ListQuery::default().to_string(), "");
+    }
+
+    #[test]
+    fn route_for_space_activity_encodes_root() {
+        let href = route_for_space_activity("/tmp/work space");
+        assert!(href.starts_with("/source/"));
+        assert!(href.ends_with("/activity"));
+        let encoded = href.trim_start_matches("/source/").trim_end_matches("/activity");
+        assert_eq!(decode_space(encoded), "/tmp/work space");
     }
 }

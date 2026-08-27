@@ -37,6 +37,8 @@ pub enum ApplicationError {
         path: Option<PathBuf>,
         source: std::io::ErrorKind,
     },
+    /// A restricted Janet execution failed in a stable category.
+    Janet { kind: String, message: String },
     /// A requested capability is not implemented by this build.
     UnsupportedCapability { capability: &'static str },
     /// An expected revision did not match the persisted value.
@@ -97,6 +99,7 @@ impl std::fmt::Display for ApplicationError {
                 Some(p) => write!(f, "io error: {source} at {}", p.display()),
                 None => write!(f, "io error: {source}"),
             },
+            ApplicationError::Janet { kind, message } => write!(f, "janet {kind}: {message}"),
             ApplicationError::UnsupportedCapability { capability } => {
                 write!(f, "unsupported capability: {capability}")
             }
@@ -157,6 +160,11 @@ impl serde::Serialize for ApplicationError {
                 map.serialize_entry("kind", "io")?;
                 map.serialize_entry("path", path)?;
                 map.serialize_entry("source", crate::error_serde::name(source))?;
+            }
+            ApplicationError::Janet { kind, message } => {
+                map.serialize_entry("kind", "janet")?;
+                map.serialize_entry("janet_kind", kind)?;
+                map.serialize_entry("message", message)?;
             }
             ApplicationError::UnsupportedCapability { capability } => {
                 map.serialize_entry("kind", "unsupported_capability")?;
@@ -240,57 +248,25 @@ impl<'de> serde::Deserialize<'de> for ApplicationError {
                 })
             }
             "io" => {
-                let path = serde_json::from_value(
-                    value
-                        .get("path")
-                        .cloned()
-                        .unwrap_or(serde_json::Value::Null),
-                )
-                .map_err(D::Error::custom)?;
-                let source = value
-                    .get("source")
-                    .and_then(|v| v.as_str())
-                    .ok_or_else(|| D::Error::custom("ApplicationError: missing `source`"))?;
-                Ok(ApplicationError::Io {
-                    path,
-                    source: crate::error_serde::from_name(source),
-                })
+                let path = serde_json::from_value(value.get("path").cloned().unwrap_or(serde_json::Value::Null)).map_err(D::Error::custom)?;
+                let source = value.get("source").and_then(|v| v.as_str()).ok_or_else(|| D::Error::custom("ApplicationError: missing `source`"))?;
+                Ok(ApplicationError::Io { path, source: crate::error_serde::from_name(source) })
+            }
+            "janet" => {
+                let kind = value.get("janet_kind").and_then(|v| v.as_str()).ok_or_else(|| D::Error::custom("ApplicationError: missing `janet_kind`"))?;
+                let message = value.get("message").and_then(|v| v.as_str()).ok_or_else(|| D::Error::custom("ApplicationError: missing `message`"))?;
+                Ok(ApplicationError::Janet { kind: kind.to_string(), message: message.to_string() })
             }
             "unsupported_capability" => {
-                let capability = value
-                    .get("capability")
-                    .and_then(|v| v.as_str())
-                    .ok_or_else(|| D::Error::custom("ApplicationError: missing `capability`"))?;
-                // `capability` is `&'static str`; only the strings this
-                // build actually produces can be round-tripped. Unknown
-                // strings are rejected rather than leaked.
-                const KNOWN: &[&str] = &[
-                    "conflict list is not yet implemented; use `notez sync` commands",
-                    "space doctor is not yet implemented",
-                    "job manager is not yet implemented; jobs are tracked via `notez task`",
-                    "artifact freshness check is not yet implemented",
-                    "relay sync is not yet implemented; sync via folder transport",
-                ];
-                let capability = KNOWN
-                    .iter()
-                    .find(|k| **k == capability)
-                    .copied()
-                    .ok_or_else(|| {
-                        D::Error::custom("ApplicationError: unknown unsupported capability string")
-                    })?;
+                let capability = value.get("capability").and_then(|v| v.as_str()).ok_or_else(|| D::Error::custom("ApplicationError: missing `capability`"))?;
+                const KNOWN: &[&str] = &["conflict list is not yet implemented; use `notez sync` commands", "space doctor is not yet implemented", "job manager is not yet implemented; jobs are tracked via `notez task`", "artifact freshness check is not yet implemented", "relay sync is not yet implemented; sync via folder transport", "execute_janet"];
+                let capability = KNOWN.iter().find(|k| **k == capability).copied().ok_or_else(|| D::Error::custom("ApplicationError: unknown unsupported capability string"))?;
                 Ok(ApplicationError::UnsupportedCapability { capability })
             }
             "revision_conflict" => {
-                let expected = value
-                    .get("expected")
-                    .ok_or_else(|| D::Error::custom("ApplicationError: missing `expected`"))?;
-                let actual = value
-                    .get("actual")
-                    .ok_or_else(|| D::Error::custom("ApplicationError: missing `actual`"))?;
-                Ok(ApplicationError::RevisionConflict {
-                    expected: serde_json::from_value(expected.clone()).map_err(D::Error::custom)?,
-                    actual: serde_json::from_value(actual.clone()).map_err(D::Error::custom)?,
-                })
+                let expected = value.get("expected").ok_or_else(|| D::Error::custom("ApplicationError: missing `expected`"))?;
+                let actual = value.get("actual").ok_or_else(|| D::Error::custom("ApplicationError: missing `actual`"))?;
+                Ok(ApplicationError::RevisionConflict { expected: serde_json::from_value(expected.clone()).map_err(D::Error::custom)?, actual: serde_json::from_value(actual.clone()).map_err(D::Error::custom)? })
             }
             "read_only_source" => {
                 let source_id = value
@@ -367,16 +343,49 @@ pub struct ScanReport {
     pub scanned_relations: usize,
 }
 
+/// Result of a successful engine-level document update.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct DocumentUpdateReport {
+    /// Ref of the updated document row.
+    pub r_ref: String,
+    /// Source-relative locator of the written file.
+    pub locator: String,
+    /// Revision of the freshly rescanned row (content hash).
+    pub revision: String,
+}
+
 pub struct ApplicationFacade<S: ProjectionStore> {
     pub(crate) store: S,
     pub(crate) rule_engine: crate::domain::RuleEngine,
     pub(crate) format_parsers: Vec<Box<dyn crate::source::FormatParser>>,
     pub(crate) source: Option<SourceContext>,
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) janet_executor: Option<Box<dyn JanetExecutor>>,
     pub(crate) capability_catalog: crate::capability::CapabilityCatalog,
     pub(crate) source_registry: crate::source::SourceRegistry,
     pub(crate) journal: Box<dyn crate::domain::journal::EventJournal>,
     pub(crate) audit: Box<dyn crate::domain::audit::AuditLog>,
     pub(crate) clock: Box<dyn crate::application::ports::Clock>,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Debug, Clone, Default)]
+pub struct JanetQuerySnapshot {
+    pub sources: serde_json::Value,
+    pub search: serde_json::Value,
+    pub objects: serde_json::Value,
+    pub relations: serde_json::Value,
+    pub reads: std::collections::BTreeMap<String, serde_json::Value>,
+    pub render_list: serde_json::Value,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub trait JanetExecutor: Send {
+    fn execute(
+        &mut self,
+        request: &notez_protocol::request::ExecuteJanetRequest,
+        snapshot: &JanetQuerySnapshot,
+    ) -> Result<serde_json::Value, (String, String)>;
 }
 
 /// Backwards-compatible alias for [`ApplicationFacade`]. New code should
@@ -390,15 +399,15 @@ where
     S: ProjectionReader<Error = crate::storage::StorageError>
         + ProjectionWrite<Error = crate::storage::StorageError>,
 {
-    /// Build a facade with the default in-memory state: built-in rule
-    /// engine, built-in source factory registry, null journal/audit
-    /// adapters (writes pass through unchecked), and the system clock.
+    /// Build a facade with the default in-memory state.
     pub fn new(store: S) -> Self {
         Self {
             store,
             rule_engine: crate::domain::RuleEngine::default_rules(),
             format_parsers: Vec::new(),
             source: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            janet_executor: None,
             capability_catalog: crate::capability::CapabilityCatalog::with_builtins(),
             source_registry: crate::source::SourceRegistry::with_builtins(),
             journal: Box::new(crate::domain::journal::NullJournal::default()),
@@ -406,23 +415,25 @@ where
             clock: Box::new(crate::application::ports::SystemClock),
         }
     }
-    /// Construct an `ApplicationFacade` bound to an explicit
-    /// [`SourceContext`]. The space is the single source of truth for the
-    /// service's filesystem root and resolved configuration; the service
-    /// will refuse mutation paths that depend on the process working
-    /// directory.
+    /// Construct an `ApplicationFacade` bound to an explicit `SourceContext`.
     pub fn with_source(store: S, source: SourceContext) -> Self {
         Self {
             store,
             rule_engine: crate::domain::RuleEngine::default_rules(),
             format_parsers: Vec::new(),
             source: Some(source),
+            #[cfg(not(target_arch = "wasm32"))]
+            janet_executor: None,
             capability_catalog: crate::capability::CapabilityCatalog::with_builtins(),
             source_registry: crate::source::SourceRegistry::with_builtins(),
             journal: Box::new(crate::domain::journal::NullJournal::default()),
             audit: Box::new(crate::domain::audit::NullAuditLog::default()),
             clock: Box::new(crate::application::ports::SystemClock),
         }
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn attach_janet_executor(&mut self, executor: impl JanetExecutor + 'static) {
+        self.janet_executor = Some(Box::new(executor));
     }
     /// Construct an `ApplicationFacade` with a caller-supplied source
     /// factory registry. The default constructors register the six
@@ -435,6 +446,8 @@ where
             rule_engine: crate::domain::RuleEngine::default_rules(),
             format_parsers: Vec::new(),
             source: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            janet_executor: None,
             capability_catalog: crate::capability::CapabilityCatalog::with_builtins(),
             source_registry: registry,
             journal: Box::new(crate::domain::journal::NullJournal::default()),
@@ -861,6 +874,116 @@ where
             committed: commit_res.committed,
         })
     }
+
+    /// Unified write pipe for whole-document content updates.
+    ///
+    /// Resolves the target row by `source_id` + `locator` (document
+    /// kind only), enforces the expected-revision guard (content hash
+    /// of the raw bytes, empty/None = no precondition), journals a
+    /// [`ChangeOp::Writeback`](crate::domain::change::ChangeOp) Change,
+    /// performs an atomic tmp+rename filesystem write, and refreshes
+    /// the projection with a full native rescan (which journals its
+    /// own Scan Changes).
+    pub fn update_document(
+        &mut self,
+        source_id: &str,
+        locator: &str,
+        content: &str,
+        expected_revision: Option<&str>,
+    ) -> Result<DocumentUpdateReport, ApplicationError> {
+        use crate::application::use_cases::{ResourceUseCase, ScanUseCase};
+
+        let space_root = self.require_space_root()?;
+        let page = <Self as ResourceUseCase>::query(
+            self,
+            &Selector::new().with_source(source_id),
+        )?;
+        let full = space_root.join(locator);
+        let res = page
+            .items
+            .into_iter()
+            .find(|r| r.kind == ResourceKind::Document && r.locator == locator)
+            .ok_or_else(|| ApplicationError::Io {
+                path: Some(full.clone()),
+                source: std::io::ErrorKind::NotFound,
+            })?;
+        let canonical_space =
+            std::fs::canonicalize(&space_root).unwrap_or_else(|_| space_root.clone());
+        let canonical_file = std::fs::canonicalize(&full).unwrap_or_else(|_| full.clone());
+        if !canonical_file.starts_with(&canonical_space) || !full.is_file() {
+            return Err(ApplicationError::Io {
+                path: Some(full.clone()),
+                source: std::io::ErrorKind::NotFound,
+            });
+        }
+
+        // Revision guard against the current on-disk bytes.
+        let current_bytes = std::fs::read(&full).map_err(|e| ApplicationError::Io {
+            path: Some(full.clone()),
+            source: e.kind(),
+        })?;
+        let current_revision = sha256_hex(&current_bytes);
+        if let Some(expected) = expected_revision.filter(|e| !e.is_empty())
+            && expected != current_revision
+        {
+            return Err(ApplicationError::RevisionConflict {
+                expected: expected.to_string(),
+                actual: current_revision,
+            });
+        }
+
+        let journaling = crate::application::projector::Journaling::from_parts(
+            self.journal.as_ref(),
+            self.audit.as_ref(),
+            self.actor_principal(),
+            self.now_unix_millis(),
+        );
+        journaling
+            .record_writeback(
+                source_id,
+                res.r#ref,
+                expected_revision.map(str::to_string),
+                serde_json::json!({
+                    "locator": locator,
+                    "new_content_bytes": content.len(),
+                }),
+            )
+            .map_err(|e| ApplicationError::Storage {
+                kind: StorageErrorKind::Sqlite,
+                message: e.to_string(),
+            })?;
+
+        // Atomic write: same-directory temp file + rename. Keeps the old
+        // content intact if the write fails midway.
+        let new_bytes = content.as_bytes();
+        let tmp = full.with_extension("notez-tmp");
+        std::fs::write(&tmp, new_bytes).map_err(|e| ApplicationError::Io {
+            path: Some(tmp.clone()),
+            source: e.kind(),
+        })?;
+        std::fs::rename(&tmp, &full).map_err(|e| {
+            let _ = std::fs::remove_file(&tmp);
+            ApplicationError::Io {
+                path: Some(full.clone()),
+                source: e.kind(),
+            }
+        })?;
+
+        // Refresh the projection from the new content (journals Scan).
+        <Self as ScanUseCase>::scan_native(self)?;
+
+        // Re-read the updated row for its fresh revision.
+        let updated = <Self as ResourceUseCase>::read(self, &res.r#ref)?
+            .ok_or_else(|| ApplicationError::NotFound {
+                kind: res.kind,
+                r_ref: res.r#ref,
+            })?;
+        Ok(DocumentUpdateReport {
+            r_ref: updated.r#ref.to_string(),
+            locator: updated.locator.clone(),
+            revision: updated.revision.clone(),
+        })
+    }
     pub fn relay_sync(
         &self,
     ) -> Result<crate::application::writeback::RelaySyncReport, ApplicationError> {
@@ -908,5 +1031,14 @@ where
         })?;
         self.scan_native()
     }
+}
+
+/// SHA-256 hex digest of raw bytes — the revision scheme for raw
+/// document content, matching the web `update_document` contract.
+fn sha256_hex(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    let mut h = Sha256::new();
+    h.update(bytes);
+    format!("{:x}", h.finalize())
 }
 

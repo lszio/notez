@@ -428,6 +428,10 @@ impl ProjectionReader for SqliteProjection {
         // user-facing listings like "Recent activity".
         sql.push_str(" ORDER BY ref ASC");
 
+        if let Some(limit) = selector.limit {
+            sql.push_str(" LIMIT ?");
+            query_params.push(Box::new(limit as i64));
+        }
         let mut stmt = self.conn.prepare(&sql)?;
         let param_refs: Vec<&dyn rusqlite::ToSql> =
             query_params.iter().map(|p| p.as_ref()).collect();
@@ -1104,6 +1108,17 @@ impl ProjectionWrite for SqliteProjection {
         Ok(())
     }
 
+    fn remove_conflicts(&mut self, logical_paths: &[String]) -> Result<(), StorageError> {
+        let tx = self.conn.transaction()?;
+        {
+            let mut stmt = tx.prepare("DELETE FROM conflicts WHERE logical_path = ?1")?;
+            for path in logical_paths {
+                stmt.execute(params![path])?;
+            }
+        }
+        tx.commit()?;
+        Ok(())
+    }
 }
 
 // Reads + writes: the full store contract.

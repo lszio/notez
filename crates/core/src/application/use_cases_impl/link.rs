@@ -69,11 +69,36 @@ where
             .map(|_| "native")
             .unwrap_or("native")
             .to_string();
-        let _ = crate::application::link_resolution::LinkResolver::resolve_all(
-            &mut self.store,
-            &source_id,
-            occs,
-        )?;
+
+        // Compute first (pure), then persist both artifacts through the
+        // Projector so each write lands in the event journal.
+        let (relations, diagnostics) =
+            crate::application::link_resolution::LinkResolver::compute(
+                &self.store,
+                &source_id,
+                &occs,
+            )?;
+        let journaling = crate::application::projector::Journaling::from_parts(
+            self.journal.as_ref(),
+            self.audit.as_ref(),
+            self.actor_principal(),
+            self.now_unix_millis(),
+        );
+        let mut projector =
+            crate::application::projector::Projector::new(&mut self.store, &journaling);
+        projector
+            .replace_resolved_relations(&source_id, relations)
+            .map_err(|e| ApplicationError::Storage {
+                kind: StorageErrorKind::Sqlite,
+                message: e.to_string(),
+            })?;
+        projector
+            .write_link_diagnostics(&source_id, &diagnostics)
+            .map_err(|e| ApplicationError::Storage {
+                kind: StorageErrorKind::Sqlite,
+                message: e.to_string(),
+            })?;
+
         self.store
             .query_resolved_relations(source_ref)
             .map_err(|e| ApplicationError::Storage {

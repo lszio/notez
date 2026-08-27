@@ -29,6 +29,7 @@ pub fn run_source(json: bool, service: &mut Service, sub: SourceSubcommand) {
                 id,
                 kind: kind.into(),
                 path,
+                url: None,
                 read_only,
                 include_paths: include,
                 exclude_paths: exclude,
@@ -97,6 +98,7 @@ pub fn run_source(json: bool, service: &mut Service, sub: SourceSubcommand) {
                 source_id: id,
                 r_ref,
                 payload,
+                expected_revision: None,
             })) {
                 Ok(Response::Writeback(report)) => {
                     if json {

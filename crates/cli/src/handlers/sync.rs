@@ -119,30 +119,9 @@ pub fn run_sync(json: bool, service: &mut Service, sub: SyncSubcommand) {
             }
         }
         SyncCommands::Resolve { .. } => unreachable!("handled before dispatcher"),
-        SyncCommands::Relay { id: _ } => {
-            match dispatcher.dispatch(Request::RelaySync(RelaySyncRequest {})) {
-                Ok(Response::Relay(report)) => {
-                    if json {
-                        println!(
-                            "{}",
-                            json!({
-                                "source_id": report.source_id,
-                                "synced_via_relay": report.synced_via_relay
-                            })
-                        );
-                    } else {
-                        println!(
-                            "Relay sync complete for {} (synced: {})",
-                            report.source_id, report.synced_via_relay
-                        );
-                    }
-                }
-                Err(e) => {
-                    eprintln!("Sync relay error: {e}");
-                    exit(exit_code_for(&e));
-                }
-                other => unreachable!("unexpected dispatcher response: {other:?}"),
-            }
+        SyncCommands::Relay { id } => {
+            eprintln!("Sync relay error: unsupported capability for source id '{id}'");
+            exit(6);
         }
     }
 }

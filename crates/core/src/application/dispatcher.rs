@@ -6,53 +6,22 @@
 //!
 //! * parses stringly identifiers into domain types,
 //! * rejects malformed input with `ApplicationError::InvalidRequest`,
-//! * funnels writes through one choke point (M3 adds journal + audit),
-//! * maps use-case results onto the [`Response`] vocabulary.
+//! * enforces the expected-revision guard on every mutation arm,
+//! * funnels writes through one choke point (journal + audit via the
+//!   Projector at the use-case layer),
+//! * maps use-case results onto the protocol [`Response`] vocabulary.
 
 use std::path::PathBuf;
-use crate::domain::{QueryPage, ResolutionStatus, Resource, ResourceKind, Selector, TextSpan};
-use crate::domain::{Community, ResolutionStatus as _, ResourceRef};
-use crate::application::service::{ApplicationError, StorageErrorKind};
-use crate::domain::query::{ProjectionReader, ProjectionStore, ProjectionWrite};
-use crate::application::ApplicationFacade;
+use crate::domain::{ProjectionStore, QueryPage, Resource, ResourceKind, Selector};
+use crate::domain::{Community, ResourceRef};
+use crate::application::service::ApplicationError;
+use crate::application::{wire, ApplicationFacade};
 use crate::application::use_cases::{
     ArtifactUseCase, AttachmentUseCase, CommunityUseCase, InspectUseCase, LinkUseCase,
     ResourceUseCase, ScanUseCase, SyncUseCase, TaskUseCase,
 };
 use notez_protocol::request::Request;
-use crate::storage::SqliteProjection;
-#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
-#[serde(tag = "result_of", rename_all = "snake_case")]
-pub enum Response {
-    Scan(crate::application::ScanReport),
-    ResourcePage(crate::domain::QueryPage),
-    /// `read`: present-or-absent single resource.
-    Resource(Option<Resource>),
-    Resources(Vec<Resource>),
-    Resolve(crate::application::ResolveResult),
-    Occurrences(Vec<crate::domain::LinkOccurrence>),
-    Relations(Vec<crate::domain::ResolvedRelation>),
-    Diagnostics(Vec<crate::domain::LinkDiagnostic>),
-    Reindex(crate::application::LinkReindexReport),
-    Agenda(crate::application::task_para::AgendaView),
-    Para(crate::application::task_para::ParaOverview),
-    Transition(crate::document::StateTransition),
-    AttachmentRef(ResourceRef),
-    Segments(Vec<crate::domain::SegmentRecord>),
-    Communities(Vec<Community>),
-    Derived(crate::artifact::DerivedArtifact),
-    Skill(crate::artifact::SkillPackage),
-    InspectRules(Option<crate::domain::InspectResult>),
-    Doctor(crate::application::DoctorReport),
-    Jobs(Vec<crate::application::JobRecord>),
-    Freshness(crate::application::ArtifactStaleReport),
-    Pushed(crate::sync::PushReport),
-    Pulled(crate::sync::PullReport),
-    Relay(crate::application::RelaySyncReport),
-    Conflicts(Vec<crate::sync::ConflictRecord>),
-    Writeback(crate::application::WritebackReport),
-    Done,
-}
+pub use notez_protocol::response::Response;
 
 fn invalid(msg: impl Into<String>) -> ApplicationError {
     ApplicationError::InvalidRequest { message: msg.into() }
@@ -72,6 +41,19 @@ fn parse_kind(s: &str) -> Result<ResourceKind, ApplicationError> {
             "unknown resource kind `{other}` (expected document|heading|block|attachment)"
         ))),
     }
+}
+
+/// Effective revision precondition for a request carrying both the
+/// uniform guard and an operation-specific alias (`base_revision`).
+/// The uniform field wins; the alias is a fallback for web parity.
+fn effective_expected<'a>(
+    expected: &'a Option<String>,
+    base: &'a Option<String>,
+) -> Option<&'a str> {
+    expected
+        .as_deref()
+        .filter(|s| !s.is_empty())
+        .or_else(|| base.as_deref().filter(|s| !s.is_empty()))
 }
 
 /// Org-format timestamp for "now", e.g. `2026-08-25 Mon 14:30`.
@@ -110,8 +92,8 @@ pub struct ApplicationDispatcher<'a, S: ProjectionStore> {
 }
 impl<'a, S> ApplicationDispatcher<'a, S>
 where
-    S: ProjectionReader<Error = crate::storage::StorageError>
-        + ProjectionWrite<Error = crate::storage::StorageError>
+    S: crate::domain::ProjectionReader<Error = crate::storage::StorageError>
+        + crate::domain::ProjectionWrite<Error = crate::storage::StorageError>
         + ProjectionStore,
 {
     pub fn new(facade: &'a mut ApplicationFacade<S>) -> Self {
@@ -120,14 +102,15 @@ where
 
     /// Evaluate one protocol request against the bound facade.
     pub fn dispatch(&mut self, req: Request) -> Result<Response, ApplicationError> {
+        use crate::application::write_check;
         let f = &mut *self.facade;
         match req {
-            Request::ScanNative(_) => Ok(Response::Scan(
-                <ApplicationFacade<S> as ScanUseCase>::scan_native(f)?,
-            )),
-            Request::ScanFederation(_) => Ok(Response::Scan(
-                <ApplicationFacade<S> as ScanUseCase>::scan_federation(f)?,
-            )),
+            Request::ScanNative(_) => Ok(Response::Scan(wire::scan_report(
+                &<ApplicationFacade<S> as ScanUseCase>::scan_native(f)?,
+            ))),
+            Request::ScanFederation(_) => Ok(Response::Scan(wire::scan_report(
+                &<ApplicationFacade<S> as ScanUseCase>::scan_federation(f)?,
+            ))),
             Request::QueryResources(r) => {
                 let mut selector = Selector::new();
                 if let Some(kind) = &r.kind {
@@ -142,38 +125,48 @@ where
                 if let Some(src) = &r.source_id {
                     selector = selector.with_source(src.clone());
                 }
-                let _page_limit = r.limit.unwrap_or(100);
-                Ok(Response::ResourcePage(
-                    <ApplicationFacade<S> as ResourceUseCase>::query(f, &selector)?,
-                ))
+                // Push the page limit all the way into the store query.
+                selector.limit = r.limit.map(|l| l as usize).or(selector.limit);
+                let page: QueryPage =
+                    <ApplicationFacade<S> as ResourceUseCase>::query(f, &selector)?;
+                Ok(Response::ResourcePage(wire::page(&page)))
             }
             Request::ReadResource(r) => {
                 let rf = parse_ref(&r.r_ref)?;
                 Ok(Response::Resource(
-                    <ApplicationFacade<S> as ResourceUseCase>::read(f, &rf)?,
+                    <ApplicationFacade<S> as ResourceUseCase>::read(f, &rf)?
+                        .as_ref()
+                        .map(wire::resource),
                 ))
             }
             Request::DeleteResource(r) => {
                 let rf = parse_ref(&r.r_ref)?;
+                if let Some(expected) = effective_expected(&r.expected_revision, &None) {
+                    write_check::check_revision(f, &rf, expected)?;
+                }
                 <ApplicationFacade<S> as ResourceUseCase>::delete_resource(f, &rf)?;
                 Ok(Response::Done)
             }
             Request::ListRecent(r) => Ok(Response::Resources(
-                <ApplicationFacade<S> as ResourceUseCase>::list_recent(
-                    f,
-                    r.limit.unwrap_or(20) as usize,
-                )?,
+                wire::resources(
+                    &<ApplicationFacade<S> as ResourceUseCase>::list_recent(
+                        f,
+                        r.limit.unwrap_or(20) as usize,
+                    )?,
+                ),
             )),
             Request::ListBySource(r) => Ok(Response::Resources(
-                <ApplicationFacade<S> as ResourceUseCase>::list_by_source(
-                    f,
-                    &r.source_id,
-                    r.limit.unwrap_or(100) as usize,
-                )?,
+                wire::resources(
+                    &<ApplicationFacade<S> as ResourceUseCase>::list_by_source(
+                        f,
+                        &r.source_id,
+                        r.limit.unwrap_or(100) as usize,
+                    )?,
+                ),
             )),
-            Request::Resolve(r) => Ok(Response::Resolve(
-                <ApplicationFacade<S> as ResourceUseCase>::resolve(f, &r.query)?,
-            )),
+            Request::Resolve(r) => Ok(Response::Resolve(wire::resolve_result(
+                &<ApplicationFacade<S> as ResourceUseCase>::resolve(f, &r.query)?,
+            ))),
             Request::UpsertResource(r) => {
                 let p = r.resource;
                 let kind = parse_kind(&p.kind)?;
@@ -196,81 +189,88 @@ where
                     object_id,
                     primary_source_id: p.primary_source_id,
                 };
+                if let Some(expected) = effective_expected(&r.expected_revision, &None) {
+                    write_check::check_revision(f, &resource.r#ref, expected)?;
+                }
                 <ApplicationFacade<S> as ResourceUseCase>::upsert_resource(f, resource)?;
                 Ok(Response::Done)
             }
             Request::LinkOccurrences(r) => {
                 let rf = parse_ref(&r.source_ref)?;
-                Ok(Response::Occurrences(
-                    <ApplicationFacade<S> as LinkUseCase>::query_link_occurrences(f, &rf)?,
-                ))
+                Ok(Response::Occurrences(wire::occurrences(
+                    &<ApplicationFacade<S> as LinkUseCase>::query_link_occurrences(f, &rf)?,
+                )))
             }
             Request::ResolvedRelations(r) => {
                 let rf = parse_ref(&r.source_ref)?;
-                Ok(Response::Relations(
-                    <ApplicationFacade<S> as LinkUseCase>::query_resolved_relations(f, &rf)?,
-                ))
+                Ok(Response::Relations(wire::relations(
+                    &<ApplicationFacade<S> as LinkUseCase>::query_resolved_relations(f, &rf)?,
+                )))
             }
             Request::ListLinks(r) => {
                 let rf = parse_ref(&r.source_ref)?;
-                Ok(Response::Occurrences(
-                    <ApplicationFacade<S> as LinkUseCase>::list_links(f, &rf)?,
-                ))
+                Ok(Response::Occurrences(wire::occurrences(
+                    &<ApplicationFacade<S> as LinkUseCase>::list_links(f, &rf)?,
+                )))
             }
             Request::ResolveLinks(r) => {
                 let rf = parse_ref(&r.source_ref)?;
-                Ok(Response::Relations(
-                    <ApplicationFacade<S> as LinkUseCase>::resolve_links(f, &rf)?,
-                ))
+                Ok(Response::Relations(wire::relations(
+                    &<ApplicationFacade<S> as LinkUseCase>::resolve_links(f, &rf)?,
+                )))
             }
             Request::DiagnoseLink(r) => {
                 let rf = parse_ref(&r.source_ref)?;
-                Ok(Response::Diagnostics(
-                    <ApplicationFacade<S> as LinkUseCase>::diagnose_link(f, &rf)?,
-                ))
+                Ok(Response::Diagnostics(wire::diagnostics(
+                    &<ApplicationFacade<S> as LinkUseCase>::diagnose_link(f, &rf)?,
+                )))
             }
-            Request::ReindexLinks(_) => Ok(Response::Reindex(
-                <ApplicationFacade<S> as LinkUseCase>::reindex_links(f)?,
-            )),
-            Request::Agenda(_) => Ok(Response::Agenda(
-                <ApplicationFacade<S> as TaskUseCase>::agenda(f)?,
-            )),
-            Request::ParaOverview(_) => Ok(Response::Para(
-                <ApplicationFacade<S> as TaskUseCase>::para_overview(f)?,
-            )),
+            Request::ReindexLinks(_) => Ok(Response::Reindex(wire::reindex_report(
+                &<ApplicationFacade<S> as LinkUseCase>::reindex_links(f)?,
+            ))),
+            Request::Agenda(_) => Ok(Response::Agenda(wire::agenda(
+                &<ApplicationFacade<S> as TaskUseCase>::agenda(f)?,
+            ))),
+            Request::ParaOverview(_) => Ok(Response::Para(wire::para_overview(
+                &<ApplicationFacade<S> as TaskUseCase>::para_overview(f)?,
+            ))),
             Request::TransitionTask(r) => {
                 let rf = parse_ref(&r.r_ref)?;
+                if let Some(expected) = effective_expected(&r.expected_revision, &None) {
+                    write_check::check_revision(f, &rf, expected)?;
+                }
                 let timestamp = match r.timestamp.as_deref() {
                     Some(ts) => ts.to_owned(),
                     None => org_now(),
                 };
-                Ok(Response::Transition(
-                    <ApplicationFacade<S> as TaskUseCase>::transition_task(
+                Ok(Response::Transition(wire::state_transition(
+                    &<ApplicationFacade<S> as TaskUseCase>::transition_task(
                         f,
                         &rf,
                         &r.to_state,
                         &timestamp,
                     )?,
-                ))
+                )))
             }
             Request::AddAttachment(r) => {
                 let path = PathBuf::from(&r.file_path);
                 let mime = r.mime.as_deref().unwrap_or("application/octet-stream");
                 Ok(Response::AttachmentRef(
-                    <ApplicationFacade<S> as AttachmentUseCase>::add_attachment(f, &path, mime)?,
+                    <ApplicationFacade<S> as AttachmentUseCase>::add_attachment(f, &path, mime)?
+                        .to_string(),
                 ))
             }
             Request::ExtractAttachment(r) => {
                 let rf = parse_ref(&r.source_ref)?;
-                Ok(Response::Segments(
-                    <ApplicationFacade<S> as AttachmentUseCase>::run_extraction(f, &rf)?,
-                ))
+                Ok(Response::Segments(wire::segments(
+                    &<ApplicationFacade<S> as AttachmentUseCase>::run_extraction(f, &rf)?,
+                )))
             }
             Request::QuerySegments(r) => {
                 let rf = parse_ref(&r.source_ref)?;
-                Ok(Response::Segments(
-                    <ApplicationFacade<S> as AttachmentUseCase>::query_segments(f, &rf)?,
-                ))
+                Ok(Response::Segments(wire::segments(
+                    &<ApplicationFacade<S> as AttachmentUseCase>::query_segments(f, &rf)?,
+                )))
             }
             Request::CreateCommunity(r) => {
                 let mut selector = Selector::new();
@@ -290,66 +290,108 @@ where
                 <ApplicationFacade<S> as CommunityUseCase>::create_community(f, community)?;
                 Ok(Response::Done)
             }
-            Request::ListCommunities(_) => Ok(Response::Communities(
-                <ApplicationFacade<S> as CommunityUseCase>::list_communities(f)?,
-            )),
-            Request::DeriveArtifact(r) => Ok(Response::Derived(
-                <ApplicationFacade<S> as ArtifactUseCase>::derive_artifact(
+            Request::ListCommunities(_) => Ok(Response::Communities(wire::communities(
+                &<ApplicationFacade<S> as CommunityUseCase>::list_communities(f)?,
+            ))),
+            Request::DeriveArtifact(r) => Ok(Response::Derived(wire::derived_artifact(
+                &<ApplicationFacade<S> as ArtifactUseCase>::derive_artifact(
                     f,
                     &r.community_id,
                     &r.recipe_name,
                 )?,
-            )),
+            ))),
             Request::ExportSkill(r) => {
                 let out = PathBuf::from(&r.out_path);
-                Ok(Response::Skill(<ApplicationFacade<S> as ArtifactUseCase>::export_skill(
-                    f,
-                    &r.community_id,
-                    r.description.as_deref().unwrap_or("Notez exported skill"),
-                    &out,
-                )?))
+                Ok(Response::Skill(wire::skill_package(
+                    &<ApplicationFacade<S> as ArtifactUseCase>::export_skill(
+                        f,
+                        &r.community_id,
+                        r.description.as_deref().unwrap_or("Notez exported skill"),
+                        &out,
+                    )?,
+                )))
             }
             Request::InspectRules(r) => {
                 let rf = parse_ref(&r.source_ref)?;
                 Ok(Response::InspectRules(
-                    <ApplicationFacade<S> as InspectUseCase>::inspect_rules(f, &rf)?,
+                    <ApplicationFacade<S> as InspectUseCase>::inspect_rules(f, &rf)?
+                        .as_ref()
+                        .map(wire::inspect_result),
                 ))
             }
-            Request::SourceDoctor(_) => Ok(Response::Doctor(
-                <ApplicationFacade<S> as InspectUseCase>::source_doctor(f)?,
-            )),
-            Request::ListJobs(_) => Ok(Response::Jobs(
-                <ApplicationFacade<S> as InspectUseCase>::list_jobs(f)?,
-            )),
-            Request::ArtifactFreshness(_) => Ok(Response::Freshness(
-                <ApplicationFacade<S> as InspectUseCase>::check_artifact_freshness(f)?,
-            )),
-            Request::SyncPush(r) => Ok(Response::Pushed(
-                <ApplicationFacade<S> as SyncUseCase>::sync_push(
+            Request::SourceDoctor(_) => Ok(Response::Doctor(wire::doctor_report(
+                &<ApplicationFacade<S> as InspectUseCase>::source_doctor(f)?,
+            ))),
+            Request::ListJobs(_) => Ok(Response::Jobs(wire::job_records(
+                &<ApplicationFacade<S> as InspectUseCase>::list_jobs(f)?,
+            ))),
+            Request::ArtifactFreshness(_) => Ok(Response::Freshness(wire::stale_report(
+                &<ApplicationFacade<S> as InspectUseCase>::check_artifact_freshness(f)?,
+            ))),
+            Request::SyncPush(r) => Ok(Response::Pushed(wire::push_report(
+                &<ApplicationFacade<S> as SyncUseCase>::sync_push(
                     f,
                     &r.actor_id,
                     &PathBuf::from(&r.folder),
                 )?,
-            )),
-            Request::SyncPull(r) => Ok(Response::Pulled(
-                <ApplicationFacade<S> as SyncUseCase>::sync_pull(
+            ))),
+            Request::SyncPull(r) => Ok(Response::Pulled(wire::pull_report(
+                &<ApplicationFacade<S> as SyncUseCase>::sync_pull(
                     f,
                     &r.actor_id,
                     &PathBuf::from(&r.folder),
                 )?,
-            )),
-            Request::RelaySync(_) => Ok(Response::Relay(
-                <ApplicationFacade<S> as SyncUseCase>::relay_sync(f)?,
-            )),
-            Request::ListConflicts(_) => Ok(Response::Conflicts(
-                <ApplicationFacade<S> as SyncUseCase>::list_conflicts(f)?,
-            )),
+            ))),
+            Request::RelaySync(_) => Ok(Response::Relay(wire::relay_sync_report(
+                &<ApplicationFacade<S> as SyncUseCase>::relay_sync(f)?,
+            ))),
+            Request::ListConflicts(_) => Ok(Response::Conflicts(wire::conflicts(
+                &<ApplicationFacade<S> as SyncUseCase>::list_conflicts(f)?,
+            ))),
             Request::WritebackResource(r) => {
+                let rf = parse_ref(&r.r_ref)?;
+                if let Some(expected) = effective_expected(&r.expected_revision, &None) {
+                    write_check::check_revision(f, &rf, expected)?;
+                }
                 // Inherent writeback (source-aware); not part of the
                 // nine traits because it needs the bound SourceContext.
-                Ok(Response::Writeback(
-                    f.writeback_resource(&r.source_id, &r.r_ref, &r.payload)?,
-                ))
+                Ok(Response::Writeback(wire::writeback_report(
+                    &f.writeback_resource(&r.source_id, &r.r_ref, &r.payload)?,
+                )))
+            }
+            Request::UpdateDocument(r) => {
+                let expected =
+                    effective_expected(&r.expected_revision, &r.base_revision).map(str::to_string);
+                let report = f.update_document(
+                    &r.source_id,
+                    &r.locator,
+                    &r.content,
+                    expected.as_deref(),
+                )?;
+                Ok(Response::DocumentUpdated(wire::document_update_report(&report)))
+            }
+            Request::ExecuteJanet(r) => {
+                #[cfg(not(target_arch = "wasm32"))]
+                {
+                    let source_scope = r.source_id.clone();
+                    let mut selector = Selector::new();
+                    selector.source_id = source_scope.clone();
+                    let resources = <ApplicationFacade<S> as ResourceUseCase>::query(f, &selector)?.items;
+                    if let Some(doc) = &r.document_ref {
+                        let target = parse_ref(doc)?;
+                        if !resources.iter().any(|x| x.r#ref == target) { return Err(invalid("document scope is outside source scope")); }
+                    }
+                    let mut relations = Vec::new();
+                    for resource in &resources { relations.extend(<ApplicationFacade<S> as LinkUseCase>::query_resolved_relations(f, &resource.r#ref)?); }
+                    let sources = serde_json::to_value(f.list_sources()?).unwrap_or_default();
+                    let reads = resources.iter().filter(|x| r.document_ref.as_ref().map_or(true, |d| d == &x.r#ref.to_string())).map(|x| (x.r#ref.to_string(), serde_json::to_value(x).unwrap_or_default())).collect();
+                    let snapshot = crate::application::service::JanetQuerySnapshot { sources, search: serde_json::to_value(&resources).unwrap_or_default(), objects: serde_json::to_value(&resources).unwrap_or_default(), relations: serde_json::to_value(&relations).unwrap_or_default(), reads, render_list: serde_json::to_value(&resources).unwrap_or_default() };
+                    let executor = f.janet_executor.as_mut().ok_or(ApplicationError::UnsupportedCapability { capability: "execute_janet" })?;
+                    let value = executor.execute(&r, &snapshot).map_err(|(kind, message)| ApplicationError::Janet { kind, message })?;
+                    return Ok(Response::Janet(notez_protocol::response::JanetResult { value }));
+                }
+                #[cfg(target_arch = "wasm32")]
+                { let _ = r; Err(ApplicationError::UnsupportedCapability { capability: "execute_janet" }) }
             }
         }
     }
@@ -403,5 +445,19 @@ mod tests {
             parse_ref("not-a-ref"),
             Err(ApplicationError::InvalidRequest { .. })
         ));
+    }
+
+    #[test]
+    fn effective_expected_prefers_uniform_field_and_skips_empty() {
+        let exp = Some("e1".to_string());
+        let base = Some("b1".to_string());
+        assert_eq!(effective_expected(&exp, &base), Some("e1"));
+        let none: Option<String> = None;
+        assert_eq!(effective_expected(&none, &base), Some("b1"));
+        assert_eq!(effective_expected(&exp, &none), Some("e1"));
+        assert_eq!(effective_expected(&none, &none), None);
+        let empty = Some(String::new());
+        assert_eq!(effective_expected(&empty, &base), Some("b1"));
+        assert_eq!(effective_expected(&empty, &none), None);
     }
 }

@@ -29,7 +29,7 @@ pub fn run_link(json: bool, service: &mut Service, sub: LinkSubcommand) {
                     } else {
                         for occ in occs {
                             println!(
-                                "{}:{}-{} -> {}",
+                                "{}:{}-{} -> {:?}",
                                 occ.span.line, occ.span.col_start, occ.span.col_end, occ.target
                             );
                         }
@@ -51,7 +51,7 @@ pub fn run_link(json: bool, service: &mut Service, sub: LinkSubcommand) {
                         println!("{}", json!(rels));
                     } else {
                         for rel in rels {
-                            println!("{} -> {} ({:?})", rel.target, rel.target_ref, rel.status);
+                            println!("{:?} -> {} ({:?})", rel.target, rel.target_ref, rel.status);
                         }
                     }
                 }
@@ -72,10 +72,9 @@ pub fn run_link(json: bool, service: &mut Service, sub: LinkSubcommand) {
                     } else {
                         for d in diags {
                             println!(
-                                "L{} {} -> {:?} (candidates={})",
+                                "L{} {:?} (candidates={})",
                                 d.occurrence.span.line,
                                 d.occurrence.target,
-                                d.status,
                                 d.candidates.len()
                             );
                         }

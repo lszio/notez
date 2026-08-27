@@ -12,7 +12,7 @@
 #[cfg(not(target_arch = "wasm32"))]
 pub mod native {
     use notez_core::application::federation::SourceInstancesCache;
-    use notez_core::application::{ApplicationFacade, SourceContext};
+    use notez_core::application::{ApplicationFacade, NativeJanetExecutor, SourceContext};
     use notez_core::config::{
         ConfigError, ConfigPaths, SelectedSource, SourceSelector, resolve_source_runtime, select_source,
     };
@@ -120,6 +120,7 @@ pub mod native {
         let mut facade = ApplicationFacade::with_source(store, space.clone());
         facade.attach_journal(journal);
         facade.attach_audit(audit);
+        facade.attach_janet_executor(NativeJanetExecutor);
         register_builtin_format_parsers(&mut facade);
         Ok(SpaceHandle {
             ctx: space,

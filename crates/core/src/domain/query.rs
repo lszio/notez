@@ -23,6 +23,10 @@ pub struct Selector {
     /// `apple_notes`). When `None`, every source is searched.
     #[serde(default)]
     pub source_id: Option<String>,
+    /// Row cap pushed down into the store query (`LIMIT` in SQL).
+    /// `None` means unbounded.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limit: Option<usize>,
 }
 
 impl Selector {
@@ -50,6 +54,12 @@ impl Selector {
     /// Restrict the selector to a single source adapter.
     pub fn with_source(mut self, source_id: impl Into<String>) -> Self {
         self.source_id = Some(source_id.into());
+        self
+    }
+
+    /// Cap the number of rows the store returns.
+    pub fn with_limit(mut self, limit: usize) -> Self {
+        self.limit = Some(limit);
         self
     }
 }
@@ -112,6 +122,10 @@ pub trait ProjectionWrite {
         relations: Vec<ResourceRelation>,
         link_occurrences: Vec<LinkOccurrence>,
     ) -> Result<(), Self::Error>;
+
+    /// Remove conflict records by logical path (adjudication). Paths
+    /// that are not present are ignored.
+    fn remove_conflicts(&mut self, logical_paths: &[String]) -> Result<(), Self::Error>;
 
     /// Insert or update a single resource keyed by its `ResourceRef`.
     fn upsert_resource(&mut self, resource: &Resource) -> Result<(), Self::Error>;

@@ -306,6 +306,113 @@ impl OrgScanner {
         })
     }
 }
+
+/// The small, deliberately conservative edit surface supported for Org files.
+/// `line` and columns are one-based; `col_end` is exclusive.  The fragment is
+/// part of the precondition, so a patch cannot silently target a moved field.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OrgTextEdit {
+    pub line: usize,
+    pub col_start: usize,
+    pub col_end: usize,
+    pub expected_fragment: String,
+    pub replacement: String,
+    pub field: OrgEditField,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum OrgEditField { HeadlineTitle, TodoKeyword, Priority, Property, PlanningDate }
+
+#[derive(Error, Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum OrgPatchError {
+    #[error("document revision mismatch: expected {expected}, actual {actual}")]
+    RevisionConflict { expected: String, actual: String },
+    #[error("invalid Org patch: {0}")]
+    InvalidPatch(String),
+    #[error("unsupported Org edit: {0}")]
+    Unsupported(String),
+}
+
+pub fn restricted_org_patches(
+    content: &str,
+    expected_revision: &str,
+    edits: &[OrgTextEdit],
+) -> Result<Vec<crate::source::writer::TextPatch>, OrgPatchError> {
+    let mut patches = Vec::with_capacity(edits.len());
+    for edit in edits {
+        let patch = restricted_org_patch(content, expected_revision, edit)?;
+        if patches.iter().any(|p: &crate::source::writer::TextPatch| {
+            p.line_no == patch.line_no && p.line_no_end == patch.line_no_end
+        }) {
+            return Err(OrgPatchError::InvalidPatch("multiple edits target the same span".into()));
+        }
+        patches.push(patch);
+    }
+    Ok(patches)
+}
+
+pub fn restricted_org_patch(
+    content: &str,
+    expected_revision: &str,
+    edit: &OrgTextEdit,
+) -> Result<crate::source::writer::TextPatch, OrgPatchError> {
+    let actual = format!("{:x}", Sha256::digest(content.as_bytes()));
+    if actual != expected_revision {
+        return Err(OrgPatchError::RevisionConflict { expected: expected_revision.to_string(), actual });
+    }
+    if edit.line == 0 || edit.col_start == 0 || edit.col_end < edit.col_start {
+        return Err(OrgPatchError::InvalidPatch("invalid line or span".into()));
+    }
+    let lines: Vec<&str> = content.lines().collect();
+    let line = lines.get(edit.line - 1).ok_or_else(|| OrgPatchError::InvalidPatch(format!("line {} is out of range", edit.line)))?;
+    let start = edit.col_start - 1;
+    let end = edit.col_end - 1;
+    let fragment = line.get(start..end).ok_or_else(|| OrgPatchError::InvalidPatch("span is not a valid UTF-8 span".into()))?;
+    if fragment != edit.expected_fragment { return Err(OrgPatchError::InvalidPatch("expected fragment does not match document".into())); }
+    let trimmed = line.trim_start();
+    let base = line.len() - trimmed.len();
+    let recognized = match edit.field {
+        OrgEditField::HeadlineTitle => is_org_heading(trimmed) && title_span(line, start, end),
+        OrgEditField::TodoKeyword => todo_span(line, start, end, fragment),
+        OrgEditField::Priority => priority_span(line, start, end, fragment),
+        OrgEditField::Property => property_span(line, start, end),
+        OrgEditField::PlanningDate => planning_span(line, start, end),
+    };
+    let _ = base;
+    if !recognized { return Err(OrgPatchError::Unsupported(format!("{:?} is not recognized at this span", edit.field))); }
+    if matches!(edit.field, OrgEditField::TodoKeyword) && !TODO_KEYWORDS.contains(&edit.replacement.as_str()) {
+        return Err(OrgPatchError::InvalidPatch("replacement is not a recognized TODO keyword".into()));
+    }
+    if matches!(edit.field, OrgEditField::Priority) && !(edit.replacement.is_empty() || (edit.replacement.starts_with("[#") && edit.replacement.ends_with(']') && edit.replacement.len() == 4)) {
+        return Err(OrgPatchError::InvalidPatch("replacement is not an Org priority".into()));
+    }
+    let mut replacement = String::with_capacity(line.len() - fragment.len() + edit.replacement.len());
+    replacement.push_str(&line[..start]); replacement.push_str(&edit.replacement); replacement.push_str(&line[end..]);
+    Ok(crate::source::writer::TextPatch::replace_line(edit.line, (*line).to_string(), replacement))
+}
+
+fn is_org_heading(line: &str) -> bool { let n = line.chars().take_while(|c| *c == '*').count(); n > 0 && line.as_bytes().get(n) == Some(&b' ') }
+fn title_span(line: &str, start: usize, end: usize) -> bool {
+    let t = line.trim_start(); let base = line.len() - t.len();
+    let stars = t.chars().take_while(|c| *c == '*').count(); let mut rest = &t[stars + 1..];
+    if let Some(k) = TODO_KEYWORDS.iter().find(|k| rest.starts_with(&format!("{k} "))) { rest = &rest[k.len() + 1..]; }
+    if rest.starts_with("[#") { if let Some(i) = rest.find(']') { rest = rest[i + 1..].trim_start(); } }
+    let title_start = base + line[base..].len() - rest.len(); start >= title_start && start < end
+}
+fn todo_span(line: &str, start: usize, end: usize, fragment: &str) -> bool { let n = line.chars().take_while(|c| *c == '*').count(); start == n + 1 && end == start + fragment.len() && TODO_KEYWORDS.contains(&fragment) }
+fn priority_span(line: &str, start: usize, end: usize, fragment: &str) -> bool { let Some(i) = line.find("[#") else { return false }; start == i && end == i + fragment.len() && fragment.len() == 4 && fragment.ends_with(']') }
+fn property_span(line: &str, start: usize, end: usize) -> bool {
+    let base = line.len() - line.trim_start().len();
+    let t = line.trim_start();
+    let Some(rest) = t.strip_prefix(':') else { return false };
+    let Some((key, _)) = rest.split_once(':') else { return false };
+    ["ID", "CUSTOM_ID", "CATEGORY", "DESCRIPTION", "CREATED", "EFFORT", "OWNER", "ROAM_REFS", "URL"].contains(&key.to_uppercase().as_str()) && start >= base && start < end
+}
+fn planning_span(line: &str, start: usize, end: usize) -> bool {
+    let base = line.len() - line.trim_start().len();
+    let t = line.trim_start();
+    ["SCHEDULED:", "DEADLINE:", "CLOSED:"].iter().any(|p| t.starts_with(p)) && start >= base + t.find(':').unwrap() + 1 && start < end
+}
 fn parse_keyword_line(line: &str) -> Option<(&str, &str)> {
     let s = line.strip_prefix("#+")?;
     let (key, val) = s.split_once(':')?;
@@ -528,5 +635,42 @@ mod tests {
         assert_eq!(occs[0].display_text.as_deref(), Some("target"));
         assert!(matches!(occs[1].target, LinkTarget::File { .. }));
         assert!(occs[1].display_text.is_none());
+    }
+}
+
+#[cfg(test)]
+mod patch_tests {
+    use super::*;
+    use crate::source::writer::FsSpanWriter;
+    use sha2::{Digest, Sha256};
+
+    fn revision(s: &str) -> String { format!("{:x}", Sha256::digest(s.as_bytes())) }
+    #[test]
+    fn title_patch_preserves_unknown_bytes() {
+        let text = "#+CUSTOM: untouched\n* TODO [#A] Old title\n:UNKNOWN: keep\n";
+        let edit = OrgTextEdit { line: 2, col_start: 13, col_end: 22, expected_fragment: "Old title".into(), replacement: "New title".into(), field: OrgEditField::HeadlineTitle };
+        let patch = restricted_org_patch(text, &revision(text), &edit).unwrap();
+        let out = crate::source::writer::apply_to_lines(text.lines().map(str::to_string).collect(), &[patch]).unwrap().join("\n") + "\n";
+        assert_eq!(out, "#+CUSTOM: untouched\n* TODO [#A] New title\n:UNKNOWN: keep\n");
+    }
+
+    #[test]
+    fn unsupported_and_stale_patches_are_rejected() {
+        let text = "* TODO title\nbody\n";
+        let unsupported = OrgTextEdit { line: 2, col_start: 1, col_end: 5, expected_fragment: "body".into(), replacement: "x".into(), field: OrgEditField::HeadlineTitle };
+        assert!(matches!(restricted_org_patch(text, &revision(text), &unsupported), Err(OrgPatchError::Unsupported(_))));
+        let stale = OrgTextEdit { line: 1, col_start: 8, col_end: 13, expected_fragment: "title".into(), replacement: "new".into(), field: OrgEditField::HeadlineTitle };
+        assert!(matches!(restricted_org_patch("* TODO changed\nbody\n", &revision(text), &stale), Err(OrgPatchError::RevisionConflict { .. })));
+    }
+
+    #[test]
+    fn failed_filesystem_patch_leaves_file_unchanged() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("x.org");
+        let text = "* TODO title\nbody\n";
+        std::fs::write(&path, text).unwrap();
+        let bad = crate::source::writer::TextPatch::replace_line(1, "* TODO wrong", "* DONE changed");
+        assert!(FsSpanWriter::apply(&path, &[bad]).is_err());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), text);
     }
 }

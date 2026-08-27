@@ -1,4 +1,20 @@
-//! App shell — top nav bar + 3-column body.
+//! App shell — top nav bar + 3-column body + responsive drawers.
+//!
+//! Responsive tiers (matching the CSS in `public/index.html`):
+//!
+//! - Wide (> 68.75rem): three columns; both rails sticky.
+//! - Tablet (45rem – 68.75rem): left rail + main; the right rail
+//!   (properties + graph) becomes a slide-in drawer driven by the
+//!   `.drawer-toggle-inspector` button.
+//! - Mobile (≤ 45rem): single column; the left rail becomes a
+//!   slide-in drawer driven by `.drawer-toggle-nav`.
+//!
+//! Drawer toggling is delegated from `public/index.html` (class
+//! toggles on `.shell`, `aria-expanded` kept in sync, Escape and
+//! backdrop click close, links inside the drawer close it after
+//! navigation). The palette keyboard listener lives in an inline
+//! script here because Dioxus fullstack is SSR-only for events —
+//! `use_effect` never runs on the client.
 
 use dioxus::prelude::*;
 
@@ -81,6 +97,20 @@ pub fn Layout(children: Element) -> Element {
     let active_path = space_ctx().map(|s| s.path.clone());
     let active_path_for_side = active_path.clone();
     let active_encoded = space_ctx().map(|s| s.encoded.clone());
+
+    // Status bar values: honest text state, never colour alone.
+    let space_leaf = active_path
+        .as_deref()
+        .and_then(|p| std::path::Path::new(p).file_name().and_then(|s| s.to_str()).map(|s| s.to_string()))
+        .unwrap_or_else(|| "(select space)".to_string());
+    let space_status = match space_ctx().as_ref().map(|s| &s.status) {
+        Some(SpaceStatus::Ready(_)) => "ready",
+        Some(SpaceStatus::Resolving) => "resolving…",
+        Some(SpaceStatus::Error(_)) => "error",
+        None => "no space",
+    };
+    let space_path = active_path.clone().unwrap_or_default();
+
     rsx! {
         // PR9: install the ⌘K / Esc listener as an inline script so
         // it runs at page load (no hydration dependency).
@@ -91,14 +121,14 @@ pub fn Layout(children: Element) -> Element {
                 if let Some(SpaceState { status: SpaceStatus::Error(e), path, .. }) = s.clone() {
                     rsx! {
                         div { class: "banner-err",
-                                                    div { class: "banner-err-inner",
-                            span { class: "label", "space error →" }
-                            span { class: "banner-err-kind", "{e.kind()}" }
-                            span { class: "label", "—" }
-                            span { class: "mono-sm", "{path}" }
-                            span { class: "label", "—" }
-                            span { "{e}" }
-                        }
+                            div { class: "banner-err-inner",
+                                span { class: "label", "space error →" }
+                                span { class: "banner-err-kind", "{e.kind()}" }
+                                span { class: "label", "—" }
+                                span { class: "mono-sm", "{path}" }
+                                span { class: "label", "—" }
+                                span { "{e}" }
+                            }
                         }
                     }
                 } else {
@@ -109,12 +139,32 @@ pub fn Layout(children: Element) -> Element {
             // ----- Top navigation bar -----
             nav { class: "topnav",
                 div { class: "topnav-inner",
+                    button {
+                        class: "drawer-toggle drawer-toggle-nav",
+                        r#type: "button",
+                        "aria-controls": "col-left",
+                        "aria-expanded": "false",
+                        "aria-label": "Open navigation",
+                        title: "Navigation",
+                        span { class: "drawer-toggle-mark", "☰" }
+                        span { class: "drawer-toggle-label", "nav" }
+                    }
                     SpaceSwitcher {
                         active_path: active_path_for_side.clone(),
                         active_encoded: active_encoded.clone(),
                     }
                     SearchTrigger {}
                     div { class: "topnav-sourcer" }
+                    button {
+                        class: "drawer-toggle drawer-toggle-inspector",
+                        r#type: "button",
+                        "aria-controls": "col-right",
+                        "aria-expanded": "false",
+                        "aria-label": "Open inspector",
+                        title: "Inspector: properties + graph",
+                        span { class: "drawer-toggle-mark", "▤" }
+                        span { class: "drawer-toggle-label", "inspector" }
+                    }
                     TopNavActions {
                         active_path: active_path_for_side.clone(),
                         active_encoded: active_encoded.clone(),
@@ -124,7 +174,7 @@ pub fn Layout(children: Element) -> Element {
 
             // ----- 3-column body -----
             div { class: "shell-body",
-                aside { class: "col-left",
+                aside { id: "col-left", class: "col-left",
                     if active_path.is_some() {
                         TreePanel {
                             active_encoded: active_encoded.clone(),
@@ -140,7 +190,7 @@ pub fn Layout(children: Element) -> Element {
                 main { class: "col-main",
                     {children}
                 }
-                aside { class: "col-right",
+                aside { id: "col-right", class: "col-right",
                     PropertiesPanel {
                         active_encoded: active_encoded.clone(),
                     }
@@ -150,6 +200,24 @@ pub fn Layout(children: Element) -> Element {
                     }
                 }
             }
+            // Backdrop behind a slide-in drawer (tablet inspector /
+            // mobile nav). Clicking it closes the drawer; rendered by
+            // the shell's delegated click handler in index.html.
+            div { class: "drawer-backdrop" }
+
+            // ----- Status bar (UI-1: space summary line) -----
+            footer { class: "statusbar",
+                span { class: "statusbar-label", "space" }
+                span { class: "statusbar-value", "{space_leaf}" }
+                span { class: "statusbar-sep", "·" }
+                span { class: "statusbar-label", "status" }
+                span { class: "statusbar-value", "{space_status}" }
+                span { class: "statusbar-spacer" }
+                if !space_path.is_empty() {
+                    span { class: "statusbar-path mono-sm", "{space_path}" }
+                }
+            }
+
             // ----- Command palette overlay (⌘K / Esc handled by the
             // PR9 inline script at the top of the page; the overlay
             // renders here when PALETTE_OPEN is true).
@@ -204,6 +272,12 @@ fn TopNavActions(active_path: Option<String>, active_encoded: Option<String>) ->
                     title: "Graph view",
                     "graph"
                 }
+                a {
+                    class: "topnav-action",
+                    href: "{crate::router::route_for_space_activity(&p)}",
+                    title: "Journal activity for this space",
+                    "activity"
+                }
             } else {
                 a { class: "topnav-action", href: "/", "home" }
             }
@@ -217,12 +291,11 @@ fn ThemeToggle() -> Element {
         button {
             class: "theme-toggle",
             r#type: "button",
-            title: "Toggle theme",
-            "aria-label": "Toggle theme",
+            title: "Theme: light, dark, or system",
+            "aria-label": "Theme: system",
             "data-theme-toggle": "true",
-            "☼"
+            span { class: "theme-glyph", "☼" }
+            span { class: "theme-mode", "system" }
         }
     }
 }
-
-

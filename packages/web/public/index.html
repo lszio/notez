@@ -6,22 +6,47 @@
   <title>Notez</title>
   <script>
     (function () {
-      var stored = localStorage.getItem('notez-theme') || 'system';
-      document.documentElement.dataset.theme = stored;
+      // Restore the persisted theme BEFORE first paint so a dark-mode
+      // user never sees a light flash.
+      try {
+        var stored = localStorage.getItem('notez-theme') || 'system';
+        document.documentElement.dataset.theme = stored;
+      } catch (e) {
+        document.documentElement.dataset.theme = 'system';
+      }
     })();
   </script>
   <script>
     (function () {
+      // Theme control: Light / Dark / System cycle. The button's
+      // visible label + aria-label always name the CURRENT mode
+      // (never icon-only), and the change is instant with no reload.
+      function current() {
+        return document.documentElement.dataset.theme || 'system';
+      }
+      function syncToggle() {
+        var t = current();
+        document.querySelectorAll('[data-theme-toggle]').forEach(function (toggle) {
+          toggle.setAttribute('aria-label', 'Theme: ' + t);
+          toggle.title = 'Theme: ' + t + ' — click to change';
+          var mode = toggle.querySelector('.theme-mode');
+          if (mode) mode.textContent = t;
+        });
+      }
       document.addEventListener('click', function (event) {
         var toggle = event.target.closest && event.target.closest('[data-theme-toggle]');
         if (!toggle) return;
-        var current = document.documentElement.dataset.theme || 'system';
-        var next = current === 'light' ? 'dark' : current === 'dark' ? 'system' : 'light';
+        var c = current();
+        var next = c === 'light' ? 'dark' : c === 'dark' ? 'system' : 'light';
         document.documentElement.dataset.theme = next;
-        localStorage.setItem('notez-theme', next);
-        toggle.setAttribute('aria-label', 'Theme: ' + next);
-        toggle.title = 'Theme: ' + next;
+        try { localStorage.setItem('notez-theme', next); } catch (e) {}
+        syncToggle();
       });
+      if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', syncToggle);
+      } else {
+        syncToggle();
+      }
     })();
   </script>
   <style>
@@ -998,11 +1023,43 @@
      *   portrait. Files pill row still fits.
      * ≤720px (45rem) : single column. Hide both rails. Phone-only.
      */
+    /* PR8 responsive tiers, UI-1 drawer behaviour.
+     *
+     * Wide (default): three columns, fixed 320px side rails.
+     * Tablet (45rem – 68.75rem): left rail + main; the right rail
+     *   (inspector: properties + graph) becomes a slide-in drawer
+     *   opened by `.drawer-toggle-inspector`.
+     * Mobile (≤ 45rem): single column; the left rail (tree + files)
+     *   becomes a slide-in drawer opened by `.drawer-toggle-nav`.
+     *
+     * Drawers use `visibility` (with a transition delay) so their
+     * links are not tabbable while closed. */
     @media (max-width: 68.75rem) {
       .shell-body {
         grid-template-columns: var(--col-left-w) minmax(0, 1fr);
       }
-      .col-right { display: none; }
+      .drawer-toggle.drawer-toggle-inspector { display: inline-flex; }
+      .col-right {
+        display: block;
+        position: fixed;
+        top: 3rem; right: 0; bottom: 0;
+        width: min(20rem, 88vw);
+        max-height: none;
+        z-index: 60;
+        background: var(--paper);
+        border-left: 1px solid var(--ink-rule);
+        border-right: 0;
+        overflow-y: auto;
+        transform: translateX(100%);
+        visibility: hidden;
+        transition: transform 0.18s ease-out, visibility 0s linear 0.18s;
+      }
+      .shell.inspector-open .col-right {
+        transform: translateX(0);
+        visibility: visible;
+        transition: transform 0.18s ease-out;
+        box-shadow: var(--shadow-2);
+      }
     }
     @media (max-width: 56.25rem) {
       .shell-body {
@@ -1015,7 +1072,27 @@
       .shell-body {
         grid-template-columns: minmax(0, 1fr);
       }
-      .col-left { display: none; }
+      .drawer-toggle.drawer-toggle-nav { display: inline-flex; }
+      .col-left {
+        display: block;
+        position: fixed;
+        top: 3rem; left: 0; bottom: 0;
+        width: min(18rem, 88vw);
+        max-height: none;
+        z-index: 60;
+        background: var(--paper);
+        border-right: 1px solid var(--ink-rule);
+        overflow-y: auto;
+        transform: translateX(-100%);
+        visibility: hidden;
+        transition: transform 0.18s ease-out, visibility 0s linear 0.18s;
+      }
+      .shell.nav-open .col-left {
+        transform: translateX(0);
+        visibility: visible;
+        transition: transform 0.18s ease-out;
+        box-shadow: var(--shadow-2);
+      }
     }
 
     /* Tree panel (left top) */
@@ -1528,66 +1605,7 @@
       outline: 2px solid var(--accent);
       outline-offset: 2px;
     }
-    /* Document status + source editing (UI-1 document workbench) */
-    .doc-status {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 0.5rem;
-      align-items: baseline;
-      margin: 0.25rem 0 1.25rem;
-      font-family: var(--mono);
-      font-size: 0.78rem;
-      color: var(--ink-2);
-    }
-    .doc-status-source { color: var(--ink-3); }
-    .doc-status-editable {
-      color: var(--ok);
-      border: 1px solid currentColor;
-      border-radius: var(--r-sm);
-      padding: 0.05rem 0.4rem;
-    }
-    .doc-status-readonly {
-      color: var(--warn);
-      border: 1px solid currentColor;
-      border-radius: var(--r-sm);
-      padding: 0.05rem 0.4rem;
-    }
-    .doc-status-rev { color: var(--ink-3); }
-    .edit-banner {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 0.6rem;
-      align-items: baseline;
-      padding: 0.5rem 0.8rem;
-      margin-bottom: 1rem;
-      border: 1px solid var(--err);
-      background: var(--paper-2);
-      border-radius: var(--r-sm);
-      font-family: var(--mono);
-      font-size: 0.8rem;
-    }
-    .edit-banner-kind { color: var(--err); text-transform: uppercase; letter-spacing: 0.05em; }
-    .edit-banner-msg { color: var(--ink-2); }
-    .edit-source {
-      margin: 1.25rem 0;
-      border: 1px solid var(--ink-rule);
-      border-radius: var(--r-md);
-      background: var(--paper);
-    }
-    .edit-source > summary {
-      cursor: pointer;
-      padding: 0.5rem 0.9rem;
-      font-family: var(--mono);
-      font-size: 0.78rem;
-      color: var(--ink-2);
-      text-transform: uppercase;
-      letter-spacing: 0.06em;
-    }
-    .edit-source > summary:hover { color: var(--ink); }
-    .edit-source-body {
-      border-top: 1px solid var(--ink-rule);
-      padding: 0.9rem;
-    }
+    /* Document source editing (textarea + actions) */
     .edit-source-textarea {
       width: 100%;
       min-height: 14rem;
@@ -1632,18 +1650,7 @@
       padding: 0.35rem 0.9rem;
       text-decoration: none;
     }
-    /* Source badge + coverage (list/query view) */
-    .source-badge {
-      font-family: var(--mono);
-      font-size: 0.66rem;
-      letter-spacing: 0.03em;
-      border-radius: var(--r-sm);
-      padding: 0.05rem 0.4rem;
-      margin-left: 0.5rem;
-      white-space: nowrap;
-    }
-    .source-badge-editable { color: var(--ok); border: 1px solid currentColor; }
-    .source-badge-readonly { color: var(--warn); border: 1px solid currentColor; }
+    /* Source coverage (list/query view) */
     .source-coverage {
       display: flex;
       flex-wrap: wrap;
@@ -1658,10 +1665,6 @@
     .source-coverage-label { color: var(--ink-3); text-transform: uppercase; letter-spacing: 0.08em; }
     .source-coverage-item { color: var(--ink-2); }
     .source-coverage-item.dim { color: var(--ink-3); }
-    @media (min-width: 640px) and (max-width: 1023px) {
-      .col-right { display: none; }
-      .shell-body { grid-template-columns: 15rem minmax(0, 1fr); }
-    }
     @media (prefers-reduced-motion: reduce) {
       *, *::before, *::after {
         scroll-behavior: auto !important;
@@ -1680,12 +1683,6 @@
       border-radius: var(--r-sm);
       padding: 0.02rem 0.4rem;
     }
-
-    .edit-banner-ok {
-      border-color: var(--ok);
-      background: var(--paper-2);
-    }
-    .edit-banner-ok .edit-banner-kind { color: var(--ok); }
 
     .janet-panel {
       margin: 1.25rem 0;
@@ -1726,6 +1723,526 @@
     }
     .janet-actions { margin-top: 0.6rem; }
 
+    /* ============================================================
+     * UI-1 document workbench — detail page
+     * ============================================================ */
+    .doc-header { margin-bottom: 0.5rem; }
+    .doc-refline {
+      font-family: var(--mono);
+      font-size: 0.78rem;
+      color: var(--ink-3);
+      margin: 0.15rem 0 0.7rem;
+      word-break: break-all;
+    }
+    .doc-refline a { color: var(--ink-2); border-bottom: 0; }
+    .doc-refline a:hover { color: var(--ink); border-bottom: 1px solid var(--ink); }
+    .doc-status {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.45rem;
+      align-items: center;
+      margin: 0 0 1rem;
+    }
+    .doc-save-state {
+      font-family: var(--mono);
+      font-size: 0.72rem;
+      color: var(--ink-2);
+      letter-spacing: 0.02em;
+    }
+    .doc-save-state.is-dirty { color: var(--warn); }
+
+    /* Save / conflict banners — text carries the state (never
+     * colour alone) and each failure offers a next action. */
+    .doc-banners {
+      display: flex;
+      flex-direction: column;
+      gap: 0.6rem;
+      margin-bottom: 1rem;
+    }
+    .doc-banner {
+      border: 1px solid var(--err);
+      background: var(--paper-2);
+      border-radius: var(--r-sm);
+      padding: 0.55rem 0.8rem;
+      font-family: var(--mono);
+      font-size: 0.8rem;
+    }
+    .doc-banner-ok { border-color: var(--ok); }
+    .doc-banner-ok .doc-banner-kind { color: var(--ok); }
+    .doc-banner-head {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.6rem;
+      align-items: baseline;
+    }
+    .doc-banner-kind {
+      color: var(--err);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+    .doc-banner-msg { color: var(--ink-2); }
+    .doc-banner-actions {
+      display: flex;
+      gap: 0.8rem;
+      align-items: center;
+      margin-top: 0.45rem;
+      flex-wrap: wrap;
+    }
+    .doc-banner-action {
+      font-family: var(--mono);
+      font-size: 0.75rem;
+      color: var(--ink);
+      border: 1px solid var(--ink-rule);
+      border-radius: var(--r-sm);
+      padding: 0.2rem 0.55rem;
+      text-decoration: none;
+    }
+    .doc-banner-action:hover { border-color: var(--ink); }
+    .doc-banner-note { color: var(--ink-3); font-size: 0.72rem; }
+
+    /* Read / Edit / Source mode tabs — pure-CSS radio tabs. The
+     * radios are visually hidden but stay in the tab order (arrow
+     * keys switch mode); the active tab is styled via sibling
+     * selectors. No JavaScript required. */
+    .doc-modes { margin: 1rem 0 1.5rem; }
+    .doc-mode-input {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      overflow: hidden;
+      clip: rect(0 0 0 0);
+      white-space: nowrap;
+    }
+    .doc-mode-tabs {
+      display: flex;
+      gap: 0.25rem;
+      border-bottom: 1px solid var(--ink-rule);
+      margin-bottom: 0.9rem;
+    }
+    .doc-mode-tab {
+      font-family: var(--mono);
+      font-size: 0.74rem;
+      color: var(--ink-2);
+      padding: 0.4rem 0.9rem;
+      cursor: pointer;
+      user-select: none;
+      border: 1px solid transparent;
+      border-bottom: 0;
+      border-radius: var(--r-sm) var(--r-sm) 0 0;
+      margin-bottom: -1px;
+    }
+    .doc-mode-tab:hover { color: var(--ink); }
+    #doc-mode-read:checked ~ .doc-mode-tabs label[for="doc-mode-read"],
+    #doc-mode-edit:checked ~ .doc-mode-tabs label[for="doc-mode-edit"],
+    #doc-mode-source:checked ~ .doc-mode-tabs label[for="doc-mode-source"] {
+      color: var(--ink);
+      border-color: var(--ink-rule);
+      border-bottom-color: var(--paper);
+    }
+    #doc-mode-read:focus-visible ~ .doc-mode-tabs label[for="doc-mode-read"],
+    #doc-mode-edit:focus-visible ~ .doc-mode-tabs label[for="doc-mode-edit"],
+    #doc-mode-source:focus-visible ~ .doc-mode-tabs label[for="doc-mode-source"] {
+      outline: 2px solid var(--accent);
+      outline-offset: -2px;
+    }
+    .doc-pane { display: none; }
+    #doc-mode-read:checked ~ .doc-mode-panes .doc-pane-read { display: block; }
+    #doc-mode-edit:checked ~ .doc-mode-panes .doc-pane-editor { display: block; }
+    #doc-mode-source:checked ~ .doc-mode-panes .doc-pane-editor { display: block; }
+
+    /* Editor chrome: Edit and Source share one textarea (draft-safe);
+     * the mode only changes the header label + source locator. */
+    .editor-chrome {
+      display: flex;
+      align-items: baseline;
+      gap: 0.7rem;
+      margin-bottom: 0.6rem;
+      flex-wrap: wrap;
+    }
+    .editor-mode-label {
+      font-family: var(--mono);
+      font-size: 0.78rem;
+      color: var(--ink-2);
+    }
+    .em-edit { display: inline; }
+    .em-source { display: none; }
+    #doc-mode-edit:checked ~ .doc-mode-panes .em-edit { display: inline; }
+    #doc-mode-edit:checked ~ .doc-mode-panes .em-source { display: none; }
+    #doc-mode-source:checked ~ .doc-mode-panes .em-edit { display: none; }
+    #doc-mode-source:checked ~ .doc-mode-panes .em-source { display: inline; }
+    .editor-source-locator { display: none; }
+    #doc-mode-source:checked ~ .doc-mode-panes .editor-source-locator {
+      display: inline;
+      color: var(--ink-3);
+    }
+    .editor-save-row {
+      display: flex;
+      align-items: baseline;
+      gap: 0.8rem;
+      margin-bottom: 0.5rem;
+      flex-wrap: wrap;
+    }
+    .editor-rev { color: var(--ink-3); }
+    .editor-draft-note { color: var(--warn); }
+    .readonly-note {
+      font-family: var(--serif);
+      font-size: 0.95rem;
+      color: var(--ink-2);
+      margin: 1rem 0;
+    }
+    .readonly-note p { margin: 0.2rem 0; }
+
+    /* ============================================================
+     * UI-1 shell extras — drawer triggers, backdrop, status bar
+     * ============================================================ */
+    .drawer-toggle {
+      display: none;
+      align-items: center;
+      gap: 0.35rem;
+      font-family: var(--mono);
+      font-size: 0.74rem;
+      color: var(--ink-2);
+      background: transparent;
+      border: 1px solid var(--ink-rule);
+      border-radius: var(--r-sm);
+      padding: 0.3rem 0.55rem;
+      cursor: pointer;
+      min-height: 2rem;
+    }
+    .drawer-toggle:hover,
+    .drawer-toggle[aria-expanded="true"] {
+      color: var(--ink);
+      border-color: var(--ink);
+    }
+    .drawer-toggle-mark { color: var(--accent); }
+    .drawer-backdrop {
+      position: fixed;
+      inset: 0;
+      top: 3rem;
+      z-index: 55;
+      background: rgba(0, 0, 0, 0.18);
+      display: none;
+    }
+    .shell.nav-open .drawer-backdrop,
+    .shell.inspector-open .drawer-backdrop { display: block; }
+
+    .statusbar {
+      display: flex;
+      align-items: baseline;
+      gap: 0.5rem;
+      border-top: 1px solid var(--ink-rule);
+      padding: 0.3rem 1.5rem;
+    }
+    .statusbar-label {
+      font-family: var(--mono);
+      font-size: 0.62rem;
+      color: var(--ink-3);
+      text-transform: uppercase;
+      letter-spacing: 0.14em;
+    }
+    .statusbar-value { font-family: var(--mono); font-size: 0.72rem; color: var(--ink-2); }
+    .statusbar-sep { color: var(--ink-3); }
+    .statusbar-spacer { flex: 1; }
+    .statusbar-path {
+      color: var(--ink-3);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      max-width: 40vw;
+    }
+
+    /* ============================================================
+     * Home dashboard (Source health / Activity / Continue)
+     * ============================================================ */
+    .home-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 1.5rem;
+      margin-top: 1.5rem;
+    }
+    @media (max-width: 56.25rem) {
+      .home-grid { grid-template-columns: 1fr; }
+    }
+    .home-card { min-width: 0; }
+    .home-card-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      border-bottom: 1px solid var(--ink-rule);
+      padding-bottom: 0.4rem;
+      margin-bottom: 0.7rem;
+    }
+    .home-card-head h2 {
+      font-family: var(--serif);
+      font-size: 1.05rem;
+      font-weight: 600;
+      margin: 0;
+    }
+    .home-card-count { color: var(--ink-3); }
+    .home-empty {
+      font-family: var(--serif);
+      font-style: italic;
+      color: var(--ink-3);
+      margin: 0.2rem 0 0.5rem;
+    }
+    .home-steps {
+      margin: 0.4rem 0 0;
+      padding-left: 1.2rem;
+      color: var(--ink-2);
+    }
+    .home-steps li { margin: 0.25rem 0; }
+    .onboard-actions {
+      display: flex;
+      gap: 0.5rem;
+      flex-wrap: wrap;
+      margin-top: 0.8rem;
+    }
+    .health-list {
+      list-style: none;
+      padding: 0;
+      margin: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 0.7rem;
+    }
+    .health-row { min-width: 0; }
+    .health-row-body {
+      display: flex;
+      justify-content: space-between;
+      gap: 1rem;
+      align-items: flex-start;
+      flex-wrap: wrap;
+    }
+    .health-row-main {
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 0.25rem;
+      align-items: flex-start;
+    }
+    .health-row-name {
+      font-family: var(--serif);
+      font-size: 1rem;
+      font-weight: 600;
+      color: var(--ink);
+      border-bottom: 0;
+    }
+    .health-row-name:hover { border-bottom: 1px solid var(--ink); }
+    .health-row-path { color: var(--ink-3); word-break: break-all; }
+    .health-row-side {
+      display: flex;
+      flex-direction: column;
+      gap: 0.3rem;
+      align-items: flex-end;
+    }
+    .health-row-total { color: var(--ink-2); }
+    .health-row-err { color: var(--err); word-break: break-word; max-width: 22rem; }
+
+    /* Touch targets: on coarse-pointer devices every actionable
+     * control grows to a ~44px hit area. */
+    @media (pointer: coarse) {
+      .topnav-action, .spine-action, .control-action, .edit-source-save,
+      .edit-source-cancel, .search-trigger, .theme-toggle, .doc-mode-tab,
+      .drawer-toggle, .palette-close, .doc-banner-action, .files-pill,
+      .side-link, .tree-leaf-link, .side-add-form button, .control-action {
+        min-height: 44px;
+      }
+    }
+
+    /* ============================================================
+     * Query view modes + activity stream
+     * ============================================================ */
+    .results-toolbar {
+      display: flex;
+      align-items: center;
+      gap: 1rem;
+      flex-wrap: wrap;
+      padding: 0.5rem 0 0.25rem;
+      border-bottom: 1px solid var(--ink-rule);
+    }
+    .mode-tabs {
+      display: inline-flex;
+      gap: 0.15rem;
+      align-items: center;
+    }
+    /* Mode tabs reuse the doc-mode-tab chrome (mono, hairline);
+     * only the active state is mode-specific. */
+    .mode-tab.is-current {
+      color: var(--ink);
+      background: var(--paper-2);
+      border-color: var(--ink-rule);
+    }
+    .view-note {
+      margin-left: auto;
+      display: inline-flex;
+      align-items: baseline;
+      gap: 0.45rem;
+    }
+    .view-note-label {
+      font-family: var(--mono);
+      font-size: 0.62rem;
+      color: var(--ink-3);
+      text-transform: uppercase;
+      letter-spacing: 0.14em;
+    }
+    .view-note-state { font-family: var(--mono); color: var(--warn); }
+    .view-note-link {
+      font-family: var(--mono);
+      font-size: 0.72rem;
+      color: var(--ink-2);
+      border-bottom: 0;
+    }
+    .view-note-link:hover { color: var(--ink); border-bottom: 1px solid var(--ink); }
+
+    /* Table mode — same typed rows, explicit columns */
+    .results-table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 0.4rem 0 0.5rem;
+      font-size: 0.9rem;
+    }
+    .results-table th {
+      font-family: var(--mono);
+      font-size: 0.66rem;
+      font-weight: 500;
+      color: var(--ink-3);
+      text-transform: uppercase;
+      letter-spacing: 0.12em;
+      text-align: left;
+      padding: 0.4rem 0.5rem;
+      border-bottom: 1px solid var(--ink);
+    }
+    .results-table td {
+      padding: 0.45rem 0.5rem;
+      border-bottom: 1px solid var(--ink-rule);
+      vertical-align: baseline;
+      word-break: break-all;
+    }
+    .results-table .result:hover { background: var(--paper-2); }
+    .results-table td.col-ref a,
+    .results-table td.col-title a { border-bottom: 0; }
+    .results-table td.col-title a:hover { border-bottom: 1px solid var(--ink); }
+    .results-table td.col-source { color: var(--ink-2); }
+
+    /* Cards mode — one card per resource */
+    .results-cards {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(16rem, 1fr));
+      gap: 0.75rem;
+      padding: 0.75rem 0 0.5rem;
+    }
+    .result-card {
+      display: flex;
+      flex-direction: column;
+      gap: 0.3rem;
+      border: 1px solid var(--ink-rule);
+      padding: 0.7rem 0.8rem;
+      background: var(--paper);
+    }
+    .result-card:hover { background: var(--paper-2); }
+    .result-card .col-title a { border-bottom: 0; }
+    .result-card .col-title a:hover { border-bottom: 1px solid var(--ink); }
+    .result-card .col-ref {
+      display: inline-flex;
+      align-items: baseline;
+      gap: 0.4rem;
+    }
+    .result-card .col-ref a { border-bottom: 0; color: var(--ink-2); }
+    .result-card .col-loc { color: var(--ink-3); font-size: 0.8rem; }
+    .result-card .col-source { color: var(--ink-2); }
+
+    /* Stream mode — one compact line per resource */
+    .results-stream { display: flex; flex-direction: column; }
+    .result-stream {
+      display: flex;
+      align-items: baseline;
+      gap: 0.6rem;
+      padding: 0.35rem 0.4rem;
+      border-bottom: 1px dotted var(--ink-rule);
+      font-size: 0.88rem;
+    }
+    .result-stream .col-ref {
+      display: inline-flex;
+      align-items: baseline;
+      gap: 0.35rem;
+      flex: 0 0 auto;
+    }
+    .result-stream .col-ref a { border-bottom: 0; color: var(--ink-2); }
+    .result-stream .col-title a { border-bottom: 0; }
+    .result-stream .col-title a:hover { border-bottom: 1px solid var(--ink); }
+    .result-stream .col-loc {
+      color: var(--ink-3);
+      margin-left: auto;
+      font-size: 0.78rem;
+    }
+
+    /* Activity stream (per-space page + home dashboard) */
+    .activity-list {
+      list-style: none;
+      margin: 0;
+      padding: 0;
+      display: flex;
+      flex-direction: column;
+    }
+    .activity-row {
+      padding: 0.55rem 0.4rem;
+      border-bottom: 1px solid var(--ink-rule);
+    }
+    .activity-row:hover { background: var(--paper-2); }
+    .activity-line {
+      display: flex;
+      align-items: baseline;
+      gap: 0.6rem;
+      flex-wrap: wrap;
+    }
+    .activity-action {
+      color: var(--accent);
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+    }
+    .activity-actor { font-family: var(--serif); font-size: 0.92rem; }
+    .activity-when { color: var(--ink-3); }
+    .activity-space { color: var(--ink-3); }
+    .activity-target {
+      margin-top: 0.2rem;
+      display: flex;
+      align-items: baseline;
+      gap: 0.4rem;
+      color: var(--ink-2);
+      word-break: break-all;
+    }
+    .activity-target-mark { color: var(--accent); }
+    .activity-target a { border-bottom: 0; color: var(--ink); }
+    .activity-target a:hover { border-bottom: 1px solid var(--ink); }
+    .activity-meta {
+      margin-top: 0.25rem;
+      display: flex;
+      gap: 0.45rem;
+      color: var(--ink-3);
+      flex-wrap: wrap;
+    }
+    .activity-state {
+      border: 1px dashed var(--ink-rule);
+      background: var(--paper-2);
+      padding: 1rem 1.2rem;
+      margin: 0.5rem 0;
+    }
+    .activity-state-title {
+      font-family: var(--serif);
+      font-weight: 600;
+      margin: 0 0 0.3rem;
+    }
+    .activity-state-body { color: var(--ink-2); margin: 0 0 0.4rem; }
+    .activity-list-compact .activity-row { padding: 0.4rem; }
+    .home-card-foot {
+      display: flex;
+      align-items: baseline;
+      gap: 0.8rem;
+      flex-wrap: wrap;
+      margin-top: 0.6rem;
+    }
+    .home-card-note { color: var(--ink-3); }
+
   </style>
     <!-- M6: hydrated Dioxus client. Served from /wasm/* by the
          server when built with `dx build --platform web`; harmless
@@ -1737,9 +2254,21 @@
 <script>
 /* M6 progressive enhancement: live list filtering that works with or
  * without a hydrated client. Filters rendered .result rows by their
- * visible text; updates the "showing x / y" counter if present. */
+ * visible text; updates the "showing x / y" counter if present.
+ *
+ * The filter stands down as soon as the Dioxus client mounts (its
+ * nodes carry data-dioxus-id) — the Rust `oninput` signal then owns
+ * the input, and this fallback would double-render. */
 (function () {
+  var mo = null;
+  function clientMounted() {
+    return !!(window.__dioxus || document.querySelector('#main [data-dioxus-id]'));
+  }
+  function stop() {
+    if (mo) { mo.disconnect(); mo = null; }
+  }
   function wire() {
+    if (clientMounted()) { stop(); return; }
     const q = document.querySelector('input[name="q"]');
     if (!q || q.dataset.liveFilter) return;
     q.dataset.liveFilter = '1';
@@ -1766,68 +2295,122 @@
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', wire);
   } else { wire(); }
-  // Re-wire after client-side navigations render new lists.
-  new MutationObserver(function(){ wire(); }).observe(document.documentElement, { childList: true, subtree: true });
+  // Re-wire after navigations render new lists; stop once the
+  // Dioxus client takes over the DOM.
+  if (!clientMounted()) {
+    mo = new MutationObserver(function () { wire(); });
+    mo.observe(document.documentElement, { childList: true, subtree: true });
+  }
 })();
 </script>
 <script>
-/* M6 progressive enhancement: command palette fallback. The hydrated
- * Dioxus palette remains the primary path; this listener keeps search,
- * arrow selection, Enter navigation, and Escape usable when the
- * fullstack hydration event bridge is unavailable. */
+/* M6/UI-1 progressive enhancement: command palette fallback.
+ *
+ * Runs only while the Dioxus client is NOT mounted (SSR-only build).
+ * The corpus is the resource list rendered in the DOM (.result rows
+ * on the list page), rebuilt as proper .palette-hit markup with a
+ * kind badge, title and ref. Arrow keys move selection, Enter
+ * navigates, Escape closes — keyboard flow works end to end.
+ *
+ * When the Dioxus client mounts (nodes carry data-dioxus-id) the
+ * fallback stops: the Rust palette owns search + keyboard handling
+ * and this script would double-render. */
 (function () {
+  var mo = null;
+  function clientMounted() {
+    return !!(window.__dioxus || document.querySelector('#main [data-dioxus-id]'));
+  }
+  function stop() {
+    if (mo) { mo.disconnect(); mo = null; }
+  }
+  function corpus() {
+    // Each .result row: the visible title link, kind class, ref text.
+    return Array.from(document.querySelectorAll('.result')).map(function (row) {
+      var titleEl = row.querySelector('.col-title a');
+      var link = titleEl || row.querySelector('a[href]');
+      var kindEl = row.querySelector('.kind');
+      var kindMatch = kindEl && (kindEl.className.match(/kind-(\w+)/) || [])[1];
+      var refEl = row.querySelector('.col-ref');
+      return {
+        href: link ? link.getAttribute('href') : null,
+        title: titleEl ? (titleEl.textContent || '').trim() : (link ? (link.textContent || '').trim() : ''),
+        kind: kindMatch || 'document',
+        ref: refEl ? (refEl.textContent || '').trim() : ''
+      };
+    });
+  }
+  function visibleHits() {
+    const needle = (input.value || '').trim().toLowerCase();
+    return corpus().filter(function (h) {
+      return h.href && (!needle || (h.title + ' ' + h.ref).toLowerCase().indexOf(needle) !== -1);
+    });
+  }
+  var input = null;
+  function render() {
+    if (!input) return;
+    const results = document.querySelector('.palette-results');
+    if (!results) return;
+    const hits = visibleHits();
+    selected = Math.max(0, Math.min(selected, hits.length - 1));
+    results.replaceChildren();
+    if (!(input.value || '').trim()) {
+      const empty = document.createElement('p');
+      empty.className = 'palette-empty';
+      empty.textContent = 'type to search this space.';
+      results.append(empty);
+      return;
+    }
+    if (!hits.length) {
+      const empty = document.createElement('p');
+      empty.className = 'palette-empty';
+      empty.textContent = 'no matches.';
+      results.append(empty);
+      return;
+    }
+    const list = document.createElement('ul');
+    list.className = 'palette-list';
+    hits.forEach(function (hit, index) {
+      const item = document.createElement('li');
+      item.className = index === selected ? 'palette-hit palette-hit-selected' : 'palette-hit';
+      const a = document.createElement('a');
+      a.className = 'palette-hit-link';
+      a.href = hit.href;
+      const head = document.createElement('div');
+      head.className = 'palette-hit-head';
+      const kind = document.createElement('span');
+      kind.className = 'palette-hit-kind kind-' + hit.kind;
+      kind.textContent = hit.kind;
+      const title = document.createElement('span');
+      title.className = 'palette-hit-title';
+      title.textContent = hit.title;
+      head.append(kind, title);
+      const loc = document.createElement('div');
+      loc.className = 'palette-hit-loc mono-sm';
+      loc.textContent = hit.ref;
+      a.append(head, loc);
+      item.append(a);
+      list.append(item);
+    });
+    results.append(list);
+  }
+  var selected = 0;
   function wirePalette() {
-    const input = document.querySelector('.palette-input');
+    if (clientMounted()) { stop(); return; }
+    input = document.querySelector('.palette-input');
     if (!input || input.dataset.livePalette) return;
     input.dataset.livePalette = '1';
-    let selected = 0;
-
-    function hits() {
-      const needle = (input.value || '').trim().toLowerCase();
-      return Array.from(document.querySelectorAll('.result'))
-        .filter(row => getComputedStyle(row).display !== 'none')
-        .filter(row => !needle || row.textContent.toLowerCase().includes(needle))
-        .map(row => row.querySelector('a[href]'))
-        .filter(Boolean);
-    }
-
-    function render() {
-      const root = input.closest('[class*=palette]')?.parentElement || document;
-      const results = root.querySelector('.palette-results') || document.querySelector('.palette-results');
-      if (!results) return;
-      const links = hits();
-      selected = Math.max(0, Math.min(selected, links.length - 1));
-      results.replaceChildren();
-      if (!input.value.trim()) return;
-      if (!links.length) {
-        const empty = document.createElement('p');
-        empty.className = 'palette-empty';
-        empty.textContent = 'no matches.';
-        results.append(empty);
-        return;
-      }
-      const list = document.createElement('ul');
-      list.className = 'palette-list';
-      links.forEach((link, index) => {
-        const item = document.createElement('li');
-        item.className = index === selected ? 'palette-hit palette-hit-selected' : 'palette-hit';
-        const clone = link.cloneNode(true);
-        clone.className = 'palette-hit-link';
-        item.append(clone);
-        list.append(item);
-      });
-      results.append(list);
-    }
-
     input.addEventListener('input', function () { selected = 0; render(); });
     input.addEventListener('keydown', function (event) {
-      const links = hits();
-      if (event.key === 'ArrowDown' && links.length) {
-        event.preventDefault(); selected = (selected + 1) % links.length; render();
-      } else if (event.key === 'ArrowUp' && links.length) {
-        event.preventDefault(); selected = (selected + links.length - 1) % links.length; render();
-      } else if (event.key === 'Enter' && links[selected]) {
-        event.preventDefault(); links[selected].click();
+      const hits = visibleHits();
+      if (event.key === 'ArrowDown' && hits.length) {
+        event.preventDefault(); selected = (selected + 1) % hits.length; render();
+      } else if (event.key === 'ArrowUp' && hits.length) {
+        event.preventDefault(); selected = (selected + hits.length - 1) % hits.length; render();
+      } else if (event.key === 'Enter') {
+        if (hits[selected] && hits[selected].href) {
+          event.preventDefault();
+          window.location.href = hits[selected].href;
+        }
       } else if (event.key === 'Escape') {
         const close = document.querySelector('.palette-close');
         if (close) close.click();
@@ -1837,7 +2420,146 @@
   }
 
   wirePalette();
-  new MutationObserver(wirePalette).observe(document.documentElement, { childList: true, subtree: true });
+  if (!clientMounted()) {
+    mo = new MutationObserver(function () { wirePalette(); });
+    mo.observe(document.documentElement, { childList: true, subtree: true });
+  }
+})();
+</script>
+<script>
+/* UI-1: responsive drawer toggles (tablet inspector / mobile nav).
+ * Delegated so SSR-only pages work; aria-expanded stays in sync.
+ * Escape and backdrop click close; links inside a drawer close it
+ * after the native navigation has been triggered. */
+(function () {
+  var shell = null;
+  function getShell() {
+    if (shell && document.body.contains(shell)) return shell;
+    shell = document.querySelector('.shell');
+    return shell;
+  }
+  function isOpen(cls) {
+    var s = getShell();
+    return !!s && s.classList.contains(cls);
+  }
+  function setDrawer(kind, open) {
+    var s = getShell();
+    if (!s) return;
+    var cls = kind === 'nav' ? 'nav-open' : 'inspector-open';
+    if (open) s.classList.add(cls); else s.classList.remove(cls);
+    var btn = document.querySelector('.drawer-toggle-' + kind);
+    if (btn) {
+      var label = (kind === 'nav' ? 'navigation' : 'inspector');
+      btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+      btn.setAttribute('aria-label', (open ? 'Close ' : 'Open ') + label);
+    }
+  }
+  function closeDrawers() {
+    setDrawer('nav', false);
+    setDrawer('inspector', false);
+  }
+  document.addEventListener('click', function (e) {
+    var t = e.target;
+    var navBtn = t.closest && t.closest('.drawer-toggle-nav');
+    if (navBtn) { e.preventDefault(); setDrawer('nav', !isOpen('nav-open')); return; }
+    var inspBtn = t.closest && t.closest('.drawer-toggle-inspector');
+    if (inspBtn) { e.preventDefault(); setDrawer('inspector', !isOpen('inspector-open')); return; }
+    if (t.closest && t.closest('.drawer-backdrop')) { closeDrawers(); return; }
+    if (t.closest && t.closest('a')) {
+      var a = t.closest('a');
+      if (a.closest('.col-left') || a.closest('.col-right')) { closeDrawers(); }
+    }
+  });
+  document.addEventListener('keydown', function (e) {
+    if (e.key === 'Escape') closeDrawers();
+  });
+})();
+</script>
+<script>
+/* UI-1: document editor draft + save state (SSR-only fallback).
+ *
+ * - The draft textarea value is mirrored to sessionStorage keyed by
+ *   ref_str on every input and on submit.
+ * - After a failed save (redirect carries `edit_err`), the draft is
+ *   restored into the textarea and the save state reads "Unsaved
+ *   changes"; the stale-revision banner explains the conflict.
+ * - After a successful save (`edited=1`) the draft is cleared.
+ * - The visible save state is text ("Saved" / "Unsaved changes"),
+ *   never colour alone, and updates both the header and the editor.
+ *
+ * Stands down when the Dioxus client mounts (data-dioxus-id) — the
+ * Rust handlers then own the editor state. */
+(function () {
+  var mo = null;
+  function clientMounted() {
+    return !!(window.__dioxus || document.querySelector('#main [data-dioxus-id]'));
+  }
+  function stop() {
+    if (mo) { mo.disconnect(); mo = null; }
+  }
+  function draftKey(ref) { return 'notez-draft:' + ref; }
+  function syncSaveState(form) {
+    if (!form) return;
+    var ta = form.querySelector('textarea[name="content"]');
+    var dirty = ta && ta.value !== ta.defaultValue;
+    document.querySelectorAll('[data-save-state]').forEach(function (el) {
+      el.textContent = dirty ? 'Unsaved changes' : 'Saved';
+      el.classList.toggle('is-dirty', dirty);
+    });
+    var note = form.querySelector('.editor-draft-note');
+    if (note) note.hidden = !dirty;
+  }
+  function wireEditor() {
+    if (clientMounted()) { stop(); return; }
+    var form = document.querySelector('.doc-edit-form');
+    if (!form || form.dataset.editorWired) return;
+    form.dataset.editorWired = '1';
+    var ta = form.querySelector('textarea[name="content"]');
+    var key = form.getAttribute('data-draft-key') || '';
+    var params = new URLSearchParams(window.location.search);
+    var draft = null;
+    try { draft = sessionStorage.getItem(draftKey(key)); } catch (e) {}
+    if (params.get('edit_err') && draft) {
+      ta.value = draft;
+      var note = form.querySelector('.editor-draft-note');
+      if (note) { note.textContent = 'draft restored — review before saving'; note.hidden = false; }
+    } else if (params.get('edited') === '1') {
+      try { sessionStorage.removeItem(draftKey(key)); } catch (e) {}
+    }
+    ta.addEventListener('input', function () {
+      try { sessionStorage.setItem(draftKey(key), ta.value); } catch (e) {}
+      syncSaveState(form);
+    });
+    form.addEventListener('submit', function () {
+      try { sessionStorage.setItem(draftKey(key), ta.value); } catch (e) {}
+    });
+    syncSaveState(form);
+  }
+  function wireModes() {
+    if (clientMounted()) return;
+    var modes = document.querySelector('.doc-modes');
+    if (!modes || modes.dataset.modesWired) return;
+    modes.dataset.modesWired = '1';
+    modes.querySelectorAll('.doc-mode-tab').forEach(function (label) {
+      label.addEventListener('click', function () {
+        var id = label.getAttribute('for');
+        var ta = modes.querySelector('textarea[name="content"]');
+        if (ta && (id === 'doc-mode-edit' || id === 'doc-mode-source')) {
+          // Keyboard users land directly in the editor.
+          setTimeout(function () { ta.focus(); }, 0);
+        }
+      });
+    });
+  }
+  function wireAll() {
+    wireEditor();
+    wireModes();
+  }
+  wireAll();
+  if (!clientMounted()) {
+    mo = new MutationObserver(function () { wireAll(); });
+    mo.observe(document.documentElement, { childList: true, subtree: true });
+  }
 })();
 </script>
 </body>

@@ -10,6 +10,8 @@ pub mod apple_notes;
 pub use apple_calendar::AppleCalendarSourceAdapter;
 pub use apple_notes::AppleNotesSourceAdapter;
 pub mod anytype;
+pub mod notez_rest;
+pub use notez_rest::NotezRestSourceAdapter;
 pub use adapter::{ComposedSourceAdapter, PreparedWrite, SourceCapabilities, WriteResult};
 pub use anytype::AnytypeSourceAdapter;
 pub mod git;

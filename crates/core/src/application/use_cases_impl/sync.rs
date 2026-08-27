@@ -36,6 +36,7 @@ where
         actor_id: &str,
         shared_folder: &Path,
     ) -> Result<crate::sync::PullReport, ApplicationError> {
+        write_check::check_capability(self, "sync")?;
         let source_root = self.require_space_root()?;
         let transport = crate::sync::FolderTransport::new(shared_folder);
         let engine = crate::sync::SyncEngine::new(actor_id, &source_root, transport);
@@ -47,11 +48,20 @@ where
         <Self as crate::application::use_cases::ScanUseCase>::scan_native(self)?;
 
         if !report.conflicts.is_empty() {
-            crate::domain::ProjectionWrite::replace_conflicts(&mut self.store, &report.conflicts)
+            let journaling = crate::application::projector::Journaling::from_parts(
+                self.journal.as_ref(),
+                self.audit.as_ref(),
+                self.actor_principal(),
+                self.now_unix_millis(),
+            );
+            let mut projector =
+                crate::application::projector::Projector::new(&mut self.store, &journaling);
+            projector
+                .replace_conflicts(&report.conflicts)
                 .map_err(|e| ApplicationError::Storage {
-                kind: StorageErrorKind::Sqlite,
-                message: e.to_string(),
-            })?;
+                    kind: StorageErrorKind::Sqlite,
+                    message: e.to_string(),
+                })?;
         }
 
         Ok(report)
@@ -72,6 +82,7 @@ where
         keep_mine: bool,
     ) -> Result<crate::application::writeback::WritebackReport, ApplicationError> {
         use crate::domain::ProjectionReader;
+        write_check::check_capability(self, "sync")?;
         let pending = crate::domain::ProjectionReader::list_conflicts(&self.store)
             .map_err(|e| ApplicationError::Storage {
                 kind: StorageErrorKind::Sqlite,
@@ -114,17 +125,21 @@ where
             source: e.kind(),
         })?;
 
-        // Clear the adjudicated record; keep any others.
-        let remaining: Vec<crate::sync::ConflictRecord> = pending
-            .into_iter()
-            .filter(|c| c.logical_path != logical_path)
-            .collect();
-        crate::domain::ProjectionWrite::replace_conflicts(&mut self.store, &remaining)
+        // Remove only the adjudicated record; preserve unrelated conflicts.
+        let journaling = crate::application::projector::Journaling::from_parts(
+            self.journal.as_ref(),
+            self.audit.as_ref(),
+            self.actor_principal(),
+            self.now_unix_millis(),
+        );
+        let mut projector =
+            crate::application::projector::Projector::new(&mut self.store, &journaling);
+        projector
+            .remove_conflicts(&[logical_path.to_string()])
             .map_err(|e| ApplicationError::Storage {
                 kind: StorageErrorKind::Sqlite,
                 message: e.to_string(),
             })?;
-
         Ok(crate::application::writeback::WritebackReport {
             target_ref: logical_path.to_string(),
             committed: true,

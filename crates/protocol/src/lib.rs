@@ -17,11 +17,13 @@
 //!   the engine parses and rejects them with structured errors so
 //!   every surface shares one validation behavior.
 //!
-//! Response typing is intentionally loose (`serde_json::Value`
-//! payloads produced from domain DTOs) until the domain crate split
-//! lands in M2; requests are the contract that kills divergence.
+//! Response vocabulary is fully typed: see [`response::Response`] —
+//! one variant per operation, payload structs mirroring the engine's
+//! domain DTO shapes with identical JSON field names.
 
 pub mod request;
+pub mod response;
 pub mod schema;
 
 pub use request::Request;
+pub use response::{DocumentUpdateReport, Response};

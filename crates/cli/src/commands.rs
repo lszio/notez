@@ -87,6 +87,23 @@ pub enum Commands {
     /// Synchronization commands (folder push/pull/conflicts)
     Sync(SyncSubcommand),
 
+    /// Execute a restricted, read-only Janet query.
+    #[command(name = "janet", visible_alias = "execute-janet")]
+    Janet {
+        /// Janet script to evaluate.
+        script: String,
+        #[arg(long = "source", alias = "source-id")]
+        source_id: Option<String>,
+        /// Optional document/resource reference scope.
+        #[arg(long = "document", alias = "document-ref")]
+        document_ref: Option<String>,
+        /// Wall-clock budget in milliseconds.
+        #[arg(long = "timeout-ms", alias = "timeout", default_value_t = 2_000)]
+        timeout_ms: u64,
+        /// Maximum serialized result size in bytes.
+        #[arg(long = "result-limit", alias = "limit", default_value_t = 256 * 1024)]
+        result_limit: usize,
+    },
 
     /// Watch the active space for filesystem changes.
     Watch(WatchArgs),

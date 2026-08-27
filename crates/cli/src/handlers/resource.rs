@@ -13,8 +13,8 @@ use std::process::exit;
 use super::{Service, exit_code_for};
 use crate::commands::{QueryArgs, ResourceCommands, ResourceSubcommand};
 use notez_core::application::dispatcher::{ApplicationDispatcher, Response};
-use notez_core::application::ResolveResult;
-use notez_core::domain::{Resource, ResourceKind, ResourceRef};
+use notez_core::domain::{Resource, ResourceRef};
+use notez_protocol::response::{ResourceKind, ResolveResult};
 use notez_protocol::request::{
     DeleteResourceRequest, InspectRulesRequest, ListBySourceRequest, ListRecentRequest,
     ReadResourceRequest, Request, ResolveRequest, ResourcePayload, UpsertResourceRequest,
@@ -56,7 +56,12 @@ pub fn run_resolve(json: bool, service: &mut Service, query: &str) {
 
 pub fn run_query(json: bool, service: &mut Service, args: QueryArgs) {
     let request = Request::QueryResources(notez_protocol::request::QueryResourcesRequest {
-        kind: args.kind.map(|k| ResourceKind::from(k).to_string()),
+        kind: args.kind.map(|k| match k {
+            crate::commands::CliResourceKind::Document => "document".to_string(),
+            crate::commands::CliResourceKind::Heading => "heading".to_string(),
+            crate::commands::CliResourceKind::Attachment => "attachment".to_string(),
+            crate::commands::CliResourceKind::Block => "block".to_string(),
+        }),
         title_contains: args.title_contains,
         exact_ref: args.exact_ref,
         source_id: args.source,
@@ -74,7 +79,7 @@ pub fn run_query(json: bool, service: &mut Service, args: QueryArgs) {
                 println!("{}", serde_json::to_string(&items).unwrap());
             } else {
                 for res in items {
-                    println!("{} {}", res.r#ref, res.title);
+                    println!("{} {}", res.ref_, res.title);
                 }
             }
         }
@@ -96,9 +101,9 @@ pub fn run_read(json: bool, service: &mut Service, r_ref: &str) {
             if json {
                 println!("{}", serde_json::to_string(&res).unwrap());
             } else {
-                println!("Ref:      {}", res.r#ref);
+                println!("Ref:      {}", res.ref_);
                 println!("Title:    {}", res.title);
-                println!("Kind:     {}", res.kind);
+                println!("Kind:     {:?}", res.kind);
                 println!("Locator:  {}", res.locator);
                 println!("Revision: {}", res.revision);
             }
@@ -126,7 +131,7 @@ pub fn run_recent(json: bool, service: &mut Service, limit: usize) {
                 println!("{}", serde_json::to_string(&items).unwrap());
             } else {
                 for res in items {
-                    println!("{} {} ({})", res.r#ref, res.title, res.source_id);
+                    println!("{} {} ({})", res.ref_, res.title, res.source_id);
                 }
             }
         }
@@ -169,6 +174,7 @@ pub fn run_resource(json: bool, service: &mut Service, sub: ResourceSubcommand) 
             };
             match dispatcher.dispatch(Request::UpsertResource(UpsertResourceRequest {
                 resource: payload,
+                expected_revision: None,
             })) {
                 Ok(Response::Done) => {
                     if json {
@@ -187,6 +193,7 @@ pub fn run_resource(json: bool, service: &mut Service, sub: ResourceSubcommand) 
         ResourceCommands::Delete { r_ref } => {
             match dispatcher.dispatch(Request::DeleteResource(DeleteResourceRequest {
                 r_ref: r_ref.clone(),
+                expected_revision: None,
             })) {
                 Ok(Response::Done) => {
                     // The engine validated and deleted the ref; recover
@@ -216,7 +223,7 @@ pub fn run_resource(json: bool, service: &mut Service, sub: ResourceSubcommand) 
                         println!("{}", serde_json::to_string(&items).unwrap());
                     } else {
                         for res in items {
-                            println!("{} {}", res.r#ref, res.title);
+                            println!("{} {}", res.ref_, res.title);
                         }
                     }
                 }

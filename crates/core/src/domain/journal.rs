@@ -5,8 +5,10 @@
 //!
 //! * `SqliteEventJournal` — primary, durable, queryable;
 //! * `NullJournal` — used in tests and as the default when no
-//! journal adapter is wired up (the application refuses to append
-//! writes when wired to `NullJournal`, so tests must inject one).
+//!   journal adapter is wired up. It **accepts and silently discards**
+//!   every append (returning `Ok(0)`), so writes never fail on its
+//!   account; durable, queryable Change history requires attaching
+//!   `SqliteEventJournal` via `ApplicationFacade::attach_journal`.
 //!
 //! All methods are required: silent dropping would defeat the audit
 //! guarantees.
@@ -54,9 +56,10 @@ pub enum JournalError {
     Io(#[from] std::io::Error),
 }
 
-/// A journal that silently discards writes — used in unit tests that
-/// do not care about audit. Returns `Ok(seq)` so the surrounding write
-/// path does not have to know whether persistence happened.
+/// A journal that accepts and discards writes — the default when no
+/// journal adapter is wired up, and a stand-in for unit tests that do
+/// not care about audit. Returns `Ok(0)` for every append so the
+/// surrounding write path is never blocked by journal unavailability.
 #[derive(Debug, Default)]
 pub struct NullJournal;
 

@@ -48,6 +48,8 @@ pub fn tool_name(req: &Request) -> &'static str {
         Request::RelaySync(_) => "sync_relay",
         Request::ListConflicts(_) => "sync_conflicts",
         Request::WritebackResource(_) => "source_writeback",
+        Request::UpdateDocument(_) => "update_document",
+        Request::ExecuteJanet(_) => "execute_janet",
     }
 }
 
@@ -91,11 +93,13 @@ pub fn request_schemas() -> BTreeMap<String, Schema> {
         request::SourceDoctorRequest,
         request::ListJobsRequest,
         request::ArtifactFreshnessRequest,
+        request::ListConflictsRequest,
+        request::WritebackResourceRequest,
+        request::UpdateDocumentRequest,
+        request::ExecuteJanetRequest,
         request::SyncPushRequest,
         request::SyncPullRequest,
         request::RelaySyncRequest,
-        request::ListConflictsRequest,
-        request::WritebackResourceRequest,
     );
     map.insert("request".to_string(), schemars::schema_for!(Request));
     map
@@ -131,7 +135,7 @@ mod tests {
     #[test]
     fn schemas_cover_every_operation() {
         let map = request_schemas();
-        assert_eq!(map.len(), 35); // 34 ops + the request enum
+        assert_eq!(map.len(), 37); // 36 ops + the request enum
         assert!(map.contains_key("query_resources_request"));
         assert!(map.contains_key("transition_task_request"));
         assert!(map.contains_key("request"));
@@ -160,8 +164,7 @@ mod tests {
                 limit: None,
             }),
             Request::ReadResource(ReadResourceRequest { r_ref: String::new() }),
-            Request::DeleteResource(DeleteResourceRequest { r_ref: String::new() }),
-            Request::ListRecent(ListRecentRequest { limit: None }),
+            Request::DeleteResource(DeleteResourceRequest { r_ref: String::new(), expected_revision: None }),
             Request::ListBySource(ListBySourceRequest { source_id: String::new(), limit: None }),
             Request::Resolve(ResolveRequest { query: String::new() }),
             Request::Agenda(AgendaRequest {}),

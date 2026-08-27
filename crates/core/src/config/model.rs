@@ -161,6 +161,8 @@ pub struct SourceInstanceConfig {
     #[serde(default)]
     pub read_only: bool,
     #[serde(default)]
+    pub url: Option<String>,
+    #[serde(default)]
     pub include_paths: Vec<PathBuf>,
     #[serde(default)]
     pub exclude_paths: Vec<PathBuf>,
@@ -168,26 +170,12 @@ pub struct SourceInstanceConfig {
 
 impl From<crate::source::SourceConfig> for SourceInstanceConfig {
     fn from(s: crate::source::SourceConfig) -> Self {
-        Self {
-            id: s.id,
-            kind: s.kind,
-            path: s.path,
-            read_only: s.read_only,
-            include_paths: s.include_paths,
-            exclude_paths: s.exclude_paths,
-        }
+        Self { id: s.id, kind: s.kind, path: s.path, read_only: s.read_only, url: s.url, include_paths: s.include_paths, exclude_paths: s.exclude_paths }
     }
 }
 
 impl SourceInstanceConfig {
     pub fn into_source_config(self) -> crate::source::SourceConfig {
-        crate::source::SourceConfig {
-            id: self.id,
-            kind: self.kind,
-            path: self.path,
-            read_only: self.read_only,
-            include_paths: self.include_paths,
-            exclude_paths: self.exclude_paths,
-        }
+        crate::source::SourceConfig { id: self.id, kind: self.kind, path: self.path, read_only: self.read_only, url: self.url, include_paths: self.include_paths, exclude_paths: self.exclude_paths }
     }
 }

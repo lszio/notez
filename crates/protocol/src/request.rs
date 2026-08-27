@@ -51,6 +51,9 @@ pub struct ReadResourceRequest {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct DeleteResourceRequest {
     pub r_ref: String,
+    /// Optimistic-concurrency guard on the row being deleted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected_revision: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -103,7 +106,59 @@ pub struct ResourcePayload {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct UpsertResourceRequest {
     pub resource: ResourcePayload,
+    /// Optimistic-concurrency guard for this upsert.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected_revision: Option<String>,
+
 }
+/// Overwrite a whole document's content at `source_id` + `locator`.
+/// Field names follow the existing web `update_document` entry-point
+/// semantics: the target is addressed by source + relative locator
+/// (not by ref), the write is guarded by a revision precondition, and
+/// `format` optionally pins the parser (`markdown` | `org`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct UpdateDocumentRequest {
+    pub source_id: String,
+    /// Source-relative POSIX path of the document file.
+    pub locator: String,
+    pub content: String,
+    /// Revision the caller loaded (content hash of the raw bytes).
+    /// Alias of `expected_revision` kept for web parity; the engine
+    /// falls back to it when `expected_revision` is absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_revision: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub format: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected_revision: Option<String>,
+}
+
+/// Run a Janet script in the restricted read-only query runtime.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct ExecuteJanetRequest {
+    pub script: String,
+    /// Optional source scope; empty means the engine's active source.
+    #[serde(default)]
+    pub source_id: Option<String>,
+    /// Optional document/resource scope (a protocol resource ref).
+    #[serde(default)]
+    pub document_ref: Option<String>,
+    #[serde(default = "default_actor")]
+    pub actor_id: String,
+    #[serde(default)]
+    pub expected_revision: Option<String>,
+    #[serde(default)]
+    pub trace_id: Option<String>,
+    /// Wall-clock budget in milliseconds. The adapter may apply a tighter cap.
+    #[serde(default = "default_janet_timeout_ms")]
+    pub timeout_ms: u64,
+    /// Maximum serialized result size in bytes.
+    #[serde(default = "default_janet_result_limit")]
+    pub result_limit: usize,
+}
+
+fn default_janet_timeout_ms() -> u64 { 2_000 }
+fn default_janet_result_limit() -> usize { 256 * 1024 }
 
 
 macro_rules! single_ref_request {
@@ -141,6 +196,9 @@ pub struct TransitionTaskRequest {
     /// current time.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub timestamp: Option<String>,
+    /// Optimistic-concurrency guard for the transition.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected_revision: Option<String>,
 }
 
 // ---- attachments ---------------------------------------------------------------
@@ -232,8 +290,10 @@ pub struct WritebackResourceRequest {
     pub source_id: String,
     pub r_ref: String,
     pub payload: String,
+    /// Optimistic-concurrency guard on the resource being written back.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected_revision: Option<String>,
 }
-
 // ---- envelope ---------------------------------------------------------------------------
 
 /// The complete operation set. Internally tagged so HTTP/web clients
@@ -275,4 +335,6 @@ pub enum Request {
     RelaySync(RelaySyncRequest),
     ListConflicts(ListConflictsRequest),
     WritebackResource(WritebackResourceRequest),
+    UpdateDocument(UpdateDocumentRequest),
+    ExecuteJanet(ExecuteJanetRequest),
 }

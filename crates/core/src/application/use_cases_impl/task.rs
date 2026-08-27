@@ -136,9 +136,31 @@ where
             self.writeback_resource(&source_id, &res.locator, &payload)?;
         }
 
-        // Then update the local projection
-        self.store
-            .replace_source(&source_id, vec![res], vec![], vec![])
+        // Then update the local projection through the event spine: one
+        // ChangeOp::TransitionTask Change, then the source-slice swap.
+        let journaling = crate::application::projector::Journaling::from_parts(
+            self.journal.as_ref(),
+            self.audit.as_ref(),
+            self.actor_principal(),
+            self.now_unix_millis(),
+        );
+        let mut projector =
+            crate::application::projector::Projector::new(&mut self.store, &journaling);
+        projector
+            .replace_source_op(
+                crate::domain::change::ChangeOp::TransitionTask {
+                    from_state: current_todo,
+                    to_state: transition.to_state.clone(),
+                    timestamp: timestamp.to_string(),
+                    closed_timestamp: transition.closed_timestamp.clone(),
+                    logbook_entry: transition.logbook_entry.clone(),
+                },
+                &source_id,
+                vec![res],
+                vec![],
+                vec![],
+                serde_json::Value::Null,
+            )
             .map_err(|e| ApplicationError::Storage {
                 kind: StorageErrorKind::Sqlite,
                 message: e.to_string(),

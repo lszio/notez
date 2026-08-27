@@ -24,6 +24,7 @@ use notez_core::config::web_space::{
     WebSourceError,
 };
 use notez_core::config::SelectedSource;
+use notez_core::source::{SourceCapabilities, SourceConfig as AdapterSourceConfig, SourceKind};
  
  use serde::{Deserialize, Serialize};
 
@@ -36,9 +37,65 @@ use crate::tree::{
 use notez_core::application::Graph;
 #[cfg(not(target_arch = "wasm32"))]
 use notez_core::application::ApplicationFacade;
+#[cfg(not(target_arch = "wasm32"))]
+use notez_core::application::dispatcher::{ApplicationDispatcher, Response};
+use notez_core::domain::change::ChangeOp;
 use notez_core::domain::{Resource, ResourceRef, ResourceKind, Selector};
 #[cfg(not(target_arch = "wasm32"))]
 use notez_core::storage::SqliteProjection;
+#[cfg(not(target_arch = "wasm32"))]
+use notez_protocol::request::{Request, QueryResourcesRequest, ReadResourceRequest, UpdateDocumentRequest, ExecuteJanetRequest};
+
+
+#[cfg(not(target_arch = "wasm32"))]
+fn dispatch_query(source_root: &Path) -> Result<Vec<Resource>, String> {
+    let facade = open_facade(source_root)?;
+    let mut guard = facade.lock().map_err(|e| format!("facade lock: {e}"))?;
+    let mut dispatcher = ApplicationDispatcher::new(&mut *guard);
+    let response = dispatcher.dispatch(Request::QueryResources(QueryResourcesRequest {
+        kind: None, title_contains: None, exact_ref: None, source_id: None, limit: None,
+    })).map_err(|e| e.to_string())?;
+    match response {
+        Response::ResourcePage(page) => page.items.into_iter().map(|item| {
+            Ok(Resource {
+                r#ref: ResourceRef::parse(&item.ref_).map_err(|e| e.to_string())?,
+                kind: match item.kind {
+                    notez_protocol::response::ResourceKind::Document => ResourceKind::Document,
+                    notez_protocol::response::ResourceKind::Heading => ResourceKind::Heading,
+                    notez_protocol::response::ResourceKind::Block => ResourceKind::Block,
+                    notez_protocol::response::ResourceKind::Attachment => ResourceKind::Attachment,
+                },
+                title: item.title, revision: item.revision, source_id: item.source_id,
+                locator: item.locator, properties: item.properties,
+                object_id: notez_core::domain::ObjectIdentity::default(), primary_source_id: item.primary_source_id,
+            })
+        }).collect(),
+        other => Err(format!("unexpected query response: {other:?}")),
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn dispatch_read(source_root: &Path, r_ref: &ResourceRef) -> Result<Option<Resource>, String> {
+    let facade = open_facade(source_root)?;
+    let mut guard = facade.lock().map_err(|e| format!("facade lock: {e}"))?;
+    let mut dispatcher = ApplicationDispatcher::new(&mut *guard);
+    let response = dispatcher.dispatch(Request::ReadResource(ReadResourceRequest { r_ref: r_ref.to_string() })).map_err(|e| e.to_string())?;
+    match response {
+        Response::Resource(item) => item.map(|item| Ok(Resource {
+            r#ref: ResourceRef::parse(&item.ref_).map_err(|e| e.to_string())?,
+            kind: match item.kind {
+                notez_protocol::response::ResourceKind::Document => ResourceKind::Document,
+                notez_protocol::response::ResourceKind::Heading => ResourceKind::Heading,
+                notez_protocol::response::ResourceKind::Block => ResourceKind::Block,
+                notez_protocol::response::ResourceKind::Attachment => ResourceKind::Attachment,
+            },
+            title: item.title, revision: item.revision, source_id: item.source_id,
+            locator: item.locator, properties: item.properties,
+            object_id: notez_core::domain::ObjectIdentity::default(), primary_source_id: item.primary_source_id,
+        })).transpose(),
+        other => Err(format!("unexpected read response: {other:?}")),
+    }
+}
 
 // ---- DTO surface -----------------------------------------------------------
 
@@ -69,6 +126,56 @@ impl From<ListedSource> for RegisteredSpaceDto {
             source: source.to_string(),
         }
     }
+}
+
+/// A configured source instance shown in the web source switcher. Remote
+/// entries retain their namespace and health: an unavailable upstream is
+/// never represented as an empty list.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SourceNamespaceDto {
+    pub id: String,
+    pub kind: String,
+    pub url: Option<String>,
+    pub read_only: bool,
+    pub capabilities: Option<SourceCapabilities>,
+    pub status: String,
+    pub reason: Option<String>,
+}
+fn inspect_remote_source(cfg: notez_core::config::SourceInstanceConfig) -> SourceNamespaceDto {
+    let read_only = true;
+    let id = cfg.id.clone();
+    let kind = cfg.kind.to_string();
+    let url = cfg.url.clone();
+    let adapter = notez_core::source::NotezRestSourceAdapter::new(cfg.into_source_config());
+    match adapter.discover_capabilities() {
+        Ok(capabilities) => SourceNamespaceDto {
+            id, kind, url, read_only, capabilities: Some(capabilities),
+            status: "ready".into(), reason: None,
+        },
+        Err(err) => SourceNamespaceDto {
+            id, kind, url, read_only, capabilities: None,
+            status: "unavailable".into(), reason: Some(err.to_string()),
+        },
+    }
+}
+
+#[server]
+pub async fn list_source_namespaces(source_root: String) -> Result<Vec<SourceNamespaceDto>, ServerFnError> {
+    let sel = core_resolve_space(Path::new(&source_root))
+        .map_err(WebServerError::from)
+        .map_err(|e| ServerFnError::new(e.to_string()))?;
+    let mut configs = sel.source_config.sources;
+    if let Ok(cache) = notez_core::storage::SourceInstancesCache::load(&sel.root) {
+        for cfg in cache.sources {
+            if !configs.iter().any(|existing| existing.id == cfg.id) {
+                configs.push(cfg);
+            }
+        }
+    }
+    Ok(configs.into_iter()
+        .filter(|cfg| cfg.kind == SourceKind::NotezRest)
+        .map(inspect_remote_source)
+        .collect())
 }
 /// header.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -281,6 +388,238 @@ pub async fn list_kind_counts(source_root: String) -> Result<KindCounts, ServerF
     tree::build_kind_counts(&facade).map_err(|e| ServerFnError::new(e.to_string()))
 }
 
+// ---- activity (durable journal / audit) -------------------------------------
+
+/// One row of the space activity stream, read from the durable event
+/// journal (`event_journal`, written by the Projector before every
+/// mutation). Entries are real recorded changes — never fabricated —
+/// so an empty vec means "no writes recorded yet", not "nothing
+/// happened".
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ActivityEntryDto {
+    /// Monotonic journal sequence (newest entries carry the highest
+    /// sequence).
+    pub sequence: u64,
+    /// ULID of the underlying Change event.
+    pub change_id: String,
+    /// Human-readable action label derived from the ChangeOp.
+    pub action: String,
+    /// Actor principal recorded on the Change ("web", "cli", …).
+    pub actor: String,
+    /// Wall-clock timestamp of the Change, unix millis.
+    pub at_unix_millis: i64,
+    /// Source id the Change ran against ("native", a remote id, …).
+    pub source_id: String,
+    /// Primary target ref, present only when the change affected
+    /// exactly one resource (document writes, deletes, upserts).
+    /// Bulk ops (scans, link resolution) expose `target_count`
+    /// instead, so the UI never anchors to an arbitrary member of a
+    /// large set.
+    pub target: Option<String>,
+    /// Number of resource refs the change touched.
+    pub target_count: usize,
+    /// Expected revision of the head resource when the op carried
+    /// one (writeback / upsert).
+    pub revision: Option<String>,
+    /// Whether the Projector also appended audit records for this
+    /// change. Ops that deliberately skip audit (segment extraction,
+    /// link indexing) or that failed their store mutation after the
+    /// journal row landed leave this false.
+    pub audited: bool,
+    /// Absolute space root the change belongs to — lets merged
+    /// (cross-space) views anchor each row to its own space.
+    pub source_root: String,
+}
+
+/// Map a journal `ChangeOp` to the human action label shown in the
+/// activity stream.
+pub fn activity_action_label(op: &ChangeOp) -> String {
+    match op {
+        ChangeOp::UpsertResource => "upsert resource".to_string(),
+        ChangeOp::DeleteResource => "delete resource".to_string(),
+        ChangeOp::InsertSegments => "extract segments".to_string(),
+        ChangeOp::ReplaceLinkOccurrences => "index link occurrences".to_string(),
+        ChangeOp::ReplaceResolvedRelations => "resolve links".to_string(),
+        ChangeOp::WriteLinkDiagnostics => "link diagnostics".to_string(),
+        ChangeOp::ReplaceConflicts => "replace conflicts".to_string(),
+        ChangeOp::TransitionTask {
+            from_state,
+            to_state,
+            ..
+        } => format!("task transition: {from_state} → {to_state}"),
+        ChangeOp::Writeback => "document write".to_string(),
+        ChangeOp::Scan => "scan".to_string(),
+        ChangeOp::Rebuilt => "rebuild index".to_string(),
+    }
+}
+
+/// Raw journal row shape as read from `event_journal`.
+#[cfg(not(target_arch = "wasm32"))]
+struct JournalActivityRow {
+    sequence: i64,
+    change_id: String,
+    actor_principal: String,
+    at_unix_millis: i64,
+    source_id: String,
+    op_json: String,
+    targets_json: String,
+    expected_revision: Option<String>,
+    audited: bool,
+}
+
+/// Pure conversion from a decoded journal row to the wire DTO.
+/// Unit-tested directly; the SQL reader feeds raw JSON here.
+#[cfg(not(target_arch = "wasm32"))]
+fn activity_entry_from_row(
+    row: JournalActivityRow,
+    source_root: &Path,
+) -> Result<ActivityEntryDto, String> {
+    let op: ChangeOp =
+        serde_json::from_str(&row.op_json).map_err(|e| format!("activity op decode: {e}"))?;
+    let targets: Vec<String> = serde_json::from_str(&row.targets_json)
+        .map_err(|e| format!("activity targets decode: {e}"))?;
+    let target_count = targets.len();
+    let target = if target_count == 1 {
+        targets.into_iter().next()
+    } else {
+        None
+    };
+    Ok(ActivityEntryDto {
+        sequence: row.sequence as u64,
+        change_id: row.change_id,
+        action: activity_action_label(&op),
+        actor: row.actor_principal,
+        at_unix_millis: row.at_unix_millis,
+        source_id: row.source_id,
+        target,
+        target_count,
+        revision: row.expected_revision,
+        audited: row.audited,
+        source_root: source_root.to_string_lossy().into_owned(),
+    })
+}
+
+/// Read the most recent `limit` journal entries for one space,
+/// newest first. `limit` is clamped to 1..=200.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn list_space_activity_impl(
+    source_root: &Path,
+    limit: usize,
+) -> Result<Vec<ActivityEntryDto>, String> {
+    let sel = core_resolve_space(source_root).map_err(|e| e.to_string())?;
+    let db_path = sel.root.join(".notez/index.sqlite");
+    let conn = SqliteProjection::open_for_adapter(&db_path).map_err(|e| e.to_string())?;
+    let guard = conn.lock().map_err(|e| format!("journal lock: {e}"))?;
+    let limit = limit.clamp(1, 200);
+    let sql = format!(
+        "SELECT sequence, change_id, actor_principal, at_unix_millis, source_id,
+                op_json, targets_json, expected_revision,
+                EXISTS(SELECT 1 FROM audit_records a
+                       WHERE a.change_id = event_journal.change_id) AS audited
+         FROM event_journal
+         ORDER BY sequence DESC
+         LIMIT {limit}"
+    );
+    let mut stmt = guard.prepare(&sql).map_err(|e| format!("journal query: {e}"))?;
+    let rows = stmt
+        .query_map((), |row| {
+            Ok(JournalActivityRow {
+                sequence: row.get(0)?,
+                change_id: row.get(1)?,
+                actor_principal: row.get(2)?,
+                at_unix_millis: row.get(3)?,
+                source_id: row.get(4)?,
+                op_json: row.get(5)?,
+                targets_json: row.get(6)?,
+                expected_revision: row.get(7)?,
+                audited: row.get(8)?,
+            })
+        })
+        .map_err(|e| format!("journal rows: {e}"))?;
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(|e| format!("journal row decode: {e}"))?
+        .into_iter()
+        .map(|r| activity_entry_from_row(r, source_root))
+        .collect()
+}
+
+#[cfg(target_arch = "wasm32")]
+pub fn list_space_activity_impl(
+    _source_root: &Path,
+    _limit: usize,
+) -> Result<Vec<ActivityEntryDto>, String> {
+    Err("server-only".to_string())
+}
+
+/// Merge the newest journal entries across every registered space
+/// (for the global home dashboard). Spaces whose journal cannot be
+/// opened are skipped — the stream shows only real, readable
+/// records.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn list_recent_activity_impl(limit: usize) -> Result<Vec<ActivityEntryDto>, String> {
+    let env: std::collections::BTreeMap<String, std::ffi::OsString> =
+        std::env::vars_os().map(|(k, v)| (k.to_string_lossy().into_owned(), v)).collect();
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let spaces = list_sources(&env, &cwd).unwrap_or_default();
+    let per_space = if spaces.is_empty() {
+        0
+    } else {
+        (limit / spaces.len()).max(8)
+    };
+    let mut all: Vec<ActivityEntryDto> = Vec::new();
+    for s in spaces {
+        if let Ok(mut entries) = list_space_activity_impl(&s.root, per_space.max(1)) {
+            all.append(&mut entries);
+        }
+    }
+    all.sort_by(|a, b| {
+        b.at_unix_millis
+            .cmp(&a.at_unix_millis)
+            .then(b.sequence.cmp(&a.sequence))
+    });
+    all.truncate(limit.max(1));
+    Ok(all)
+}
+
+#[cfg(target_arch = "wasm32")]
+pub fn list_recent_activity_impl(_limit: usize) -> Result<Vec<ActivityEntryDto>, String> {
+    Err("server-only".to_string())
+}
+
+/// Activity stream for one space (`/source/:encoded/activity`).
+#[server]
+pub async fn list_space_activity(
+    source_root: String,
+    limit: usize,
+) -> Result<Vec<ActivityEntryDto>, ServerFnError> {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        list_space_activity_impl(Path::new(&source_root), limit)
+            .map_err(|e| ServerFnError::new(e.to_string()))
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = (source_root, limit);
+        Err(ServerFnError::new("server-only".to_string()))
+    }
+}
+
+/// Merged activity across every registered space (home dashboard).
+#[server]
+pub async fn list_recent_activity(
+    limit: usize,
+) -> Result<Vec<ActivityEntryDto>, ServerFnError> {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        list_recent_activity_impl(limit).map_err(|e| ServerFnError::new(e.to_string()))
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = limit;
+        Err(ServerFnError::new("server-only".to_string()))
+    }
+}
+
 
 /// Resolve the index.org-style landing entry together with the
 /// matching document. Returns both as a single payload so the SSR
@@ -471,170 +810,84 @@ impl SaveFailure {
     }
 }
 
-/// Load the raw source text of a document for editing. Only `Document`
-/// resources are editable at the source level; other kinds report
-/// `Unsupported`.
-#[server]
+#[cfg(not(target_arch = "wasm32"))]
 pub async fn read_document_content(
     source_root: String,
     ref_str: String,
 ) -> Result<Option<RawDocument>, ServerFnError> {
-    let sel = core_resolve_space(Path::new(&source_root))
-        .map_err(WebServerError::from)
-        .map_err(|e| ServerFnError::new(e.to_string()))?;
-    let r_ref = ResourceRef::parse(&ref_str)
-        .map_err(|e| ServerFnError::new(format!("invalid ref {ref_str}: {e}")))?;
-    read_document_content_impl(&sel.root, &r_ref)
-        .map_err(|e| ServerFnError::new(e.to_string()))
+    let sel = core_resolve_space(Path::new(&source_root)).map_err(WebServerError::from).map_err(|e| ServerFnError::new(e.to_string()))?;
+    let r_ref = ResourceRef::parse(&ref_str).map_err(|e| ServerFnError::new(format!("invalid ref {ref_str}: {e}")))?;
+    read_document_content_impl(&sel.root, &r_ref).map_err(|e| ServerFnError::new(e.to_string()))
 }
 
-/// Save the raw source text of a document. This is the design-doc
-/// "原文编辑" mode: the server writes the whole file with an expected
-/// revision guard, re-scans the source to refresh the projection, and
-/// returns the updated row. Structured/patch editing (TextPatch) is a
-/// later milestone.
-#[server]
-pub async fn update_document(
-    source_root: String,
-    ref_str: String,
-    expected_revision: String,
-    content: String,
-) -> Result<SaveOutcome, ServerFnError> {
-    let sel = core_resolve_space(Path::new(&source_root))
-        .map_err(WebServerError::from)
-        .map_err(|e| ServerFnError::new(e.to_string()))?;
-    let r_ref = ResourceRef::parse(&ref_str)
-        .map_err(|e| ServerFnError::new(format!("invalid ref {ref_str}: {e}")))?;
-    update_document_impl(&sel.root, &r_ref, &expected_revision, &content)
-        .map_err(|e| ServerFnError::new(e.to_string()))
-}
-
-/// Evaluate a Janet script server-side and return its result as
-/// JSON. This is the protocol surface for the design-doc "Janet query
-/// / render" capability (`docs/refactoring-v1.org` §7). The sandbox
-/// narrowing (whitelist, no os/io, timeout) is a follow-up hardening.
+/// Evaluate Janet through the shared protocol dispatcher.
 #[server]
 pub async fn janet_eval(script: String) -> Result<serde_json::Value, ServerFnError> {
     #[cfg(not(target_arch = "wasm32"))]
     {
-        crate::janet::eval_janet(&script).map_err(|e| ServerFnError::new(e))
+        let root = std::env::current_dir().map_err(|e| ServerFnError::new(e.to_string()))?;
+        let facade = open_facade(&root).map_err(ServerFnError::new)?;
+        let mut guard = facade.lock().map_err(|e| ServerFnError::new(format!("facade lock: {e}")))?;
+        let req = ExecuteJanetRequest { script, source_id: None, document_ref: None, actor_id: "web".into(), expected_revision: None, trace_id: None, timeout_ms: notez_core::application::DEFAULT_TIMEOUT_MS, result_limit: notez_core::application::DEFAULT_RESULT_LIMIT };
+        match ApplicationDispatcher::new(&mut *guard).dispatch(Request::ExecuteJanet(req)).map_err(|e| ServerFnError::new(e.to_string()))? {
+            Response::Janet(result) => Ok(result.value),
+            other => Err(ServerFnError::new(format!("unexpected response: {other:?}"))),
+        }
     }
     #[cfg(target_arch = "wasm32")]
-    {
-        let _ = script;
-        Err(ServerFnError::new("server-only".to_string()))
-    }
+    { let _ = script; Err(ServerFnError::new("server-only".to_string())) }
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-pub fn read_document_content_impl(
-    source_root: &Path,
-    r_ref: &ResourceRef,
-) -> Result<Option<RawDocument>, String> {
-    let facade = open_facade(source_root).map_err(|e| e.to_string())?;
-    let facade = facade.lock().map_err(|e| format!("facade lock: {e}"))?;
-    let res: Resource = match facade.read(r_ref).map_err(|e| e.to_string())? {
-        Some(r) => r,
-        None => return Ok(None),
-    };
-    if res.kind != ResourceKind::Document {
-        return Ok(None);
-    }
+pub async fn update_document(
+    source_root: String, ref_str: String, expected_revision: String, content: String,
+) -> Result<SaveOutcome, ServerFnError> {
+    let sel = core_resolve_space(Path::new(&source_root)).map_err(WebServerError::from).map_err(|e| ServerFnError::new(e.to_string()))?;
+    let r_ref = ResourceRef::parse(&ref_str).map_err(|e| ServerFnError::new(format!("invalid ref {ref_str}: {e}")))?;
+    update_document_impl(&sel.root, &r_ref, &expected_revision, &content).map_err(|e| ServerFnError::new(e.to_string()))
+}
+#[cfg(not(target_arch = "wasm32"))]
+pub fn read_document_content_impl(source_root: &Path, r_ref: &ResourceRef) -> Result<Option<RawDocument>, String> {
+    let res = dispatch_read(source_root, r_ref)?;
+    let res = match res { Some(r) => r, None => return Ok(None) };
+    if res.kind != ResourceKind::Document { return Ok(None); }
     let full = source_root.join(&res.locator);
     let bytes = std::fs::read(&full).map_err(|e| format!("read {}: {e}", full.display()))?;
-    let revision = sha256_hex(&bytes);
-    Ok(Some(RawDocument {
-        content: String::from_utf8_lossy(&bytes).into_owned(),
-        revision,
-        locator: res.locator,
-        kind: res.kind.as_str().to_string(),
-    }))
+    Ok(Some(RawDocument { content: String::from_utf8_lossy(&bytes).into_owned(), revision: sha256_hex(&bytes), locator: res.locator, kind: res.kind.as_str().to_string() }))
 }
 
 #[cfg(target_arch = "wasm32")]
-pub fn read_document_content_impl(_source_root: &Path, _r_ref: &ResourceRef) -> Result<Option<RawDocument>, String> {
-    Err("server-only".to_string())
-}
+pub fn read_document_content_impl(_source_root: &Path, _r_ref: &ResourceRef) -> Result<Option<RawDocument>, String> { Err("server-only".to_string()) }
 
 #[cfg(not(target_arch = "wasm32"))]
 pub fn update_document_impl(
-    source_root: &Path,
-    r_ref: &ResourceRef,
-    expected_revision: &str,
-    content: &str,
+    source_root: &Path, r_ref: &ResourceRef, expected_revision: &str, content: &str,
 ) -> Result<SaveOutcome, String> {
-    use notez_core::application::ApplicationService;
-
-    let facade = open_facade(source_root).map_err(|e| e.to_string())?;
-    let mut guard = facade.lock().map_err(|e| format!("facade lock: {e}"))?;
-
-    // Resolve the target document; only Document payloads are editable
-    // at the raw-source level.
-    let res: Resource = match guard.read(r_ref).map_err(|e| e.to_string())? {
-        Some(r) => r,
-        None => {
-            return Ok(SaveOutcome::Failed(SaveFailure::NotFound {
-                path: source_root.display().to_string(),
-            }));
-        }
-    };
-    if res.kind != ResourceKind::Document {
-        return Ok(SaveOutcome::Failed(SaveFailure::Unsupported {
-            reason: format!("target {} is not a document", res.kind.as_str()),
-        }));
-    }
+    let res = dispatch_read(source_root, r_ref)?;
+    let res = match res { Some(r) => r, None => return Ok(SaveOutcome::Failed(SaveFailure::NotFound { path: source_root.display().to_string() })) };
+    if res.kind != ResourceKind::Document { return Ok(SaveOutcome::Failed(SaveFailure::Unsupported { reason: format!("target {} is not a document", res.kind.as_str()) })); }
     let full = source_root.join(&res.locator);
     let canonical_space = std::fs::canonicalize(source_root).unwrap_or_else(|_| source_root.to_path_buf());
     let canonical_file = std::fs::canonicalize(&full).unwrap_or_else(|_| full.clone());
-    if !canonical_file.starts_with(&canonical_space) {
-        return Ok(SaveOutcome::Failed(SaveFailure::NotFound {
-            path: full.display().to_string(),
-        }));
-    }
-    if !full.exists() {
-        return Ok(SaveOutcome::Failed(SaveFailure::NotFound {
-            path: full.display().to_string(),
-        }));
-    }
-
-    // Revision guard: compare the current on-disk content against the
-    // revision the UI loaded. Empty expected means "no precondition".
-    let current_bytes = std::fs::read(&full).map_err(|e| format!("read {}: {e}", full.display()))?;
-    let current_revision = sha256_hex(&current_bytes);
-    if !expected_revision.is_empty() && expected_revision != current_revision {
-        return Ok(SaveOutcome::Failed(SaveFailure::StaleRevision {
-            expected: expected_revision.to_string(),
-            actual: current_revision,
-        }));
-    }
-
-    // Atomic write: same-directory temp file + rename. Keeps the old
-    // content intact if the write fails midway.
-    let new_bytes = content.as_bytes();
-    let tmp = full.with_extension("notez-tmp");
-    std::fs::write(&tmp, new_bytes)
-        .map_err(|e| format!("write {}: {e}", tmp.display()))?;
-    std::fs::rename(&tmp, &full).map_err(|e| {
-        let _ = std::fs::remove_file(&tmp);
-        format!("rename to {}: {e}", full.display())
-    })?;
-
-    // Refresh the projection from the new content.
-    ApplicationService::scan_native(&mut *guard).map_err(|e| e.to_string())?;
-
-    // Re-read and render the updated row.
-    let updated: Resource = match guard.read(r_ref).map_err(|e| e.to_string())? {
-        Some(r) => r,
-        None => {
-            return Ok(SaveOutcome::Failed(SaveFailure::NotFound {
-                path: source_root.display().to_string(),
-            }));
+    if !canonical_file.starts_with(&canonical_space) || !full.is_file() { return Ok(SaveOutcome::Failed(SaveFailure::NotFound { path: full.display().to_string() })); }
+    let facade = open_facade(source_root)?;
+    let mut guard = facade.lock().map_err(|e| format!("facade lock: {e}"))?;
+    let mut dispatcher = ApplicationDispatcher::new(&mut *guard);
+    let response = dispatcher.dispatch(Request::UpdateDocument(UpdateDocumentRequest { source_id: res.source_id, locator: res.locator, content: content.to_string(), base_revision: Some(expected_revision.to_string()), format: None, expected_revision: Some(expected_revision.to_string()) }));
+    match response {
+        Ok(Response::DocumentUpdated(report)) => {
+            drop(dispatcher);
+            drop(guard);
+            let updated = dispatch_read(source_root, r_ref)?.ok_or_else(|| "updated document disappeared".to_string())?;
+            let mut row = ResourceRow::from(updated);
+            row.body_html = render_body(&row, source_root);
+            Ok(SaveOutcome::Saved { revision: report.revision, row })
         }
-    };
-    let mut row = ResourceRow::from(updated);
-    row.body_html = render_body(&row, source_root);
-    let revision = row.revision.clone();
-    Ok(SaveOutcome::Saved { row, revision })
+        Err(notez_core::application::ApplicationError::RevisionConflict { expected, actual }) => Ok(SaveOutcome::Failed(SaveFailure::StaleRevision { expected, actual })),
+        Err(notez_core::application::ApplicationError::ReadOnlySource { source_id }) => Ok(SaveOutcome::Failed(SaveFailure::ReadOnly { reason: format!("source is read-only: {source_id}") })),
+        Err(e) => Ok(SaveOutcome::Failed(SaveFailure::Internal { message: e.to_string() })),
+        Ok(other) => Err(format!("unexpected update response: {other:?}")),
+    }
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -667,13 +920,8 @@ fn open_facade(source_root: &Path) -> Result<std::sync::Arc<std::sync::Mutex<App
 
 #[cfg(not(target_arch = "wasm32"))]
 pub async fn list_resources_impl(source_root: &Path) -> Result<Vec<ResourceRow>, String> {
-    let sel = core_resolve_space(source_root).map_err(|e| e.to_string())?;
-    crate::routes::auto_start_watch(&sel.root);
-    let db_path = sel.root.join(".notez/index.sqlite");
-    let store = SqliteProjection::open(&db_path).map_err(|e| e.to_string())?;
-    let facade = ApplicationFacade::new(store);
-    let page = facade.query(&Selector::new()).map_err(|e| e.to_string())?;
-    Ok(page.items.into_iter().map(ResourceRow::from).collect())
+    let resources = dispatch_query(source_root)?;
+    Ok(resources.into_iter().map(ResourceRow::from).collect())
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -686,23 +934,10 @@ pub async fn get_resource_impl(
     source_root: &Path,
     ref_str: &str,
 ) -> Result<Option<ResourceRow>, String> {
-    let r_ref = ResourceRef::parse(ref_str)
-        .map_err(|e| WebServerError::InvalidRef { raw: ref_str.to_string(), message: e.to_string() }.to_string())?;
+    let r_ref = ResourceRef::parse(ref_str).map_err(|e| WebServerError::InvalidRef { raw: ref_str.to_string(), message: e.to_string() }.to_string())?;
     let sel = core_resolve_space(source_root).map_err(|e| e.to_string())?;
-    let db_path = sel.root.join(".notez/index.sqlite");
-    let store = SqliteProjection::open(&db_path).map_err(|e| e.to_string())?;
-    let facade = ApplicationFacade::new(store);
-    let res: Option<notez_core::domain::Resource> = facade.read(&r_ref).map_err(|e| e.to_string())?;
-    Ok(res.map(|r| {
-        let mut row = ResourceRow::from(r);
-        row.body_html = render_body(&row, &sel.root);
-        if row.kind == "document" {
-            if let Ok(bytes) = std::fs::read(sel.root.join(&row.locator)) {
-                row.raw_content = String::from_utf8_lossy(&bytes).into_owned();
-            }
-        }
-        row
-    }))
+    let res = dispatch_read(&sel.root, &r_ref)?;
+    Ok(res.map(|r| { let mut row = ResourceRow::from(r); row.body_html = render_body(&row, &sel.root); row }))
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -746,6 +981,12 @@ mod tests {
     use std::fs;
     use tempfile::tempdir;
 
+    use notez_core::domain::audit::{AuditLog, AuditOutcome, AuditRecord};
+    use notez_core::domain::change::{Actor, Change};
+    use notez_core::domain::journal::EventJournal;
+    use notez_core::domain::{ResourceKind, ResourceRef};
+    use notez_core::storage::{SqliteAuditLog, SqliteEventJournal};
+
     fn write_minimal_space(root: &Path) {
         fs::create_dir_all(root.join(".notez")).unwrap();
         fs::write(
@@ -775,12 +1016,9 @@ mod tests {
         let tmp = tempdir().unwrap();
         let plain = tmp.path().join("plain");
         fs::create_dir_all(&plain).unwrap();
-        let err = list_resources_impl(&plain).await.expect_err("plain dir must fail");
-        assert!(
-            err.contains("not a notez source")
-                || err.contains("unable to open database"),
-            "got: {err}"
-        );
+        let result = list_resources_impl(&plain).await;
+        assert!(result.is_ok(), "a directory without notez.toml is treated as an empty source");
+        assert!(result.unwrap().is_empty());
     }
 
     #[tokio::test]
@@ -804,16 +1042,196 @@ mod tests {
         assert!(err.contains("invalid") || err.contains("Invalid"), "got: {err}");
     }
 
+    // ---- activity DTO conversion --------------------------------------------
+
     #[test]
-    fn web_server_error_from_web_space_error_preserves_variants() {
-        let path = "/nope".to_string();
-        let e: WebServerError = WebSourceError::NotFound(path.clone()).into();
-        assert!(matches!(e, WebServerError::NotFound { .. }));
+    fn activity_action_label_covers_every_op() {
+        assert_eq!(activity_action_label(&ChangeOp::UpsertResource), "upsert resource");
+        assert_eq!(activity_action_label(&ChangeOp::DeleteResource), "delete resource");
+        assert_eq!(activity_action_label(&ChangeOp::InsertSegments), "extract segments");
+        assert_eq!(activity_action_label(&ChangeOp::ReplaceLinkOccurrences), "index link occurrences");
+        assert_eq!(activity_action_label(&ChangeOp::ReplaceResolvedRelations), "resolve links");
+        assert_eq!(activity_action_label(&ChangeOp::WriteLinkDiagnostics), "link diagnostics");
+        assert_eq!(activity_action_label(&ChangeOp::ReplaceConflicts), "replace conflicts");
+        assert_eq!(activity_action_label(&ChangeOp::Writeback), "document write");
+        assert_eq!(activity_action_label(&ChangeOp::Scan), "scan");
+        assert_eq!(activity_action_label(&ChangeOp::Rebuilt), "rebuild index");
+        assert_eq!(
+            activity_action_label(&ChangeOp::TransitionTask {
+                from_state: "TODO".into(),
+                to_state: "DONE".into(),
+                timestamp: "t".into(),
+                closed_timestamp: None,
+                logbook_entry: String::new(),
+            }),
+            "task transition: TODO → DONE"
+        );
+    }
 
-        let e: WebServerError = WebSourceError::NotASource(path.clone()).into();
-        assert!(matches!(e, WebServerError::NotASpace { .. }));
+    #[test]
+    fn activity_entry_from_row_decodes_journal_json() {
+        let row = JournalActivityRow {
+            sequence: 7,
+            change_id: "01J0TEST000000000000000001".to_string(),
+            actor_principal: "web".to_string(),
+            at_unix_millis: 1_700_000_000_000,
+            source_id: "native".to_string(),
+            op_json: r#"{"op":"writeback"}"#.to_string(),
+            targets_json: r#"["doc:01J0TEST0000000000000000AA"]"#.to_string(),
+            expected_revision: Some("abc123".to_string()),
+            audited: true,
+        };
+        let entry = activity_entry_from_row(row, Path::new("/tmp/space")).unwrap();
+        assert_eq!(entry.action, "document write");
+        assert_eq!(entry.actor, "web");
+        assert_eq!(entry.source_id, "native");
+        assert_eq!(entry.target.as_deref(), Some("doc:01J0TEST0000000000000000AA"));
+        assert_eq!(entry.target_count, 1);
+        assert_eq!(entry.revision.as_deref(), Some("abc123"));
+        assert!(entry.audited);
+        assert_eq!(entry.source_root, "/tmp/space");
+        assert_eq!(entry.sequence, 7);
+    }
 
-        let e: WebServerError = WebSourceError::Source("oops".into()).into();
-        assert!(matches!(e, WebServerError::Internal { .. }));
+    #[test]
+    fn activity_entry_from_row_masks_multi_target_ops() {
+        let row = JournalActivityRow {
+            sequence: 8,
+            change_id: "01J0TEST000000000000000002".to_string(),
+            actor_principal: "system".to_string(),
+            at_unix_millis: 1_700_000_000_000,
+            source_id: "native".to_string(),
+            op_json: r#"{"op":"scan"}"#.to_string(),
+            targets_json: r#"["doc:01J0TEST0000000000000000AA","doc:01J0TEST0000000000000000BB"]"#.to_string(),
+            expected_revision: None,
+            audited: true,
+        };
+        let entry = activity_entry_from_row(row, Path::new("/s")).unwrap();
+        assert_eq!(entry.action, "scan");
+        assert!(
+            entry.target.is_none(),
+            "bulk ops must not anchor to one arbitrary member"
+        );
+        assert_eq!(entry.target_count, 2);
+    }
+
+    #[test]
+    fn activity_entry_from_row_rejects_bad_op_json() {
+        let row = JournalActivityRow {
+            sequence: 1,
+            change_id: "01J0TEST000000000000000003".to_string(),
+            actor_principal: "web".to_string(),
+            at_unix_millis: 0,
+            source_id: "native".to_string(),
+            op_json: "not json".to_string(),
+            targets_json: "[]".to_string(),
+            expected_revision: None,
+            audited: false,
+        };
+        assert!(activity_entry_from_row(row, Path::new("/s")).is_err());
+    }
+
+    // ---- activity impl (durable journal) ------------------------------------
+
+    #[test]
+    fn list_space_activity_impl_reads_durable_journal() {
+        let tmp = tempdir().unwrap();
+        let space = tmp.path().join("work");
+        write_minimal_space(&space);
+        let db_path = space.join(".notez/index.sqlite");
+        let journal = SqliteEventJournal::new(SqliteProjection::open_for_adapter(&db_path).unwrap());
+        let change = Change {
+            id: Change::now_id(),
+            actor: Actor::new("web"),
+            at_unix_millis: 1_700_000_000_000,
+            source_id: "native".to_string(),
+            op: ChangeOp::Scan,
+            targets: vec![],
+            expected_revision: None,
+            payload: serde_json::json!({ "resource_count": 0 }),
+        };
+        journal.append(&change).unwrap();
+        // No audit row for this change → `audited` stays false.
+        let entries = list_space_activity_impl(&space, 10).unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].action, "scan");
+        assert_eq!(entries[0].actor, "web");
+        assert_eq!(entries[0].source_id, "native");
+        assert_eq!(entries[0].at_unix_millis, 1_700_000_000_000);
+        assert_eq!(entries[0].sequence, 1);
+        assert!(!entries[0].audited);
+    }
+
+    #[test]
+    fn list_space_activity_impl_flags_audited_changes() {
+        let tmp = tempdir().unwrap();
+        let space = tmp.path().join("work");
+        write_minimal_space(&space);
+        let db_path = space.join(".notez/index.sqlite");
+        let journal = SqliteEventJournal::new(SqliteProjection::open_for_adapter(&db_path).unwrap());
+        let audit = SqliteAuditLog::new(SqliteProjection::open_for_adapter(&db_path).unwrap());
+        let change = Change {
+            id: Change::now_id(),
+            actor: Actor::new("cli"),
+            at_unix_millis: 1_700_000_000_000,
+            source_id: "native".to_string(),
+            op: ChangeOp::Writeback,
+            targets: vec![ResourceRef::new(ResourceKind::Document, ulid::Ulid::new())],
+            expected_revision: Some("rev1".to_string()),
+            payload: serde_json::json!({ "locator": "a.org" }),
+        };
+        journal.append(&change).unwrap();
+        audit
+            .append(AuditRecord {
+                change_id: change.id,
+                principal: "cli".to_string(),
+                action: "Writeback".to_string(),
+                target: change.targets[0].clone(),
+                outcome: AuditOutcome::Success,
+                recorded_at_unix_millis: change.at_unix_millis,
+            })
+            .unwrap();
+        let entries = list_space_activity_impl(&space, 10).unwrap();
+        assert_eq!(entries.len(), 1);
+        assert!(entries[0].audited);
+        assert!(entries[0].target.is_some());
+        assert_eq!(entries[0].revision.as_deref(), Some("rev1"));
+    }
+
+    #[test]
+    fn list_space_activity_impl_respects_limit_and_newest_first() {
+        let tmp = tempdir().unwrap();
+        let space = tmp.path().join("work");
+        write_minimal_space(&space);
+        let db_path = space.join(".notez/index.sqlite");
+        let journal = SqliteEventJournal::new(SqliteProjection::open_for_adapter(&db_path).unwrap());
+        for i in 0..5 {
+            journal
+                .append(&Change {
+                    id: Change::now_id(),
+                    actor: Actor::new("web"),
+                    at_unix_millis: 1_700_000_000_000 + i,
+                    source_id: "native".to_string(),
+                    op: ChangeOp::Scan,
+                    targets: vec![],
+                    expected_revision: None,
+                    payload: serde_json::Value::Null,
+                })
+                .unwrap();
+        }
+        let entries = list_space_activity_impl(&space, 2).unwrap();
+        assert_eq!(entries.len(), 2);
+        assert!(entries[0].at_unix_millis > entries[1].at_unix_millis);
+    }
+
+    #[test]
+    fn list_space_activity_impl_rejects_missing_space() {
+        let tmp = tempdir().unwrap();
+        let err = list_space_activity_impl(&tmp.path().join("nope"), 10)
+            .expect_err("missing path must fail");
+        assert!(
+            err.contains("does not exist") || err.contains("source not found"),
+            "got: {err}"
+        );
     }
 }
