@@ -1,24 +1,20 @@
-//! ScanUseCase impl for `ApplicationFacade`.
+//! ScanUseCase implementation for `Engine`.
 //!
-//! Owns the two native-source scanning paths. Method bodies were
-//! previously inlined in `service.rs`; moving them here is the first
-//! step of the `0.5.x-A1+A3` use-case impl split (spec
-//! `docs/superpowers/specs/2026-08-09-0.5x-a1-a3-usecase-impl-split-and-write-checks-design.org`).
-//!
-//! Every mutation goes through the [`Projector`] so each scan records
+//! Owns the native-source scanning paths and writes observations through
+//! the shared projection and journal pipeline.
 //! a [`ChangeOp::Scan`] Change plus the link-resolution Changes in the
 //! event journal.
 
 use crate::application::link_resolution::LinkResolver;
 use crate::application::projector::{Journaling, Projector};
 use crate::application::service::{
-    ApplicationError, ApplicationFacade, ScanReport, StorageErrorKind,
+    ApplicationError, Engine, ScanReport, StorageErrorKind,
 };
 use crate::application::use_cases::{ResourceUseCase, ScanUseCase};
 use crate::domain::change::ChangeOp;
 use crate::domain::{ProjectionReader, ProjectionStore, ProjectionWrite};
 
-impl<S> ScanUseCase for ApplicationFacade<S>
+impl<S> ScanUseCase for Engine<S>
 where
     S: ProjectionStore,
     S: ProjectionReader<Error = crate::storage::StorageError>
@@ -32,7 +28,7 @@ where
         if self.format_parsers.is_empty() {
             return Err(ApplicationError::Storage {
                 kind: StorageErrorKind::InvalidState,
-                message: "no format parsers registered; call ApplicationService::register_format_parser at composition root before scanning".to_string(),
+                message: "no format parsers registered; call Engine::register_format_parser at composition root before scanning".to_string(),
             });
         }
 
@@ -228,7 +224,7 @@ where
     }
 }
 
-impl<S> ApplicationFacade<S>
+impl<S> Engine<S>
 where
     S: ProjectionStore,
     S: ProjectionReader<Error = crate::storage::StorageError>

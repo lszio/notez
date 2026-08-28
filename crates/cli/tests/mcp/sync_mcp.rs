@@ -1,6 +1,6 @@
 mod common;
 
-use notez_core::application::ApplicationService;
+use notez_core::application::Engine;
 use common::{initialize_request, run_session};
 use serde_json::{Value, json};
 use std::collections::HashMap;
@@ -29,7 +29,7 @@ async fn mcp_sync_push_pull_and_conflicts() {
     .unwrap();
 
     let store_a = SqliteProjection::open(&space_a.join(".notez/index.sqlite")).unwrap();
-    let mut service_a = ApplicationService::new(store_a);
+    let mut service_a = Engine::new(store_a);
 
     let requests = vec![
         initialize_request(1).to_string(),

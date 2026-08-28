@@ -1,11 +1,8 @@
 //! Public capability descriptors.
 //!
-//! `ApplicationFacade` owns a [`CapabilityCatalog`] seeded with the nine
-//! built-in capabilities (one per `core::application::use_cases` trait).
-//! `ApplicationFacade::register_capability` inserts/replaces a
-//! [`CapabilityDescriptor`] in that catalog; the public-facing CLI
-//! `list-capabilities` subcommand and the MCP `list_capabilities` tool
-//! both read the same catalog, so the two surfaces stay in lockstep.
+//! `Engine` owns a [`CapabilityCatalog`] seeded with built-in capabilities.
+//! `Engine::register_capability` updates that catalog; CLI and MCP read the
+//! same descriptors so their capability views remain consistent.
 //!
 //! The catalog is a `HashMap<&'static str, CapabilityDescriptor>` keyed
 //! by id. See [`CapabilityCatalog::with_builtins`] for the canonical
@@ -23,11 +20,8 @@ pub enum Mutability {
 }
 
 /// Stable description of a capability exposed by the system. Capability
-/// descriptors are the unit that MCP tools, CLI subcommands, and
-/// previewer registrations consume. `ApplicationFacade::register_capability`
-/// inserts the descriptor into the live `CapabilityCatalog`; readers such
-/// as `ApplicationFacade::capability_catalog` and the JSON serializers
-/// below observe the resulting set.
+/// Descriptors are the unit that CLI, MCP, and preview registrations consume.
+/// `Engine::register_capability` updates the live catalog used by all surfaces.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CapabilityDescriptor {
     pub id: &'static str,
@@ -78,8 +72,7 @@ impl CapabilityCatalog {
     }
 
     /// Construct a catalog pre-populated with the nine built-in
-    /// capabilities. This is the default state used by
-    /// `ApplicationFacade::new` and `ApplicationFacade::with_source`.
+    /// capabilities. This is the default state used by `Engine` constructors.
     pub fn with_builtins() -> Self {
         let mut c = Self::new();
         c.register(CapabilityDescriptor::new(

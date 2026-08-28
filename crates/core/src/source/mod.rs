@@ -3,7 +3,8 @@ pub mod writer;
 pub mod protocol;
 pub mod registry;
 pub use protocol::{
-    FormatParser, ParsedEntity, ParserError, RawEntity, SourceTransport, TransportError,
+    ChangeObserver, FormatParser, ParsedEntity, ParserError, RawEntity, SourceReader,
+    SourceTransport, SourceWriter, TransportError,
 };
 pub mod apple_calendar;
 pub mod apple_notes;

@@ -62,8 +62,8 @@ impl fmt::Display for JanetScriptError {
             Self::Syntax(m) => write!(f, "syntax error: {m}"),
             Self::Runtime(m) => write!(f, "runtime error: {m}"),
             Self::ForbiddenApi(m) => write!(f, "forbidden api: {m}"),
-            Self::Timeout => write!(f, "script exceeded the {EVAL_TIMEOUT_MS}ms evaluation budget"),
-            Self::ResultTooLarge => write!(f, "result exceeds the {MAX_RESULT_BYTES} byte limit"),
+            Self::Timeout => write!(f, "script exceeded the 2000ms evaluation budget"),
+            Self::ResultTooLarge => write!(f, "result exceeds the 262144 byte limit"),
         }
     }
 }

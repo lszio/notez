@@ -1,4 +1,4 @@
-use crate::application::ApplicationService;
+use crate::application::Engine;
 use crate::domain::{Resource, ResourceKind, ResourceRef};
 use std::collections::BTreeMap;
 use crate::storage::SqliteProjection;
@@ -20,7 +20,7 @@ fn fixture(kind: ResourceKind, ulid_str: &str, title: &str, source_id: &str) -> 
 #[test]
 fn upsert_then_list_recent_then_delete() {
     let store = SqliteProjection::in_memory().unwrap();
-    let mut service = ApplicationService::new(store);
+    let mut service = Engine::new(store);
 
     let r1 = fixture(
         ResourceKind::Document,
@@ -72,7 +72,7 @@ fn upsert_then_list_recent_then_delete() {
 #[test]
 fn upsert_then_update_is_visible_via_query() {
     let store = SqliteProjection::in_memory().unwrap();
-    let mut service = ApplicationService::new(store);
+    let mut service = Engine::new(store);
 
     let mut r = fixture(
         ResourceKind::Heading,
@@ -97,7 +97,7 @@ fn upsert_then_update_is_visible_via_query() {
 #[test]
 fn delete_is_idempotent() {
     let store = SqliteProjection::in_memory().unwrap();
-    let mut service = ApplicationService::new(store);
+    let mut service = Engine::new(store);
 
     let r = fixture(
         ResourceKind::Document,

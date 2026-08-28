@@ -44,6 +44,20 @@ impl JanetExecutor for NativeJanetExecutor {
     }
 }
 
+impl crate::application::ports::ExtensionRuntime for NativeJanetExecutor {
+    fn execute(&self, script: &str, input: &serde_json::Value) -> Result<serde_json::Value, String> {
+        let snapshot = JanetQuerySnapshot { search: input.clone(), ..Default::default() };
+        let request = ExecuteJanetRequest {
+            script: script.to_string(), source_id: None, document_ref: None,
+            actor_id: "extension".into(), expected_revision: None, trace_id: None,
+            timeout_ms: DEFAULT_TIMEOUT_MS, result_limit: DEFAULT_RESULT_LIMIT,
+        };
+        let mut executor = *self;
+        JanetExecutor::execute(&mut executor, &request, &snapshot)
+            .map_err(|(_, message)| message)
+    }
+}
+
 pub fn eval_janet_checked(script: &str) -> Result<serde_json::Value, JanetScriptError> { eval_janet_with_context(script, Duration::from_millis(DEFAULT_TIMEOUT_MS), None, DEFAULT_RESULT_LIMIT) }
 pub fn eval_janet_with_context(script: &str, budget: Duration, context: Option<&JanetQuerySnapshot>, result_limit: usize) -> Result<serde_json::Value, JanetScriptError> {
     if let Some(sym) = scan_forbidden_symbol(script) { return Err(JanetScriptError::ForbiddenApi(format!("script uses forbidden symbol `{sym}`"))); }

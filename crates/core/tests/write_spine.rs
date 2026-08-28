@@ -10,7 +10,7 @@
 
 use notez_core::application::dispatcher::{ApplicationDispatcher, Response};
 use notez_core::application::use_cases::{ResourceUseCase, ScanUseCase, SyncUseCase};
-use notez_core::application::{ApplicationError, ApplicationService};
+use notez_core::application::{ApplicationError, Engine};
 use notez_core::domain::change::ChangeOp;
 use notez_core::domain::journal::{EventJournal, JournalEntry, JournalError};
 use notez_core::domain::{ResourceRef, Selector};
@@ -61,6 +61,12 @@ impl EventJournal for MemJournal {
     fn len(&self) -> Result<u64, JournalError> {
         Ok(self.inner.lock().entries.len() as u64)
     }
+
+    fn activity(&self, limit: usize) -> Result<Vec<notez_core::domain::journal::ActivityRecord>, JournalError> {
+        Ok(self.since(0)?.into_iter().rev().take(limit).map(|entry| notez_core::domain::journal::ActivityRecord {
+            sequence: entry.sequence, change: entry.change, audited: true,
+        }).collect())
+    }
 }
 
 impl MemJournal {
@@ -88,11 +94,11 @@ fn sha256_hex(bytes: &[u8]) -> String {
 
 struct Space {
     dir: tempfile::TempDir,
-    service: ApplicationService<SqliteProjection>,
+    service: Engine<SqliteProjection>,
     journal: MemJournal,
 }
 
-fn build_service(root: &Path, db_path: &Path, journal: MemJournal) -> ApplicationService<SqliteProjection> {
+fn build_service(root: &Path, db_path: &Path, journal: MemJournal) -> Engine<SqliteProjection> {
     let store = SqliteProjection::open(db_path).unwrap();
     let config = notez_core::config::model::SourceConfig {
         version: 2,
@@ -106,7 +112,7 @@ fn build_service(root: &Path, db_path: &Path, journal: MemJournal) -> Applicatio
         link_overrides: serde_json::Value::Null,
     };
     let ctx = notez_core::application::context::SourceContext::new("test", root.to_path_buf(), config);
-    let mut service = ApplicationService::with_source(store, ctx);
+    let mut service = Engine::with_source(store, ctx);
     service.register_format_parser(Box::new(orgmode::OrgParser::new()));
     service.register_format_parser(Box::new(markdown::MarkdownParser::new()));
     service.attach_journal(journal.clone());
@@ -209,8 +215,8 @@ fn stale_revision_rejects_upsert_delete_transition_update_document() {
 
     // Transition with a stale guard is rejected before any write.
     std::fs::write(sp.root().join("tasks.org"), "#+title: Tasks\n\n* NEXT spine task\n").unwrap();
-    <ApplicationService<SqliteProjection> as ScanUseCase>::scan_native(&mut sp.service).unwrap();
-    let page = <ApplicationService<SqliteProjection> as ResourceUseCase>::query(
+    <Engine<SqliteProjection> as ScanUseCase>::scan_native(&mut sp.service).unwrap();
+    let page = <Engine<SqliteProjection> as ResourceUseCase>::query(
         &sp.service,
         &Selector::new().with_title_contains("spine task"),
     )
@@ -232,7 +238,7 @@ fn stale_revision_rejects_upsert_delete_transition_update_document() {
     // update_document with a stale base_revision is rejected; the actual
     // side is the content hash of the raw file bytes.
     std::fs::write(sp.root().join("hello.md"), "# Hello\n\nfirst\n").unwrap();
-    <ApplicationService<SqliteProjection> as ScanUseCase>::scan_native(&mut sp.service).unwrap();
+    <Engine<SqliteProjection> as ScanUseCase>::scan_native(&mut sp.service).unwrap();
     let err = sp
         .dispatch(Request::UpdateDocument(UpdateDocumentRequest {
             source_id: "native".to_string(),
@@ -347,7 +353,7 @@ fn scan_federation_journals_scan_changes() {
 #[test]
 fn update_document_journals_writeback_and_rescan() {
     let mut sp = space_with(&[("a.md", "# A\n\nbody a\n")]);
-    <ApplicationService<SqliteProjection> as ScanUseCase>::scan_native(&mut sp.service).unwrap();
+    <Engine<SqliteProjection> as ScanUseCase>::scan_native(&mut sp.service).unwrap();
 
     let resp = sp
         .dispatch(Request::UpdateDocument(UpdateDocumentRequest {
@@ -390,8 +396,8 @@ fn transition_task_journals_transition_op() {
         "tasks.org",
         "#+title: Tasks\n\n* NEXT spine transition\n",
     )]);
-    <ApplicationService<SqliteProjection> as ScanUseCase>::scan_native(&mut sp.service).unwrap();
-    let page = <ApplicationService<SqliteProjection> as ResourceUseCase>::query(
+    <Engine<SqliteProjection> as ScanUseCase>::scan_native(&mut sp.service).unwrap();
+    let page = <Engine<SqliteProjection> as ResourceUseCase>::query(
         &sp.service,
         &Selector::new().with_title_contains("spine transition"),
     )
@@ -545,10 +551,10 @@ fn sync_pull_and_resolve_conflict_journal_changes() {
     // resolve_conflict clears the adjudicated record through the Projector.
     sp.journal.clear();
     let pending =
-        <ApplicationService<SqliteProjection> as SyncUseCase>::list_conflicts(&mut sp.service)
+        <Engine<SqliteProjection> as SyncUseCase>::list_conflicts(&mut sp.service)
             .unwrap();
     assert_eq!(pending.len(), 1);
-    let report = <ApplicationService<SqliteProjection> as SyncUseCase>::resolve_conflict(
+    let report = <Engine<SqliteProjection> as SyncUseCase>::resolve_conflict(
         &mut sp.service,
         shared.path(),
         "note.md",
@@ -563,7 +569,7 @@ fn sync_pull_and_resolve_conflict_journal_changes() {
         "resolve_conflict must journal ReplaceConflicts; got {ops:?}"
     );
     assert!(
-        <ApplicationService<SqliteProjection> as SyncUseCase>::list_conflicts(&mut sp.service)
+        <Engine<SqliteProjection> as SyncUseCase>::list_conflicts(&mut sp.service)
             .unwrap()
             .is_empty(),
         "adjudicated conflict must be cleared"

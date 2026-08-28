@@ -1,14 +1,14 @@
-//! InspectUseCase impl for `ApplicationFacade`.
+//! InspectUseCase implementation for `Engine`.
 //!
 //! Method bodies were previously inlined in `service.rs`; this file
 //! is part of the 0.5.x-A1+A3 use-case impl split.
 
-use crate::application::service::{ApplicationError, ApplicationFacade, StorageErrorKind};
+use crate::application::service::{ApplicationError, Engine, StorageErrorKind};
 use crate::domain::{ProjectionReader, ProjectionWrite};
 use crate::application::use_cases::InspectUseCase;
 use crate::domain::{InspectResult, ProjectionStore, ResourceRef};
 
-impl<S> InspectUseCase for ApplicationFacade<S>
+impl<S> InspectUseCase for Engine<S>
 where
     S: ProjectionStore,
     S: ProjectionReader<Error = crate::storage::StorageError>

@@ -36,7 +36,7 @@ use crate::tree::{
 };
 use notez_core::application::Graph;
 #[cfg(not(target_arch = "wasm32"))]
-use notez_core::application::ApplicationFacade;
+use notez_core::application::Engine;
 #[cfg(not(target_arch = "wasm32"))]
 use notez_core::application::dispatcher::{ApplicationDispatcher, Response};
 use notez_core::domain::change::ChangeOp;
@@ -49,8 +49,8 @@ use notez_protocol::request::{Request, QueryResourcesRequest, ReadResourceReques
 
 #[cfg(not(target_arch = "wasm32"))]
 fn dispatch_query(source_root: &Path) -> Result<Vec<Resource>, String> {
-    let facade = open_facade(source_root)?;
-    let mut guard = facade.lock().map_err(|e| format!("facade lock: {e}"))?;
+    let engine = open_engine(source_root)?;
+    let mut guard = engine.lock().map_err(|e| format!("engine lock: {e}"))?;
     let mut dispatcher = ApplicationDispatcher::new(&mut *guard);
     let response = dispatcher.dispatch(Request::QueryResources(QueryResourcesRequest {
         kind: None, title_contains: None, exact_ref: None, source_id: None, limit: None,
@@ -76,8 +76,8 @@ fn dispatch_query(source_root: &Path) -> Result<Vec<Resource>, String> {
 
 #[cfg(not(target_arch = "wasm32"))]
 fn dispatch_read(source_root: &Path, r_ref: &ResourceRef) -> Result<Option<Resource>, String> {
-    let facade = open_facade(source_root)?;
-    let mut guard = facade.lock().map_err(|e| format!("facade lock: {e}"))?;
+    let engine = open_engine(source_root)?;
+    let mut guard = engine.lock().map_err(|e| format!("engine lock: {e}"))?;
     let mut dispatcher = ApplicationDispatcher::new(&mut *guard);
     let response = dispatcher.dispatch(Request::ReadResource(ReadResourceRequest { r_ref: r_ref.to_string() })).map_err(|e| e.to_string())?;
     match response {
@@ -358,7 +358,7 @@ pub async fn list_space_tree(source_root: String) -> Result<TreeNode, ServerFnEr
         .map_err(WebServerError::from)
         .map_err(|e| ServerFnError::new(e.to_string()))?;
     crate::routes::auto_start_watch(&sel.root);
-    let facade = open_facade(&sel.root).map_err(|e| ServerFnError::new(e.to_string()))?;
+    let facade = open_engine(&sel.root).map_err(|e| ServerFnError::new(e.to_string()))?;
     let facade = facade.lock().map_err(|e| ServerFnError::new(format!("facade lock: {e}")))?;
     tree::build_tree_with_disk(&facade, &sel.root).map_err(|e| ServerFnError::new(e.to_string()))
 }
@@ -370,7 +370,7 @@ pub async fn list_source_files(source_root: String) -> Result<Vec<SourceFileRow>
         .map_err(WebServerError::from)
         .map_err(|e| ServerFnError::new(e.to_string()))?;
     crate::routes::auto_start_watch(&sel.root);
-    let facade = open_facade(&sel.root).map_err(|e| ServerFnError::new(e.to_string()))?;
+    let facade = open_engine(&sel.root).map_err(|e| ServerFnError::new(e.to_string()))?;
     let facade = facade.lock().map_err(|e| ServerFnError::new(format!("facade lock: {e}")))?;
     tree::build_source_files(&facade, &sel.root)
         .map_err(|e| ServerFnError::new(e.to_string()))
@@ -383,7 +383,7 @@ pub async fn list_kind_counts(source_root: String) -> Result<KindCounts, ServerF
         .map_err(WebServerError::from)
         .map_err(|e| ServerFnError::new(e.to_string()))?;
     crate::routes::auto_start_watch(&sel.root);
-    let facade = open_facade(&sel.root).map_err(|e| ServerFnError::new(e.to_string()))?;
+    let facade = open_engine(&sel.root).map_err(|e| ServerFnError::new(e.to_string()))?;
     let facade = facade.lock().map_err(|e| ServerFnError::new(format!("facade lock: {e}")))?;
     tree::build_kind_counts(&facade).map_err(|e| ServerFnError::new(e.to_string()))
 }
@@ -453,93 +453,47 @@ pub fn activity_action_label(op: &ChangeOp) -> String {
     }
 }
 
-/// Raw journal row shape as read from `event_journal`.
-#[cfg(not(target_arch = "wasm32"))]
-struct JournalActivityRow {
-    sequence: i64,
-    change_id: String,
-    actor_principal: String,
-    at_unix_millis: i64,
-    source_id: String,
-    op_json: String,
-    targets_json: String,
-    expected_revision: Option<String>,
-    audited: bool,
-}
 
-/// Pure conversion from a decoded journal row to the wire DTO.
-/// Unit-tested directly; the SQL reader feeds raw JSON here.
+/// Convert the protocol-neutral journal record into the web activity DTO.
 #[cfg(not(target_arch = "wasm32"))]
-fn activity_entry_from_row(
-    row: JournalActivityRow,
+fn activity_entry_from_change(
+    record: notez_core::domain::journal::ActivityRecord,
     source_root: &Path,
 ) -> Result<ActivityEntryDto, String> {
-    let op: ChangeOp =
-        serde_json::from_str(&row.op_json).map_err(|e| format!("activity op decode: {e}"))?;
-    let targets: Vec<String> = serde_json::from_str(&row.targets_json)
-        .map_err(|e| format!("activity targets decode: {e}"))?;
-    let target_count = targets.len();
+    let target_count = record.change.targets.len();
     let target = if target_count == 1 {
-        targets.into_iter().next()
+        Some(record.change.targets[0].to_string())
     } else {
         None
     };
     Ok(ActivityEntryDto {
-        sequence: row.sequence as u64,
-        change_id: row.change_id,
-        action: activity_action_label(&op),
-        actor: row.actor_principal,
-        at_unix_millis: row.at_unix_millis,
-        source_id: row.source_id,
+        sequence: record.sequence,
+        change_id: record.change.id.to_string(),
+        action: activity_action_label(&record.change.op),
+        actor: record.change.actor.principal,
+        at_unix_millis: record.change.at_unix_millis,
+        source_id: record.change.source_id,
         target,
         target_count,
-        revision: row.expected_revision,
-        audited: row.audited,
+        revision: record.change.expected_revision,
+        audited: record.audited,
         source_root: source_root.to_string_lossy().into_owned(),
     })
 }
 
-/// Read the most recent `limit` journal entries for one space,
-/// newest first. `limit` is clamped to 1..=200.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn list_space_activity_impl(
     source_root: &Path,
     limit: usize,
 ) -> Result<Vec<ActivityEntryDto>, String> {
-    let sel = core_resolve_space(source_root).map_err(|e| e.to_string())?;
-    let db_path = sel.root.join(".notez/index.sqlite");
-    let conn = SqliteProjection::open_for_adapter(&db_path).map_err(|e| e.to_string())?;
-    let guard = conn.lock().map_err(|e| format!("journal lock: {e}"))?;
-    let limit = limit.clamp(1, 200);
-    let sql = format!(
-        "SELECT sequence, change_id, actor_principal, at_unix_millis, source_id,
-                op_json, targets_json, expected_revision,
-                EXISTS(SELECT 1 FROM audit_records a
-                       WHERE a.change_id = event_journal.change_id) AS audited
-         FROM event_journal
-         ORDER BY sequence DESC
-         LIMIT {limit}"
-    );
-    let mut stmt = guard.prepare(&sql).map_err(|e| format!("journal query: {e}"))?;
-    let rows = stmt
-        .query_map((), |row| {
-            Ok(JournalActivityRow {
-                sequence: row.get(0)?,
-                change_id: row.get(1)?,
-                actor_principal: row.get(2)?,
-                at_unix_millis: row.get(3)?,
-                source_id: row.get(4)?,
-                op_json: row.get(5)?,
-                targets_json: row.get(6)?,
-                expected_revision: row.get(7)?,
-                audited: row.get(8)?,
-            })
-        })
-        .map_err(|e| format!("journal rows: {e}"))?;
-    rows.collect::<Result<Vec<_>, _>>()
-        .map_err(|e| format!("journal row decode: {e}"))?
+    let engine = open_engine(source_root)?;
+    let guard = engine.lock().map_err(|e| format!("engine lock: {e}"))?;
+    let records = guard
+        .journal_activity(limit.clamp(1, 200))
+        .map_err(|e| e.to_string())?;
+    records
         .into_iter()
-        .map(|r| activity_entry_from_row(r, source_root))
+        .map(|record| activity_entry_from_change(record, source_root))
         .collect()
 }
 
@@ -638,7 +592,7 @@ pub async fn load_index_document(source_root: String) -> Result<IndexDocumentDto
         .map_err(WebServerError::from)
         .map_err(|e| ServerFnError::new(e.to_string()))?;
     crate::routes::auto_start_watch(&sel.root);
-    let facade = open_facade(&sel.root).map_err(|e| ServerFnError::new(e.to_string()))?;
+    let facade = open_engine(&sel.root).map_err(|e| ServerFnError::new(e.to_string()))?;
     let mut facade = facade.lock().map_err(|e| ServerFnError::new(format!("facade lock: {e}")))?;
     let entry = tree::build_index_entry(&facade).map_err(|e| ServerFnError::new(e.to_string()))?;
     let document = entry
@@ -666,7 +620,7 @@ pub async fn resolve_index(source_root: String) -> Result<Option<IndexEntryDto>,
         .map_err(WebServerError::from)
         .map_err(|e| ServerFnError::new(e.to_string()))?;
     crate::routes::auto_start_watch(&sel.root);
-    let facade = open_facade(&sel.root).map_err(|e| ServerFnError::new(e.to_string()))?;
+    let facade = open_engine(&sel.root).map_err(|e| ServerFnError::new(e.to_string()))?;
     let facade = facade.lock().map_err(|e| ServerFnError::new(format!("facade lock: {e}")))?;
     tree::build_index_entry(&facade).map_err(|e| ServerFnError::new(e.to_string()))
 }
@@ -692,7 +646,7 @@ pub async fn render_preview(
         .map_err(WebServerError::from)
         .map_err(|e| ServerFnError::new(e.to_string()))?;
     crate::routes::auto_start_watch(&sel.root);
-    let facade = open_facade(&sel.root).map_err(|e| ServerFnError::new(e.to_string()))?;
+    let facade = open_engine(&sel.root).map_err(|e| ServerFnError::new(e.to_string()))?;
     let row_opt = {
         let facade = facade.lock().map_err(|e| ServerFnError::new(format!("facade lock: {e}")))?;
         if let Ok(r_ref) = notez_core::domain::ResourceRef::parse(&locator) {
@@ -744,7 +698,7 @@ pub async fn search_palette(
         .map_err(WebServerError::from)
         .map_err(|e| ServerFnError::new(e.to_string()))?;
     crate::routes::auto_start_watch(&sel.root);
-    let facade = open_facade(&sel.root).map_err(|e| ServerFnError::new(e.to_string()))?;
+    let facade = open_engine(&sel.root).map_err(|e| ServerFnError::new(e.to_string()))?;
     let facade = facade.lock().map_err(|e| ServerFnError::new(format!("facade lock: {e}")))?;
     tree::build_search(&facade, &sel.root, &q)
         .map_err(|e| ServerFnError::new(e.to_string()))
@@ -810,7 +764,7 @@ impl SaveFailure {
     }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
+#[server]
 pub async fn read_document_content(
     source_root: String,
     ref_str: String,
@@ -826,7 +780,7 @@ pub async fn janet_eval(script: String) -> Result<serde_json::Value, ServerFnErr
     #[cfg(not(target_arch = "wasm32"))]
     {
         let root = std::env::current_dir().map_err(|e| ServerFnError::new(e.to_string()))?;
-        let facade = open_facade(&root).map_err(ServerFnError::new)?;
+        let facade = open_engine(&root).map_err(ServerFnError::new)?;
         let mut guard = facade.lock().map_err(|e| ServerFnError::new(format!("facade lock: {e}")))?;
         let req = ExecuteJanetRequest { script, source_id: None, document_ref: None, actor_id: "web".into(), expected_revision: None, trace_id: None, timeout_ms: notez_core::application::DEFAULT_TIMEOUT_MS, result_limit: notez_core::application::DEFAULT_RESULT_LIMIT };
         match ApplicationDispatcher::new(&mut *guard).dispatch(Request::ExecuteJanet(req)).map_err(|e| ServerFnError::new(e.to_string()))? {
@@ -870,7 +824,7 @@ pub fn update_document_impl(
     let canonical_space = std::fs::canonicalize(source_root).unwrap_or_else(|_| source_root.to_path_buf());
     let canonical_file = std::fs::canonicalize(&full).unwrap_or_else(|_| full.clone());
     if !canonical_file.starts_with(&canonical_space) || !full.is_file() { return Ok(SaveOutcome::Failed(SaveFailure::NotFound { path: full.display().to_string() })); }
-    let facade = open_facade(source_root)?;
+    let facade = open_engine(source_root)?;
     let mut guard = facade.lock().map_err(|e| format!("facade lock: {e}"))?;
     let mut dispatcher = ApplicationDispatcher::new(&mut *guard);
     let response = dispatcher.dispatch(Request::UpdateDocument(UpdateDocumentRequest { source_id: res.source_id, locator: res.locator, content: content.to_string(), base_revision: Some(expected_revision.to_string()), format: None, expected_revision: Some(expected_revision.to_string()) }));
@@ -913,9 +867,9 @@ fn sha256_hex(bytes: &[u8]) -> String {
 /// Open the projection store + facade for `source_root`, going through
 /// the `WebState` cache so repeat calls reuse the same SQLite handle.
 #[cfg(not(target_arch = "wasm32"))]
-fn open_facade(source_root: &Path) -> Result<std::sync::Arc<std::sync::Mutex<ApplicationFacade<SqliteProjection>>>, String> {
+fn open_engine(source_root: &Path) -> Result<std::sync::Arc<std::sync::Mutex<Engine<SqliteProjection>>>, String> {
     let state = crate::routes::state_snapshot();
-    state.facade_for(&source_root.to_path_buf()).map_err(|e| e.to_string())
+    state.engine_for(&source_root.to_path_buf()).map_err(|e| e.to_string())
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -947,11 +901,9 @@ pub async fn get_resource_impl(_space_root: &Path, _ref_str: &str) -> Result<Opt
 
 #[cfg(not(target_arch = "wasm32"))]
 pub async fn list_graph_impl(source_root: &Path) -> Result<Graph, String> {
-    let sel = core_resolve_space(source_root).map_err(|e| e.to_string())?;
-    let db_path = sel.root.join(".notez/index.sqlite");
-    let store = SqliteProjection::open(&db_path).map_err(|e| e.to_string())?;
-    let facade = ApplicationFacade::new(store);
-    Graph::from_facade(&facade).map_err(|e| e.to_string())
+    let engine = open_engine(source_root)?;
+    let guard = engine.lock().map_err(|e| format!("engine lock: {e}"))?;
+    Graph::from_facade(&guard).map_err(|e| e.to_string())
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -961,11 +913,9 @@ pub async fn list_graph_impl(_space_root: &Path) -> Result<Graph, String> {
 
 #[cfg(not(target_arch = "wasm32"))]
 pub async fn neighbor_graph_impl(source_root: &Path, focus_ref: &str) -> Result<Graph, String> {
-    let sel = core_resolve_space(source_root).map_err(|e| e.to_string())?;
-    let db_path = sel.root.join(".notez/index.sqlite");
-    let store = SqliteProjection::open(&db_path).map_err(|e| e.to_string())?;
-    let facade = ApplicationFacade::new(store);
-    Graph::neighborhood(&facade, focus_ref).map_err(|e| e.to_string())
+    let engine = open_engine(source_root)?;
+    let guard = engine.lock().map_err(|e| format!("engine lock: {e}"))?;
+    Graph::neighborhood(&guard, focus_ref).map_err(|e| e.to_string())
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -1068,68 +1018,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn activity_entry_from_row_decodes_journal_json() {
-        let row = JournalActivityRow {
-            sequence: 7,
-            change_id: "01J0TEST000000000000000001".to_string(),
-            actor_principal: "web".to_string(),
-            at_unix_millis: 1_700_000_000_000,
-            source_id: "native".to_string(),
-            op_json: r#"{"op":"writeback"}"#.to_string(),
-            targets_json: r#"["doc:01J0TEST0000000000000000AA"]"#.to_string(),
-            expected_revision: Some("abc123".to_string()),
-            audited: true,
-        };
-        let entry = activity_entry_from_row(row, Path::new("/tmp/space")).unwrap();
-        assert_eq!(entry.action, "document write");
-        assert_eq!(entry.actor, "web");
-        assert_eq!(entry.source_id, "native");
-        assert_eq!(entry.target.as_deref(), Some("doc:01J0TEST0000000000000000AA"));
-        assert_eq!(entry.target_count, 1);
-        assert_eq!(entry.revision.as_deref(), Some("abc123"));
-        assert!(entry.audited);
-        assert_eq!(entry.source_root, "/tmp/space");
-        assert_eq!(entry.sequence, 7);
-    }
-
-    #[test]
-    fn activity_entry_from_row_masks_multi_target_ops() {
-        let row = JournalActivityRow {
-            sequence: 8,
-            change_id: "01J0TEST000000000000000002".to_string(),
-            actor_principal: "system".to_string(),
-            at_unix_millis: 1_700_000_000_000,
-            source_id: "native".to_string(),
-            op_json: r#"{"op":"scan"}"#.to_string(),
-            targets_json: r#"["doc:01J0TEST0000000000000000AA","doc:01J0TEST0000000000000000BB"]"#.to_string(),
-            expected_revision: None,
-            audited: true,
-        };
-        let entry = activity_entry_from_row(row, Path::new("/s")).unwrap();
-        assert_eq!(entry.action, "scan");
-        assert!(
-            entry.target.is_none(),
-            "bulk ops must not anchor to one arbitrary member"
-        );
-        assert_eq!(entry.target_count, 2);
-    }
-
-    #[test]
-    fn activity_entry_from_row_rejects_bad_op_json() {
-        let row = JournalActivityRow {
-            sequence: 1,
-            change_id: "01J0TEST000000000000000003".to_string(),
-            actor_principal: "web".to_string(),
-            at_unix_millis: 0,
-            source_id: "native".to_string(),
-            op_json: "not json".to_string(),
-            targets_json: "[]".to_string(),
-            expected_revision: None,
-            audited: false,
-        };
-        assert!(activity_entry_from_row(row, Path::new("/s")).is_err());
-    }
 
     // ---- activity impl (durable journal) ------------------------------------
 

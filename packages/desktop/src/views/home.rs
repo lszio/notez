@@ -1,10 +1,15 @@
 use dioxus::prelude::*;
-use ui::{Hero, Echo};
+use ui::{NzBadge, NzCard};
 
 #[component]
 pub fn Home() -> Element {
     rsx! {
-        Hero {}
-        Echo {}
+        main { class: "work-surface",
+            NzCard { padded: true,
+                h1 { "Notez" }
+                p { "Knowledge workspace" }
+                NzBadge { text: "Desktop shell".to_string(), tone: "muted".to_string() }
+            }
+        }
     }
 }

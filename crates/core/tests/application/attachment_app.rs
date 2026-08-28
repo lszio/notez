@@ -1,4 +1,4 @@
-use crate::application::ApplicationService;
+use crate::application::Engine;
 use crate::domain::ResourceKind;
 use std::fs;
 use crate::storage::SqliteProjection;
@@ -17,7 +17,7 @@ fn attachment_addition_extraction_and_segment_query() {
     fs::write(&file_path, content).unwrap();
 
     let store = SqliteProjection::open(&db_path).unwrap();
-    let mut service = ApplicationService::new(store);
+    let mut service = Engine::new(store);
 
     let att_ref = service
         .add_attachment(source_root, &file_path, "text/plain")
@@ -69,7 +69,7 @@ fn attachment_locator_is_posix_relative_under_space_root() {
     fs::write(&nested, b"fake-pdf").unwrap();
 
     let store = SqliteProjection::open(&db_path).unwrap();
-    let mut service = ApplicationService::new(store);
+    let mut service = Engine::new(store);
     let att_ref = service
         .add_attachment(source_root, &nested, "application/pdf")
         .unwrap();

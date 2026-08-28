@@ -1,4 +1,4 @@
-use crate::application::ApplicationService;
+use crate::application::Engine;
 use crate::domain::community::Community;
 use crate::domain::{ResourceKind, Selector};
 use std::fs;
@@ -25,7 +25,7 @@ fn community_management_artifact_derivation_and_skill_export() {
     fs::write(&file, content).unwrap();
 
     let store = SqliteProjection::open(&db_path).unwrap();
-    let mut service = ApplicationService::new(store);
+    let mut service = Engine::new(store);
     service.scan_native(source_root).unwrap();
 
     let mut selector = Selector::kind(ResourceKind::Heading);

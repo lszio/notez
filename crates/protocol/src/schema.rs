@@ -16,6 +16,7 @@ pub fn tool_name(req: &Request) -> &'static str {
     match req {
         Request::ScanNative(_) => "scan_native",
         Request::ScanFederation(_) => "scan_federation",
+        Request::CaptureInboxItem(_) => "capture_inbox_item",
         Request::QueryResources(_) => "query",
         Request::ReadResource(_) => "read",
         Request::DeleteResource(_) => "resource_delete",
@@ -93,7 +94,7 @@ pub fn request_schemas() -> BTreeMap<String, Schema> {
         request::SourceDoctorRequest,
         request::ListJobsRequest,
         request::ArtifactFreshnessRequest,
-        request::ListConflictsRequest,
+        request::CaptureInboxItemRequest,
         request::WritebackResourceRequest,
         request::UpdateDocumentRequest,
         request::ExecuteJanetRequest,

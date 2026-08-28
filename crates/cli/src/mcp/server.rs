@@ -25,7 +25,7 @@ use std::collections::BTreeMap;
 use std::sync::{Arc, LazyLock, Mutex};
 
 use notez_core::application::dispatcher::{ApplicationDispatcher, Response};
-use notez_core::application::ApplicationService;
+use notez_core::application::Engine;
 use notez_core::storage::SqliteProjection;
 use notez_protocol::response::ResolveResult;
 use notez_protocol::request::{
@@ -276,22 +276,19 @@ fn space_path(arg: Option<&str>) -> std::path::PathBuf {
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// MCP stdio server exposing notez operations as tools.
-///
-/// Wraps an `ApplicationService<SqliteProjection>` (the production
-/// concrete type) behind a `Mutex` because several notez methods (e.g.
-/// `transition_task`, `sync_push`, `resolve_links`) require `&mut self`.
-/// The mutex is never held across an `.await` point — tool handlers call
+/// Wraps an `Engine<SqliteProjection>` behind a `Mutex` because several notez
+/// operations require mutable access. The mutex is never held across await.
 /// sync methods, serialize the result, and return — so a `std::sync::Mutex`
 /// is sufficient.
 #[derive(Clone)]
 pub struct NotezMcpServer {
-    service: Arc<Mutex<ApplicationService<SqliteProjection>>>,
+    service: Arc<Mutex<Engine<SqliteProjection>>>,
     watch: Arc<notez_core::application::WatchService>,
     tool_router: ToolRouter<Self>,
 }
 
 impl NotezMcpServer {
-    pub fn new(service: ApplicationService<SqliteProjection>) -> Self {
+    pub fn new(service: Engine<SqliteProjection>) -> Self {
         Self {
             service: Arc::new(Mutex::new(service)),
             watch: notez_core::application::WatchService::new(),
@@ -311,7 +308,7 @@ impl NotezMcpServer {
         })
     }
 
-    fn with_service<R>(&self, f: impl FnOnce(&ApplicationService<SqliteProjection>) -> R) -> R {
+    fn with_service<R>(&self, f: impl FnOnce(&Engine<SqliteProjection>) -> R) -> R {
         let guard = self.service.lock().expect("service mutex poisoned");
         f(&*guard)
     }
@@ -319,7 +316,7 @@ impl NotezMcpServer {
     /// Mutable view, for tool handlers that need `&mut self`.
     fn with_service_mut<R>(
         &self,
-        f: impl FnOnce(&mut ApplicationService<SqliteProjection>) -> R,
+        f: impl FnOnce(&mut Engine<SqliteProjection>) -> R,
     ) -> R {
         let mut guard = self.service.lock().expect("service mutex poisoned");
         f(&mut *guard)
@@ -778,7 +775,7 @@ impl NotezMcpServer {
 
     /// List the capabilities the current build exposes. The payload is
     /// byte-equal to the JSON printed by the `notez list-capabilities`
-    /// CLI subcommand; both call into the same `ApplicationFacade`.
+    /// CLI subcommand; both call into the same `Engine`.
     #[tool(description = "List the capabilities the current build exposes")]
     fn list_capabilities(&self) -> Result<CallToolResult, McpError> {
         self.with_service(|svc| text_ok(svc.capabilities_json()))
@@ -885,7 +882,7 @@ impl ServerHandler for NotezMcpServer {
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// Serve MCP over stdin/stdout. Blocks until the peer disconnects.
-pub async fn serve(service: ApplicationService<SqliteProjection>) -> anyhow::Result<()> {
+pub async fn serve(service: Engine<SqliteProjection>) -> anyhow::Result<()> {
     let server = NotezMcpServer::new(service);
     let (stdin, stdout) = rmcp::transport::io::stdio();
     let running: rmcp::service::RunningService<rmcp::RoleServer, NotezMcpServer> =

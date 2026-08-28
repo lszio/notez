@@ -2,8 +2,7 @@
 #
 # Usage:
 #   just                  # list available recipes
-#   just cli              # debug build + run of the CLI
-#   just web              # run the v0.1 Dioxus fullstack SSR server
+#   just web              # Dioxus SSR development server with hot reload
 #   just app              # desktop client (auto-detects platform)
 #   just ios              # iOS simulator (macOS host required)
 #   just android          # Android emulator / device
@@ -100,16 +99,18 @@ cli-web *args:
 cli-build:
     cargo {{_cargo_profile}} build -p {{cli_pkg}} --bin notez
 
-# ---- Web (SSR with the checked-in public shell) -----------------------------
+# ---- Web development --------------------------------------------------------
 #
-# `dx serve --platform server` serves Dioxus' generated SSR shell and does not
-# include this project's `public/index.html` custom shell. That drops the
-# inline stylesheet and progressive-enhancement scripts. Launch the built
-# server binary instead; dioxus::serve resolves `public/` beside the binary.
-#
-# Override bind with `HOST=0.0.0.0 PORT=3030 just web`.
+# `just web` launches the browser target. The Dioxus CLI owns watching,
+# rebuilding, and serving the Web bundle.
 
 web:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    exec dx serve --platform web --package {{web_pkg}} --bin {{web_pkg}} --addr "{{host}}" --port "{{port}}"
+
+# Production-like SSR launch with the custom public shell.
+web-prod:
     #!/usr/bin/env bash
     set -euo pipefail
     if [ -n "{{space}}" ]; then export NOTEZ_SPACE_ROOT="{{space}}"; fi
@@ -117,30 +118,12 @@ web:
     export PORT="{{port}}"
     exec cargo {{_cargo_profile}} run -p {{web_pkg}} --bin {{web_pkg}}
 
-# Use the Dioxus CLI explicitly when hot reload is preferred. This mode does
-# not provide the checked-in custom HTML shell and is therefore not the normal
-# SSR launch path.
+# Explicit Web development alias.
 web-dx:
     #!/usr/bin/env bash
     set -euo pipefail
-    if [ -n "{{space}}" ]; then export NOTEZ_SPACE_ROOT="{{space}}"; fi
-    exec dx serve --platform server --addr "{{host}}" --port "{{port}}"
+    exec dx serve --platform web --package {{web_pkg}} --bin {{web_pkg}} --addr "{{host}}" --port "{{port}}"
 
-# Legacy Dioxus CLI notes retained here for users who need hot reload.
-# The normal `web` recipe intentionally uses the native server binary.
-#
-# `dx serve --platform server` can still be used via `just web-dx`.
-#
-# The native server serves the custom shell, styles, and progressive enhancement.
-#
-# If you change this to `--platform web`, dx additionally compiles the client.
-#
-# The repository's browser client currently uses a fresh mount, not hydration.
-#
-# Keep this distinction explicit so a successful CLI build is not mistaken for
-# a fully hydrated client.
-#
-# End of web launch notes.
 #
 
 # Build the web client only (no run).

@@ -1,8 +1,7 @@
 //! Space context isolation contracts.
 //!
-//! These tests pin the rule that:
-//! - `ApplicationService` never resolves space paths via the current
-//!   working directory.
+//! These tests pin that `Engine` never resolves space paths via the current
+//! working directory.
 //! - `writeback_resource` and related mutation paths fail loudly when the
 //!   targeted source is missing from the space's configuration.
 //! - Constructing a service with an explicit `SourceContext` is the only
@@ -12,7 +11,7 @@ use std::fs;
 use std::path::PathBuf;
 use tempfile::tempdir;
 
-use notez_core::application::ApplicationService;
+use notez_core::application::Engine;
 use notez_core::storage::SqliteProjection;
 
 #[test]
@@ -23,11 +22,8 @@ fn service_construction_does_not_require_current_working_directory() {
     let dir = tempdir().unwrap();
     let db_path = dir.path().join("idx.sqlite");
     let _store = SqliteProjection::open(&db_path).unwrap();
-    let _service = ApplicationService::new(_store);
-    // If ApplicationService implicitly used the current working directory
-    // to find config, it would have failed by this point. We can also
-    // assert the temp directory is empty of any side-effect files written
-    // by the service.
+    let _engine = Engine::new(_store);
+    // If Engine inferred the current working directory, this would fail.
     let nested: Vec<PathBuf> = fs::read_dir(dir.path())
         .unwrap()
         .filter_map(Result::ok)
@@ -64,7 +60,7 @@ fn writeback_resource_fails_when_source_is_not_registered() {
         dir.path().to_path_buf(),
         config,
     );
-    let mut service = ApplicationService::with_source(store, ctx);
+    let mut service = Engine::with_source(store, ctx);
 
     let res = service.scan_native();
     assert!(
@@ -96,7 +92,7 @@ fn writeback_does_not_fall_back_to_dot_for_source_config() {
     let dir = tempdir().unwrap();
     let db_path = dir.path().join("idx.sqlite");
     let store = SqliteProjection::open(&db_path).unwrap();
-    let mut service = ApplicationService::new(store);
+    let mut service = Engine::new(store);
     service.register_format_parser(Box::new(orgmode::OrgParser::new()));
     service.register_format_parser(Box::new(markdown::MarkdownParser::new()));
 

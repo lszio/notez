@@ -1,10 +1,10 @@
-//! TaskUseCase impl for `ApplicationFacade`.
+//! TaskUseCase implementation for `Engine`.
 //!
 //! Method bodies were previously inlined in `service.rs`; this file
 //! is part of the 0.5.x-A1+A3 use-case impl split.
 
 use crate::application::service::{
-    ApplicationError, ApplicationFacade, DocumentErrorKind, StorageErrorKind,
+    ApplicationError, Engine, DocumentErrorKind, StorageErrorKind,
 };
 use crate::application::task_para::{AgendaItem, AgendaView, ParaNode, ParaOverview};
 use crate::domain::{ProjectionReader, ProjectionWrite};
@@ -14,7 +14,7 @@ use crate::document::StateTransition;
 use crate::domain::{ProjectionStore, ResourceRef, Selector};
 use std::path::Path;
 
-impl<S> TaskUseCase for ApplicationFacade<S>
+impl<S> TaskUseCase for Engine<S>
 where
     S: ProjectionStore,
     S: ProjectionReader<Error = crate::storage::StorageError>
@@ -55,16 +55,8 @@ where
         timestamp: &str,
     ) -> Result<crate::document::StateTransition, ApplicationError> {
         write_check::check_capability(self, "task")?;
-        write_check::check_address_uniqueness(
-            self,
-            &crate::domain::ResourceAddress::Ref { r#ref: *r_ref },
-            &r_ref,
-        )?;
         let mut res = <Self as crate::application::use_cases::ResourceUseCase>::read(self, r_ref)?
-            .ok_or_else(|| ApplicationError::NotFound {
-                kind: r_ref.kind(),
-                r_ref: r_ref.clone(),
-            })?;
+            .ok_or_else(|| ApplicationError::NotFound { kind: r_ref.kind(), r_ref: r_ref.clone() })?;
 
         let current_todo = res
             .properties

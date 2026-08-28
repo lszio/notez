@@ -22,7 +22,7 @@ pub use graph::GraphPage;
 pub use home::HomePage;
 pub use layout::use_space_layout;
 pub use list::ListPage;
-pub use palette::{CommandPalette, SearchTrigger};
+pub use palette::{IntentPalette, SearchTrigger};
 pub use panel_files::FilesPanel;
 pub use panel_graph::GraphPanel;
 pub use panel_props::PropertiesPanel;

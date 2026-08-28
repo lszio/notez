@@ -84,6 +84,9 @@ impl SourceAdapter for NotezRestSourceAdapter {
 
 impl SourceTransport for NotezRestSourceAdapter {
     fn fetch_raw(&self) -> Result<Vec<RawEntity>, TransportError> { self.list_resources().map(|rs| rs.into_iter().map(|r| { let locator = r.locator.clone(); RawEntity { locator, mime_type: "application/json".into(), payload: serde_json::to_vec(&r).unwrap_or_default() } }).collect()).map_err(|e| TransportError::Other(e.to_string())) }
+    fn mutate(&self, _locator: &str, _payload: &str) -> Result<(), TransportError> {
+        Err(TransportError::Other("remote Notez transport is read-only".into()))
+    }
 }
 
 fn parse_base_url(url: &str) -> Result<(String, u16, String), SourceError> {

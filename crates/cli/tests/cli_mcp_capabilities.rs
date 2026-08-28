@@ -9,7 +9,7 @@
 //! `list_capabilities` tool surface.
 
 use notez_cli::mcp::NotezMcpServer;
-use notez_core::application::ApplicationService;
+use notez_core::application::Engine;
 use notez_core::storage::SqliteProjection;
 use rmcp::service::ServiceExt;
 use serde_json::{Value, json};
@@ -35,7 +35,7 @@ fn initialize_request(id: u32) -> Value {
 /// Drive an in-process MCP server with a list of newline-delimited
 /// JSON-RPC requests and collect the responses in arrival order.
 async fn run_session(
-    service: ApplicationService<SqliteProjection>,
+    service: Engine<SqliteProjection>,
     requests: Vec<String>,
 ) -> Vec<Value> {
     let (server_stream, client_stream) = tokio::io::duplex(8192);
@@ -94,7 +94,7 @@ async fn run_session(
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn mcp_list_capabilities_payload_matches_facade_helper() {
     let store = SqliteProjection::in_memory().expect("in-memory store");
-    let service = ApplicationService::new(store);
+    let service = Engine::new(store);
     let expected = service.capabilities_json();
 
     let requests = vec![

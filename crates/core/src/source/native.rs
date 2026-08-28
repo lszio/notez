@@ -8,7 +8,6 @@ use crate::source::protocol::{
     FormatParser, ParsedEntity, ParserError, RawEntity, SourceTransport, TransportError,
 };
 use std::fs;
-
 pub struct NativeSourceAdapter {
     inner: ComposedSourceAdapter,
     base_path: PathBuf,
@@ -78,45 +77,11 @@ impl SourceTransport for NativeTransport {
         entities.sort_by(|a, b| a.locator.cmp(&b.locator));
         Ok(entities)
     }
-}
-
-pub struct OrgParser;
-impl FormatParser for OrgParser {
-    fn supports(&self, mime_type: &str) -> bool {
-        mime_type == "text/org"
-    }
-
-    fn parse(&self, entity: &RawEntity, source_id: &str) -> Result<ParsedEntity, ParserError> {
-        // The transport already loaded the bytes; pass them through so
-        // the scanner doesn't re-read from disk using the (relative)
-        // locator as a path.
-        let doc = OrgScanner::parse_bytes(&entity.payload, source_id, &entity.locator)
-            .map_err(|e| ParserError::Other(e.to_string()))?;
-        Ok(ParsedEntity {
-            resources: doc.resources,
-            relations: doc.links,
-            link_occurrences: doc.link_occurrences,
-        })
+    fn mutate(&self, _locator: &str, _payload: &str) -> Result<(), TransportError> {
+        Err(TransportError::Other("native transport mutation requires SourceWriter".into()))
     }
 }
 
-pub struct MarkdownParser;
-impl FormatParser for MarkdownParser {
-    fn supports(&self, mime_type: &str) -> bool {
-        mime_type == "text/markdown"
-    }
-
-    fn parse(&self, entity: &RawEntity, source_id: &str) -> Result<ParsedEntity, ParserError> {
-        // See OrgParser::parse above.
-        let doc = MarkdownScanner::parse_bytes(&entity.payload, source_id, &entity.locator)
-            .map_err(|e| ParserError::Other(e.to_string()))?;
-        Ok(ParsedEntity {
-            resources: doc.resources,
-            relations: doc.links,
-            link_occurrences: doc.link_occurrences,
-        })
-    }
-}
 
 impl NativeSourceAdapter {
     pub fn new(config: SourceConfig) -> Self {
@@ -129,12 +94,30 @@ impl NativeSourceAdapter {
 
         let parsers: Vec<Box<dyn FormatParser>> =
             vec![Box::new(OrgParser), Box::new(MarkdownParser)];
-
         let inner = ComposedSourceAdapter::new(config, Box::new(transport), parsers);
         Self { inner, base_path }
     }
 }
 
+pub struct OrgParser;
+pub struct MarkdownParser;
+impl FormatParser for OrgParser {
+    fn supports(&self, mime_type: &str) -> bool { mime_type == "text/org" }
+    fn parse(&self, entity: &RawEntity, source_id: &str) -> Result<ParsedEntity, ParserError> {
+        let doc = OrgScanner::parse_bytes(&entity.payload, source_id, &entity.locator)
+            .map_err(|e| ParserError::Other(e.to_string()))?;
+        Ok(ParsedEntity { resources: doc.resources, relations: doc.links, link_occurrences: doc.link_occurrences })
+    }
+}
+
+impl FormatParser for MarkdownParser {
+    fn supports(&self, mime_type: &str) -> bool { mime_type == "text/markdown" }
+    fn parse(&self, entity: &RawEntity, source_id: &str) -> Result<ParsedEntity, ParserError> {
+        let doc = MarkdownScanner::parse_bytes(&entity.payload, source_id, &entity.locator)
+            .map_err(|e| ParserError::Other(e.to_string()))?;
+        Ok(ParsedEntity { resources: doc.resources, relations: doc.links, link_occurrences: doc.link_occurrences })
+    }
+}
 impl SourceAdapter for NativeSourceAdapter {
     fn config(&self) -> &SourceConfig {
         self.inner.config()

@@ -1,8 +1,5 @@
-//! Preview decoupling contracts.
-//!
-//! Pin the rule that `PreviewContext` no longer carries a concrete
-//! `ApplicationService<SqliteProjection>`; preview must render strictly
-//! from data passed in by the caller.
+//! Pin that `PreviewContext` carries no concrete engine or storage type.
+//! Preview rendering consumes only caller-provided data.
 
 use notez_core::domain::{Resource, ResourceKind, ResourceRef, ProjectionReader, ProjectionWrite};
 use notez_preview::{PreviewContext, PreviewModel, PreviewerCatalog, default_catalog};

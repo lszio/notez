@@ -1,4 +1,4 @@
-//! `CommandPalette` and `SearchTrigger` — global search overlay.
+//! `IntentPalette` and `SearchTrigger` — global intent overlay.
 //!
 //! Architecture:
 //!
@@ -51,7 +51,7 @@ pub fn SearchTrigger() -> Element {
     }
 }
 #[component]
-pub fn CommandPalette() -> Element {
+pub fn IntentPalette() -> Element {
     // PR9: always render the overlay div, even when "closed". The
     // overlay's CSS `display: none` keeps it hidden, and the inline
     // script in `<Layout>` toggles `.is-open` to show / hide. This

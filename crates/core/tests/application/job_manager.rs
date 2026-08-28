@@ -1,4 +1,4 @@
-use crate::application::ApplicationService;
+use crate::application::Engine;
 use std::fs;
 use crate::storage::SqliteProjection;
 
@@ -11,7 +11,7 @@ fn job_manager_and_artifact_freshness_check() {
     let db_path = dot_notez.join("index.sqlite");
 
     let store = SqliteProjection::open(&db_path).unwrap();
-    let service = ApplicationService::new(store);
+    let service = Engine::new(store);
 
     let jobs = service.list_jobs().unwrap();
     assert_eq!(jobs.len(), 0);

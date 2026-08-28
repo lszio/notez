@@ -9,7 +9,7 @@
 
 use crate::domain::audit::{AuditError, AuditLog, AuditOutcome, AuditRecord};
 use crate::domain::change::{Actor, Change, ChangeOp};
-use crate::domain::journal::{JournalEntry, JournalError};
+use crate::domain::journal::{ActivityRecord, JournalEntry, JournalError};
 use crate::domain::resource::ResourceRef;
 use rusqlite::{Connection, params};
 use serde_json::Value;
@@ -27,49 +27,24 @@ impl SqliteEventJournal {
 
 impl crate::domain::journal::EventJournal for SqliteEventJournal {
     fn append(&self, change: &Change) -> Result<u64, JournalError> {
-        let op_json =
-            serde_json::to_string(&change.op).map_err(|e| JournalError::Schema(e.to_string()))?;
-        let targets_json = serde_json::to_string(
-            &change
-                .targets
-                .iter()
-                .map(|t| t.to_string())
-                .collect::<Vec<_>>(),
-        )
-        .map_err(|e| JournalError::Schema(e.to_string()))?;
-        let payload_json =
-            serde_json::to_string(&change.payload).map_err(|e| JournalError::Schema(e.to_string()))?;
-        let space = change.actor.space.as_deref();
-        let source = change.actor.source.as_deref();
+        let op_json = serde_json::to_string(&change.op).map_err(|e| JournalError::Schema(e.to_string()))?;
+        let targets_json = serde_json::to_string(&change.targets.iter().map(|t| t.to_string()).collect::<Vec<_>>())
+            .map_err(|e| JournalError::Schema(e.to_string()))?;
+        let payload_json = serde_json::to_string(&change.payload).map_err(|e| JournalError::Schema(e.to_string()))?;
         let guard = self.conn.lock().map_err(|e| JournalError::Storage(e.to_string()))?;
-        guard
-            .execute(
-                "INSERT INTO event_journal
-                 (change_id, actor_principal, actor_space, actor_source,
-                  at_unix_millis, source_id, op_json, targets_json,
-                  expected_revision, payload_json)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
-                params![
-                    change.id.to_string(),
-                    change.actor.principal,
-                    space,
-                    source,
-                    change.at_unix_millis,
-                    change.source_id,
-                    op_json,
-                    targets_json,
-                    change.expected_revision,
-                    payload_json,
-                ],
-            )
-            .map_err(|e| JournalError::Storage(e.to_string()))?;
-        let seq: i64 = guard
-            .query_row(
-                "SELECT sequence FROM event_journal WHERE change_id = ?1",
-                params![change.id.to_string()],
-                |r| r.get(0),
-            )
-            .map_err(|e| JournalError::Storage(e.to_string()))?;
+        guard.execute(
+            "INSERT OR IGNORE INTO event_journal
+             (change_id, actor_principal, actor_space, actor_source, at_unix_millis, source_id,
+              op_json, targets_json, expected_revision, payload_json)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+            params![change.id.to_string(), change.actor.principal, change.actor.space,
+                change.actor.source, change.at_unix_millis, change.source_id, op_json,
+                targets_json, change.expected_revision, payload_json],
+        ).map_err(|e| JournalError::Storage(e.to_string()))?;
+        let seq: i64 = guard.query_row(
+            "SELECT sequence FROM event_journal WHERE change_id = ?1",
+            params![change.id.to_string()], |r| r.get(0),
+        ).map_err(|e| JournalError::Storage(e.to_string()))?;
         Ok(seq as u64)
     }
 
@@ -124,10 +99,22 @@ impl crate::domain::journal::EventJournal for SqliteEventJournal {
 
     fn len(&self) -> Result<u64, JournalError> {
         let guard = self.conn.lock().map_err(|e| JournalError::Storage(e.to_string()))?;
-        let n: i64 = guard
-            .query_row("SELECT COUNT(*) FROM event_journal", [], |row| row.get(0))
+        let n: i64 = guard.query_row("SELECT COUNT(*) FROM event_journal", [], |row| row.get(0))
             .map_err(|e| JournalError::Storage(e.to_string()))?;
         Ok(n as u64)
+    }
+
+    fn activity(&self, limit: usize) -> Result<Vec<ActivityRecord>, JournalError> {
+        let entries = self.since(0)?;
+        let guard = self.conn.lock().map_err(|e| JournalError::Storage(e.to_string()))?;
+        entries.into_iter().rev().take(limit).map(|entry| {
+            let audited: bool = guard.query_row(
+                "SELECT EXISTS(SELECT 1 FROM audit_records WHERE change_id = ?1)",
+                params![entry.change.id.to_string()],
+                |row| row.get(0),
+            ).map_err(|e| JournalError::Storage(e.to_string()))?;
+            Ok(ActivityRecord { sequence: entry.sequence, change: entry.change, audited })
+        }).collect()
     }
 }
 

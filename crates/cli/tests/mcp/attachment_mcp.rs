@@ -1,6 +1,6 @@
 mod common;
 
-use notez_core::application::ApplicationService;
+use notez_core::application::Engine;
 use common::{initialize_request, run_session};
 use serde_json::{Value, json};
 use std::collections::HashMap;
@@ -16,7 +16,7 @@ async fn mcp_attachment_add_extract_and_query_segments() {
     fs::write(&file_path, "MCP attachment content for extraction testing.").unwrap();
 
     let store = SqliteProjection::in_memory().unwrap();
-    let mut service = ApplicationService::new(store);
+    let mut service = Engine::new(store);
 
     let att_ref = service
         .add_attachment(source_root, &file_path, "text/plain")

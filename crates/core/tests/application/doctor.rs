@@ -1,4 +1,4 @@
-use crate::application::ApplicationService;
+use crate::application::Engine;
 use std::fs;
 use crate::storage::SqliteProjection;
 
@@ -18,7 +18,7 @@ fn space_doctor_integrity_diagnostics() {
     .unwrap();
 
     let store = SqliteProjection::open(&db_path).unwrap();
-    let mut service = ApplicationService::new(store);
+    let mut service = Engine::new(store);
     service.scan_native(source_root).unwrap();
 
     let report = service.source_doctor(source_root).unwrap();

@@ -1,10 +1,10 @@
-//! AttachmentUseCase impl for `ApplicationFacade`.
+//! AttachmentUseCase implementation for `Engine`.
 //!
 //! Method bodies were previously inlined in `service.rs`; this file
 //! is part of the 0.5.x-A1+A3 use-case impl split.
 
 use crate::application::service::{
-    ApplicationError, ApplicationFacade, DocumentErrorKind, StorageErrorKind,
+    ApplicationError, Engine, DocumentErrorKind, StorageErrorKind,
 };
 use crate::application::use_cases::AttachmentUseCase;
 use crate::domain::{ProjectionReader, ProjectionWrite};
@@ -15,7 +15,7 @@ use crate::domain::{
 };
 use std::path::Path;
 
-impl<S> AttachmentUseCase for ApplicationFacade<S>
+impl<S> AttachmentUseCase for Engine<S>
 where
     S: ProjectionStore,
     S: ProjectionReader<Error = crate::storage::StorageError>

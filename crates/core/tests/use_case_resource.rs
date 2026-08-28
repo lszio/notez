@@ -1,16 +1,16 @@
 //! Contract tests for `ResourceUseCase`.
 
-use notez_core::application::ApplicationFacade;
+use notez_core::application::Engine;
 use notez_core::application::ResolveResult;
 use notez_core::application::use_cases::ResourceUseCase;
 use notez_core::domain::{ProjectionStore, Resource, ResourceKind, ResourceRef, Selector, ProjectionReader, ProjectionWrite};
 use notez_core::storage::SqliteProjection;
 
-fn make_facade() -> (tempfile::TempDir, ApplicationFacade<SqliteProjection>) {
+fn make_facade() -> (tempfile::TempDir, Engine<SqliteProjection>) {
     let dir = tempfile::tempdir().unwrap();
     let db = dir.path().join("idx.sqlite");
     let store = SqliteProjection::open(&db).unwrap();
-    let mut facade = ApplicationFacade::new(store);
+    let mut facade = Engine::new(store);
     facade.register_format_parser(Box::new(orgmode::OrgParser::new()));
     facade.register_format_parser(Box::new(markdown::MarkdownParser::new()));
     (dir, facade)
@@ -31,8 +31,8 @@ fn upsert_then_read_round_trip_via_traits() {
         object_id: notez_core::domain::ObjectIdentity::default(),
         primary_source_id: String::new(),
     };
-    <ApplicationFacade<_> as ResourceUseCase>::upsert_resource(&mut facade, res).unwrap();
-    let got = <ApplicationFacade<_> as ResourceUseCase>::read(&facade, &r_ref).unwrap();
+    <Engine<_> as ResourceUseCase>::upsert_resource(&mut facade, res).unwrap();
+    let got = <Engine<_> as ResourceUseCase>::read(&facade, &r_ref).unwrap();
     assert!(got.is_some());
 }
 
@@ -51,9 +51,9 @@ fn resolve_and_resolve_address_share_lookup() {
         object_id: notez_core::domain::ObjectIdentity::default(),
         primary_source_id: String::new(),
     };
-    <ApplicationFacade<_> as ResourceUseCase>::upsert_resource(&mut facade, res).unwrap();
+    <Engine<_> as ResourceUseCase>::upsert_resource(&mut facade, res).unwrap();
     let r =
-        <ApplicationFacade<_> as ResourceUseCase>::resolve(&facade, "01J000000000000000000000C1")
+        <Engine<_> as ResourceUseCase>::resolve(&facade, "01J000000000000000000000C1")
             .unwrap();
     assert!(matches!(r, ResolveResult::Found(_)));
 }
@@ -61,7 +61,7 @@ fn resolve_and_resolve_address_share_lookup() {
 #[test]
 fn query_returns_empty_selector_page() {
     let (_dir, facade) = make_facade();
-    let page = <ApplicationFacade<_> as ResourceUseCase>::query(&facade, &Selector::new()).unwrap();
+    let page = <Engine<_> as ResourceUseCase>::query(&facade, &Selector::new()).unwrap();
     assert_eq!(page.items.len(), 0);
 }
 
@@ -80,18 +80,18 @@ fn delete_via_trait_removes_resource() {
         object_id: notez_core::domain::ObjectIdentity::default(),
         primary_source_id: String::new(),
     };
-    <ApplicationFacade<_> as ResourceUseCase>::upsert_resource(&mut facade, res).unwrap();
-    <ApplicationFacade<_> as ResourceUseCase>::delete_resource(&mut facade, &r_ref).unwrap();
-    let got = <ApplicationFacade<_> as ResourceUseCase>::read(&facade, &r_ref).unwrap();
+    <Engine<_> as ResourceUseCase>::upsert_resource(&mut facade, res).unwrap();
+    <Engine<_> as ResourceUseCase>::delete_resource(&mut facade, &r_ref).unwrap();
+    let got = <Engine<_> as ResourceUseCase>::read(&facade, &r_ref).unwrap();
     assert!(got.is_none());
 }
 
 #[test]
 fn list_recent_and_list_by_source_return_stable_shape() {
     let (_dir, facade) = make_facade();
-    let r1 = <ApplicationFacade<_> as ResourceUseCase>::list_recent(&facade, 10).unwrap();
+    let r1 = <Engine<_> as ResourceUseCase>::list_recent(&facade, 10).unwrap();
     let r2 =
-        <ApplicationFacade<_> as ResourceUseCase>::list_by_source(&facade, "native", 10).unwrap();
+        <Engine<_> as ResourceUseCase>::list_by_source(&facade, "native", 10).unwrap();
     assert_eq!(r1.len(), 0);
     assert_eq!(r2.len(), 0);
 }

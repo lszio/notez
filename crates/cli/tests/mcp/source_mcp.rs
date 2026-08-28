@@ -1,6 +1,6 @@
 mod common;
 
-use notez_core::application::ApplicationService;
+use notez_core::application::Engine;
 use common::{initialize_request, run_session};
 use serde_json::{Value, json};
 use std::collections::HashMap;
@@ -21,7 +21,7 @@ async fn mcp_source_add_and_list() {
     .unwrap();
 
     let store = SqliteProjection::in_memory().unwrap();
-    let mut service = ApplicationService::new(store);
+    let mut service = Engine::new(store);
 
     let requests = vec![
         initialize_request(1).to_string(),

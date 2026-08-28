@@ -5,6 +5,58 @@ use std::str::FromStr;
 use thiserror::Error;
 use ulid::Ulid;
 
+/// Identity of a configured source within the current Notez instance.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct SourceId(pub String);
+
+impl SourceId {
+    pub fn new(value: impl Into<String>) -> Self { Self(value.into()) }
+}
+
+impl std::fmt::Display for SourceId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { f.write_str(&self.0) }
+}
+
+/// Stable document identity within a source.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct DocumentKey {
+    pub source_id: SourceId,
+    pub source_local_id: String,
+}
+
+/// Content/source revision used for optimistic concurrency.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct Revision(pub String);
+
+impl Revision {
+    pub fn new(value: impl Into<String>) -> Self { Self(value.into()) }
+}
+
+impl std::fmt::Display for Revision {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { f.write_str(&self.0) }
+}
+/// Immutable snapshot of a source-backed document.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DocumentSnapshot {
+    pub key: DocumentKey,
+    pub title: String,
+    pub revision: Revision,
+    pub locator: String,
+    pub raw_content: String,
+}
+
+/// Cross-source object snapshot used by relations and views.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ObjectSnapshot {
+    pub id: ObjectIdentity,
+    pub title: String,
+    pub revision: Revision,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TaskState { Inbox, Next, Waiting, Scheduled, Done, Cancelled }
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ResourceKind {

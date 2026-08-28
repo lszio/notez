@@ -4,8 +4,7 @@
 //! the helper functions below are duplicated into each test via
 //! `mod common;` and `use common::*;` resolve to this file from each test
 //! crate.
-
-use notez_core::application::ApplicationService;
+use notez_core::application::Engine;
 use notez_cli::mcp::NotezMcpServer;
 use rmcp::service::ServiceExt;
 use serde_json::{Value, json};
@@ -43,7 +42,7 @@ pub fn initialize_request(id: u32) -> Value {
 ///
 /// Returns the responses in arrival order.
 pub async fn run_session(
-    service: ApplicationService<SqliteProjection>,
+    service: Engine<SqliteProjection>,
     requests: Vec<String>,
 ) -> Vec<Value> {
     let (server_stream, client_stream) = tokio::io::duplex(8192);

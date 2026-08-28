@@ -15,6 +15,12 @@ pub trait Clock: Send + Sync {
     fn now(&self) -> SystemTime;
 }
 
+/// Native extension runtime boundary. Script adapters must not receive
+/// storage handles or source writers; they operate on serialized snapshots.
+pub trait ExtensionRuntime: Send + Sync {
+    fn execute(&self, script: &str, input: &serde_json::Value) -> Result<serde_json::Value, String>;
+}
+
 pub struct SystemClock;
 
 impl Clock for SystemClock {

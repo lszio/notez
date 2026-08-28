@@ -1,15 +1,15 @@
-//! CommunityUseCase impl for `ApplicationFacade`.
+//! CommunityUseCase implementation for `Engine`.
 //!
 //! Method bodies were previously inlined in `service.rs`; this file
 //! is part of the 0.5.x-A1+A3 use-case impl split.
 
-use crate::application::service::{ApplicationError, ApplicationFacade, StorageErrorKind};
+use crate::application::service::{ApplicationError, Engine, StorageErrorKind};
 use crate::application::use_cases::CommunityUseCase;
 use crate::application::write_check;
 use crate::domain::query::{ProjectionReader, ProjectionStore, ProjectionWrite};
 use crate::domain::community::Community;
 
-impl<S> CommunityUseCase for ApplicationFacade<S>
+impl<S> CommunityUseCase for Engine<S>
 where
     S: ProjectionStore,
     S: ProjectionReader<Error = crate::storage::StorageError>

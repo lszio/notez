@@ -1,4 +1,4 @@
-use crate::application::ApplicationService;
+use crate::application::Engine;
 use std::fs;
 use crate::storage::SqliteProjection;
 
@@ -13,7 +13,7 @@ fn writeback_resource_requires_source_context() {
     let db_path = dot_notez.join("index.sqlite");
 
     let store = SqliteProjection::open(&db_path).unwrap();
-    let service = ApplicationService::new(store);
+    let service = Engine::new(store);
 
     let err = service
         .writeback_resource(
@@ -34,7 +34,7 @@ fn writeback_resource_requires_source_context() {
 fn relay_sync_reports_unsupported() {
     let temp_dir = tempfile::tempdir().unwrap();
     let store = SqliteProjection::in_memory().unwrap();
-    let service = ApplicationService::new(store);
+    let service = Engine::new(store);
 
     let err = service
         .relay_sync("anytype_src", temp_dir.path())

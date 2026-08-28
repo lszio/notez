@@ -16,7 +16,7 @@ pub mod community_app;
 pub mod federation;
 pub mod ports;
 pub mod wire;
-pub use ports::{BlobStore, Clock, FilesystemBlobStore, SystemClock};
+pub use ports::{BlobStore, Clock, ExtensionRuntime, FilesystemBlobStore, SystemClock};
 pub use attachment::ExtractionResult;
 pub mod dispatcher;
 pub mod projector;
@@ -36,7 +36,7 @@ pub mod use_cases_impl;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod watch;
 #[cfg(not(target_arch = "wasm32"))]
-pub use watch::{WatchError, WatchEvent, WatchKind, WatchService, WatchStatus};
+pub use watch::{SourceObservation, WatchError, WatchEvent, WatchKind, WatchService, WatchStatus};
 
 #[cfg(target_arch = "wasm32")]
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -77,8 +77,8 @@ pub use graph::{Graph, GraphEdge, GraphNode, MAX_NODES, layout_force};
 pub mod task_para;
 pub use context::SourceContext;
 pub use service::{
-    ApplicationError, ApplicationFacade, ApplicationService, DocumentErrorKind, ResolveResult,
-    ScanReport, StorageErrorKind,
+    ApplicationError, Engine, DocumentErrorKind, ResolveResult, ScanReport,
+    StorageErrorKind,
 };
 pub use use_cases::{
     ArtifactUseCase, AttachmentUseCase, CommunityUseCase, InspectUseCase, LinkUseCase,

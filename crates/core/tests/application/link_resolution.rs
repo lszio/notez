@@ -1,4 +1,4 @@
-use crate::application::ApplicationService;
+use crate::application::Engine;
 use crate::domain::{LinkDiagnostic, LinkTarget, ResolutionStatus, ResourceAddress, ResourceKind, ResourceRef};
 use std::fs;
 use crate::storage::SqliteProjection;
@@ -33,10 +33,10 @@ fn build_space() -> tempfile::TempDir {
     tmp
 }
 
-fn open_service(root: &std::path::Path) -> ApplicationService<SqliteProjection> {
+fn open_service(root: &std::path::Path) -> Engine<SqliteProjection> {
     let db = root.join(".notez/index.sqlite");
     let store = SqliteProjection::open(&db).unwrap();
-    let mut service = ApplicationService::new(store);
+    let mut service = Engine::new(store);
     service.scan_native(root).unwrap();
     service
 }

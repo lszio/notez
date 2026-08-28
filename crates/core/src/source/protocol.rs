@@ -51,17 +51,11 @@ impl fmt::Display for ParserError {
 
 impl std::error::Error for ParserError {}
 
-/// Resolves "where to get data" and "how to mutate it".
+/// Resolves where source data comes from and how it is mutated.
 pub trait SourceTransport: Send + Sync {
-    /// Iterates the source and produces a stream of raw physical entities.
     fn fetch_raw(&self) -> Result<Vec<RawEntity>, TransportError>;
-
-    /// Optional mutation capability.
-    fn mutate(&self, locator: &str, payload: &str) -> Result<(), TransportError> {
-        let _ = (locator, payload);
-        Err(TransportError::Other(
-            "Mutation not supported by this transport".into(),
-        ))
+    fn mutate(&self, _locator: &str, _payload: &str) -> Result<(), TransportError> {
+        Err(TransportError::Other("source transport mutation not supported".into()))
     }
 }
 
@@ -72,4 +66,22 @@ pub trait FormatParser: Send + Sync {
 
     /// Parses a single raw entity into the standardized semantic model.
     fn parse(&self, entity: &RawEntity, source_id: &str) -> Result<ParsedEntity, ParserError>;
+}
+
+/// Source-level read operations exposed to the engine.
+pub trait SourceReader: Send + Sync {
+    fn list(&self) -> Result<Vec<Resource>, TransportError>;
+    fn read(&self, locator: &str) -> Result<Option<Resource>, TransportError>;
+    fn search(&self, query: &str, limit: usize) -> Result<Vec<Resource>, TransportError>;
+}
+
+/// Source-level write operations. Unsupported providers return a structured error.
+pub trait SourceWriter: Send + Sync {
+    fn write_raw(&self, locator: &str, content: &[u8]) -> Result<(), TransportError>;
+    fn apply_patch(&self, locator: &str, patches: &[crate::source::writer::TextPatch]) -> Result<(), TransportError>;
+}
+
+/// Change observation port for filesystem or remote cursors.
+pub trait ChangeObserver: Send + Sync {
+    fn poll(&self) -> Result<Vec<RawEntity>, TransportError>;
 }

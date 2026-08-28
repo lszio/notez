@@ -1,4 +1,4 @@
-use crate::application::ApplicationService;
+use crate::application::Engine;
 use crate::domain::{LinkTarget, ResolutionStatus, ResourceKind, ResourceRef, Selector};
 use std::collections::HashSet;
 use crate::storage::SqliteProjection;
@@ -73,15 +73,15 @@ fn build_golden_space() -> tempfile::TempDir {
     tmp
 }
 
-fn open_service(root: &std::path::Path) -> ApplicationService<SqliteProjection> {
+fn open_service(root: &std::path::Path) -> Engine<SqliteProjection> {
     let store = SqliteProjection::open(&root.join(".notez/index.sqlite")).unwrap();
-    let mut service = ApplicationService::new(store);
+    let mut service = Engine::new(store);
     service.scan_native(root).unwrap();
     service
 }
 
 fn capture(
-    service: &ApplicationService<SqliteProjection>,
+    service: &Engine<SqliteProjection>,
     source: &ResourceRef,
 ) -> Vec<(String, ResolutionStatus, Vec<String>)> {
     service

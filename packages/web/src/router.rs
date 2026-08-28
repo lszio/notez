@@ -145,6 +145,12 @@ fn url_decode(s: &str) -> String {
 pub enum Route {
     #[route("/", HomePage)]
     Home {},
+    #[route("/inbox", HomePage)]
+    Inbox {},
+    #[route("/today", HomePage)]
+    Today {},
+    #[route("/search", HomePage)]
+    Search {},
     #[route("/source/:encoded", SpaceHome)]
     Space { encoded: String },
     #[route("/source/:encoded/list?:..query", ListPage)]

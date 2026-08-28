@@ -9,7 +9,7 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Redirect, Response};
 use axum::routing::{get, post};
 use toml;
-use notez_core::application::{ApplicationError, ApplicationFacade, SourceContext, WatchError, WatchService};
+use notez_core::application::{ApplicationError, Engine, SourceContext, WatchError, WatchService};
 use notez_core::config::{web_space::{resolve_source as core_resolve_space, WebSourceError}, GlobalConfig, SourceRegistration};
 use notez_core::storage::SqliteProjection;
 use notez_core::application::dispatcher::{ApplicationDispatcher, Response as DispatchResponse};
@@ -38,40 +38,39 @@ pub fn auto_start_watch(source_root: &std::path::Path) {
 #[derive(Clone)]
 pub struct WebState {
     pub watch: Arc<WatchService>,
-    pub facades: Arc<Mutex<HashMap<PathBuf, Arc<Mutex<ApplicationFacade<SqliteProjection>>>>>>,
+    pub engines: Arc<Mutex<HashMap<PathBuf, Arc<Mutex<Engine<SqliteProjection>>>>>>,
 }
 
 impl WebState {
     pub fn new() -> Self {
         Self {
             watch: GLOBAL_WATCH.clone(),
-            facades: Arc::new(Mutex::new(HashMap::new())),
+            engines: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
-    /// Acquire (or create) an `ApplicationFacade` for `source_root`.
-    pub fn facade_for(
+    /// Acquire (or create) an `Engine` for `source_root`.
+    pub fn engine_for(
         &self,
         source_root: &PathBuf,
-    ) -> Result<Arc<Mutex<ApplicationFacade<SqliteProjection>>>, WebRouteError> {
+    ) -> Result<Arc<Mutex<Engine<SqliteProjection>>>, WebRouteError> {
         let canonical = std::fs::canonicalize(source_root).unwrap_or_else(|_| source_root.clone());
         auto_start_watch(&canonical);
         {
-            let cache = self.facades.lock().expect("facade cache poisoned");
+            let cache = self.engines.lock().expect("engine cache poisoned");
             if let Some(f) = cache.get(&canonical) {
                 return Ok(f.clone());
             }
         }
         let sel = core_resolve_space(&canonical).map_err(WebRouteError::from)?;
-        let mut handle = notez_composition::native::open_selected(&sel, None)
+        let handle = notez_composition::native::open_selected(&sel, None)
             .map_err(|e| WebRouteError::Internal(e.to_string()))?;
-        handle.facade.attach_janet_executor(notez_core::application::NativeJanetExecutor);
-        let facade = Arc::new(Mutex::new(handle.facade));
-        self.facades
+        let engine = Arc::new(Mutex::new(handle.engine));
+        self.engines
             .lock()
-            .expect("facade cache poisoned")
-            .insert(canonical, facade.clone());
-        Ok(facade)
+            .expect("engine cache poisoned")
+            .insert(canonical, engine.clone());
+        Ok(engine)
     }
 }
 
@@ -250,7 +249,7 @@ fn resolve_form_space(form: &SpaceForm) -> Result<PathBuf, WebRouteError> {
 
 fn do_scan(state: &WebState, form: SpaceForm) -> Result<Redirect, WebRouteError> {
     let source_root = resolve_form_space(&form)?;
-    let facade = state.facade_for(&source_root)?;
+    let facade = state.engine_for(&source_root)?;
     let mut guard = facade.lock().map_err(|e| WebRouteError::Internal(format!("facade lock: {e}")))?;
     match ApplicationDispatcher::new(&mut *guard).dispatch(Request::ScanNative(ScanNativeRequest {})) {
         Ok(DispatchResponse::Scan(_)) => Ok(Redirect::to(&route_for_space_list(&source_root.to_string_lossy()))),

@@ -9,7 +9,7 @@
 //! | `document`    | Generic document scanner traits + workflow/security helpers     |
 //! | `source`      | Source adapters (native, git, obsidian, anytype, apple_*)      |
 //! | `config`      | Space discovery + TOML config loader                           |
-//! | `application` | `ApplicationService<S>` — single use-case seam                 |
+//! | `application` | `Engine<S>` — single use-case seam                           |
 //! | `sync`        | Multi-actor sync engine + transports + three-way merge         |
 //! | `artifact`    | Attachment extraction + recipes + skill export                 |
 //!
@@ -33,14 +33,14 @@ pub mod source;
 pub mod storage;
 pub mod sync;
 
-// Re-export the most common surface so application crates can write
-// `use core::{Resource, ResourceRef, ApplicationService, ...}`.
-pub use application::{ApplicationError, ApplicationService, ResolveResult, ScanReport};
+// Re-export the common domain and engine surface.
+pub use application::{ApplicationError, Engine, ResolveResult, ScanReport};
 pub use domain::{
-    Community, CommunityCandidate, CommunitySelector, InspectResult, LinkDiagnostic,
-    LinkOccurrence, LinkTarget, ObjectIdentity, ObjectIdentityError, Projection, ProjectionStore,
-    QueryPage, RelationDirection, RelationType, ResolutionStatus, ResolvedRelation, Resource,
-    ResourceKind, ResourceRef, ResourceRefError, ResourceRelation, Rule, RuleEngine, RuleKind,
-    RuleTrace, Selector, TextSpan, derived_id, derived_object_id,
+    Community, CommunityCandidate, CommunitySelector, DocumentKey, DocumentSnapshot, InspectResult,
+    LinkDiagnostic, LinkOccurrence, LinkTarget, ObjectIdentity, ObjectIdentityError, ObjectSnapshot,
+    Projection, ProjectionStore, QueryPage, RelationDirection, RelationType, ResolutionStatus,
+    ResolvedRelation, Resource, ResourceKind, ResourceRef, ResourceRefError, ResourceRelation,
+    Revision, Rule, RuleEngine, RuleKind, RuleTrace, Selector, SourceId, TaskState, TextSpan,
+    derived_id, derived_object_id,
 };
 pub use storage::{BlobMeta, BlobStore, SegmentRecord, SqliteProjection, StorageError};

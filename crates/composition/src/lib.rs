@@ -1,9 +1,8 @@
 //! `composition` — the single composition root for notez runtimes.
 //!
-//! Every transport (CLI, MCP, web) obtains its [`ApplicationFacade`]
-//! from here so that space selection, runtime config resolution,
-//! legacy `sources.json` merging, database placement and format-parser
-//! registration happen exactly once, identically for all surfaces
+//! Every transport obtains the shared `Engine` runtime from this module.
+//! Source selection, configuration, storage, and parser registration happen
+//! exactly once so surfaces cannot diverge.
 //! (architecture doc §4: Core provides the only domain use-case seam;
 //! transports must not re-implement assembly).
 //!
@@ -12,7 +11,7 @@
 #[cfg(not(target_arch = "wasm32"))]
 pub mod native {
     use notez_core::application::federation::SourceInstancesCache;
-    use notez_core::application::{ApplicationFacade, NativeJanetExecutor, SourceContext};
+    use notez_core::application::{Engine, NativeJanetExecutor, SourceContext};
     use notez_core::config::{
         ConfigError, ConfigPaths, SelectedSource, SourceSelector, resolve_source_runtime, select_source,
     };
@@ -21,13 +20,12 @@ pub mod native {
     use std::ffi::OsString;
     use std::path::{Path, PathBuf};
     
-    /// A fully wired space runtime: the bound facade plus the
+    /// A fully wired space runtime: the bound engine plus the
     /// [`SourceContext`] it was opened against.
     pub struct SpaceHandle {
         pub ctx: SourceContext,
-        pub facade: ApplicationFacade<SqliteProjection>,
-        /// The resolved selection this runtime was opened from (the CLI
-        /// `config migrate` surface still consumes its raw source config).
+        pub engine: Engine<SqliteProjection>,
+        /// The resolved selection this runtime was opened from.
         pub selected: SelectedSource,
     }
     
@@ -106,8 +104,7 @@ pub mod native {
         // M3 event spine: journal and audit share the projection database so
         // writes are recorded alongside the projection they mutate. A second
         // connection is opened to keep the public `ProjectionStore` interface
-        // free of journal concerns; a single shared connection will be
-        // collapsed in once we drop the per-call `ApplicationFacade::new`
+        // journal and audit use the same database while remaining separate ports.
         let journal = notez_core::storage::SqliteEventJournal::new(
             notez_core::storage::SqliteProjection::open_for_adapter(&db_path)
                 .map_err(OpenSpaceError::Store)?,
@@ -117,23 +114,23 @@ pub mod native {
                 .map_err(OpenSpaceError::Store)?,
         );
         let space = SourceContext::new(runtime.source.name.clone(), selected.root.clone(), runtime);
-        let mut facade = ApplicationFacade::with_source(store, space.clone());
-        facade.attach_journal(journal);
-        facade.attach_audit(audit);
-        facade.attach_janet_executor(NativeJanetExecutor);
-        register_builtin_format_parsers(&mut facade);
+        let mut engine = Engine::with_source(store, space.clone());
+        engine.attach_journal(journal);
+        engine.attach_audit(audit);
+        engine.attach_janet_executor(NativeJanetExecutor);
+        register_builtin_format_parsers(&mut engine);
         Ok(SpaceHandle {
             ctx: space,
-            facade,
+            engine,
             selected: selected.clone(),
         })
     }
     
     /// Register the built-in Org / Markdown format parsers. Centralised so
     /// every transport scans with the same parser set.
-    fn register_builtin_format_parsers(facade: &mut ApplicationFacade<SqliteProjection>) {
-        facade.register_format_parser(Box::new(orgmode::OrgParser::new()));
-        facade.register_format_parser(Box::new(markdown::MarkdownParser::new()));
+    fn register_builtin_format_parsers(engine: &mut Engine<SqliteProjection>) {
+        engine.register_format_parser(Box::new(orgmode::OrgParser::new()));
+        engine.register_format_parser(Box::new(markdown::MarkdownParser::new()));
     }
     
     fn collect_env() -> BTreeMap<String, OsString> {

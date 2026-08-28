@@ -25,7 +25,7 @@
 //! variant. Read paths (the other 9 use-case methods) skip these
 //! checks entirely.
 
-use crate::application::service::{ApplicationError, ApplicationFacade};
+use crate::application::service::{ApplicationError, Engine};
 use crate::domain::{ProjectionReader, ProjectionWrite};
 use crate::domain::ProjectionStore;
 use crate::domain::link::ResourceAddress;
@@ -35,7 +35,7 @@ use crate::domain::resource::ResourceRef;
 /// `CapabilityCatalog`. The nine built-in capabilities that ship with
 /// `with_builtins()` always pass.
 pub fn check_capability<S>(
-    facade: &ApplicationFacade<S>,
+    facade: &Engine<S>,
     capability: &'static str,
 ) -> Result<(), ApplicationError>
 where
@@ -50,12 +50,10 @@ where
     }
 }
 
-/// Refuse the call if the projection's current revision for `r_ref`
-/// does not match `expected`. An empty `expected` is treated as "no
-/// precondition" and always passes; non-empty strings that don't
-/// match raise `RevisionConflict`.
+/// Refuse the call if the projection's current revision does not match.
+/// Empty expectations are rejected for every persisted write.
 pub fn check_revision<S>(
-    facade: &ApplicationFacade<S>,
+    facade: &Engine<S>,
     r_ref: &ResourceRef,
     expected: &str,
 ) -> Result<(), ApplicationError>
@@ -65,24 +63,16 @@ where
         + ProjectionWrite<Error = crate::storage::StorageError>,
 {
     if expected.is_empty() {
-        return Ok(());
+        return Err(ApplicationError::InvalidRequest { message: "expected_revision is required".into() });
     }
-    let actual = facade
-        .store
-        .get(r_ref)
-        .map_err(|e| ApplicationError::Storage {
-            kind: crate::application::service::StorageErrorKind::Sqlite,
-            message: e.to_string(),
-        })?
-        .map(|r| r.revision)
-        .unwrap_or_default();
+    let actual = facade.store.get(r_ref).map_err(|e| ApplicationError::Storage {
+        kind: crate::application::service::StorageErrorKind::Sqlite,
+        message: e.to_string(),
+    })?.map(|r| r.revision).unwrap_or_default();
     if actual == expected {
         Ok(())
     } else {
-        Err(ApplicationError::RevisionConflict {
-            expected: expected.to_string(),
-            actual,
-        })
+        Err(ApplicationError::RevisionConflict { expected: expected.to_string(), actual })
     }
 }
 
@@ -90,7 +80,7 @@ where
 /// same `ResourceAddress::Ref`. Locator-based addresses are accepted
 /// as-is for now (deferred to 0.6 along with locator uniqueness).
 pub fn check_address_uniqueness<S>(
-    facade: &ApplicationFacade<S>,
+    facade: &Engine<S>,
     addr: &ResourceAddress,
     candidate: &ResourceRef,
 ) -> Result<(), ApplicationError>
@@ -125,9 +115,9 @@ mod tests {
     use crate::storage::SqliteProjection;
     use ulid::Ulid;
 
-    fn facade_with_builtins() -> ApplicationFacade<SqliteProjection> {
+    fn facade_with_builtins() -> Engine<SqliteProjection> {
         let store = SqliteProjection::in_memory().expect("in-memory store");
-        ApplicationFacade::new(store)
+        Engine::new(store)
     }
 
     fn make_resource(revision: &str) -> Resource {
@@ -175,17 +165,20 @@ mod tests {
     }
 
     #[test]
-    fn check_revision_empty_always_passes() {
+    fn check_revision_empty_is_rejected() {
         let facade = facade_with_builtins();
         let r_ref = make_resource("r1").r#ref;
-        assert!(check_revision(&facade, &r_ref, "").is_ok());
+        assert!(matches!(
+            check_revision(&facade, &r_ref, ""),
+            Err(ApplicationError::InvalidRequest { .. })
+        ));
     }
 
     #[test]
     fn check_revision_matches_persisted() {
         let mut facade = facade_with_builtins();
         let r = make_resource("rev-7");
-        <ApplicationFacade<_> as ResourceUseCase>::upsert_resource(&mut facade, r.clone()).unwrap();
+        <Engine<_> as ResourceUseCase>::upsert_resource(&mut facade, r.clone()).unwrap();
         assert!(check_revision(&facade, &r.r#ref, "rev-7").is_ok());
     }
 
@@ -193,7 +186,7 @@ mod tests {
     fn check_revision_mismatch_raises_conflict() {
         let mut facade = facade_with_builtins();
         let r = make_resource("rev-7");
-        <ApplicationFacade<_> as ResourceUseCase>::upsert_resource(&mut facade, r.clone()).unwrap();
+        <Engine<_> as ResourceUseCase>::upsert_resource(&mut facade, r.clone()).unwrap();
         let err = check_revision(&facade, &r.r#ref, "rev-9").unwrap_err();
         assert!(matches!(
             err,

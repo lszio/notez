@@ -22,10 +22,8 @@ use std::collections::BTreeMap;
 /// `PreviewContext::service` is `None` for handlers built on the current
 /// `WebState` (see `crates/web/src/send.rs`), so this previewer cannot
 /// resolve cross-resource targets by hitting the projection. It only
-/// uses the `ctx.siblings` short-circuit above. Full target resolution
-/// requires plumping an `ApplicationService` handle through `WebState`
-/// or constructing a per-handle `ApplicationService<SqliteProjectionRef>`;
-/// see the comment on `SendService` for the deviation rationale.
+/// Full target resolution is owned by the Engine and supplied as serialized
+/// preview context; preview builders never depend on storage.
 pub struct LinkEmbedPreviewer;
 
 impl Previewer for LinkEmbedPreviewer {

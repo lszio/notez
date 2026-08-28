@@ -156,15 +156,15 @@ pub trait SourceAdapter {
     fn config(&self) -> &SourceConfig;
     fn scan(&self) -> Result<ScannedSource, SourceError>;
 
-    /// Optional structured read ports used by remote sources.
+    /// Structured reads are capability-gated; unsupported operations fail.
     fn list_resources(&self) -> Result<Vec<Resource>, SourceError> {
-        Err(SourceError::Other("list operation not supported by this source adapter".into()))
+        Err(SourceError::Other("list operation unsupported".into()))
     }
     fn read_resource(&self, _locator: &str) -> Result<Option<Resource>, SourceError> {
-        Err(SourceError::Other("read operation not supported by this source adapter".into()))
+        Err(SourceError::Other("read operation unsupported".into()))
     }
     fn search_resources(&self, _query: &str, _limit: usize) -> Result<Vec<Resource>, SourceError> {
-        Err(SourceError::Other("search operation not supported by this source adapter".into()))
+        Err(SourceError::Other("search operation unsupported".into()))
     }
 
     fn capabilities(&self) -> SourceCapabilities {

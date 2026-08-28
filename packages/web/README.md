@@ -7,9 +7,8 @@ without a hydrated client bundle:
 - **Add space** — a `<details>` form on the home page that POSTs to
   `/api/spaces/register`. The server validates the path, writes the
   global XDG config, and `303 See Other`s to the new space's list page.
-- **Scan** — a button on the list page that POSTs to
-  `/api/spaces/scan`. The server runs `ApplicationService::scan_native`
-  on the active space and `303`s back to the list page.
+- **Scan** — a button on the list page posts a command to the shared Engine
+  runtime and redirects back to the list page.
 - **Watch** — a button on the list page that POSTs to
   `/api/spaces/watch/start` (inotify-backed `WatchService` in core).
   A second button stops the watch. The server's

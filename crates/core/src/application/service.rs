@@ -354,7 +354,7 @@ pub struct DocumentUpdateReport {
     pub revision: String,
 }
 
-pub struct ApplicationFacade<S: ProjectionStore> {
+pub struct Engine<S: ProjectionStore> {
     pub(crate) store: S,
     pub(crate) rule_engine: crate::domain::RuleEngine,
     pub(crate) format_parsers: Vec<Box<dyn crate::source::FormatParser>>,
@@ -388,12 +388,8 @@ pub trait JanetExecutor: Send {
     ) -> Result<serde_json::Value, (String, String)>;
 }
 
-/// Backwards-compatible alias for [`ApplicationFacade`]. New code should
-/// refer to `ApplicationFacade` directly; the alias is preserved so
-/// downstream consumers can keep their imports stable across the rename.
-pub type ApplicationService<S = crate::storage::SqliteProjection> = ApplicationFacade<S>;
 
-impl<S> ApplicationFacade<S>
+impl<S> Engine<S>
 where
     S: ProjectionStore,
     S: ProjectionReader<Error = crate::storage::StorageError>
@@ -415,7 +411,7 @@ where
             clock: Box::new(crate::application::ports::SystemClock),
         }
     }
-    /// Construct an `ApplicationFacade` bound to an explicit `SourceContext`.
+    /// Construct an `Engine` bound to an explicit `SourceContext`.
     pub fn with_source(store: S, source: SourceContext) -> Self {
         Self {
             store,
@@ -435,9 +431,9 @@ where
     pub fn attach_janet_executor(&mut self, executor: impl JanetExecutor + 'static) {
         self.janet_executor = Some(Box::new(executor));
     }
-    /// Construct an `ApplicationFacade` with a caller-supplied source
-    /// factory registry. The default constructors register the six
-    /// built-in factories; this constructor is for tests and for
+    /// Construct an `Engine` with a caller-supplied source factory registry.
+    /// This constructor is used by tests and third-party compositions.
+    /// The default constructors register built-in factories.
     /// third-party compositions that want to start from an empty
     /// registry or one with custom factories pre-registered.
     pub fn with_registry(store: S, registry: crate::source::SourceRegistry) -> Self {
@@ -494,11 +490,8 @@ where
 
     /// Register a public capability descriptor. The descriptor is
     /// inserted into (or replaces the entry in) the active
-    /// [`CapabilityCatalog`]; subsequent calls to
-    /// [`ApplicationFacade::capability_catalog`] and the
-    /// `capabilities_json` helper observe the change. This is the
-    /// canonical write path used by third-party composition roots to
-    /// surface custom `UseCase` traits via the same CLI/MCP listing.
+    /// [`CapabilityCatalog`] and the `capabilities_json` helper observe the
+    /// registered set. This is the canonical composition-root path.
     pub fn register_capability(&mut self, descriptor: &crate::capability::CapabilityDescriptor) {
         self.capability_catalog.register(descriptor.clone());
     }
@@ -1030,6 +1023,19 @@ where
             message: e.to_string(),
         })?;
         self.scan_native()
+    }
+}
+impl<S> Engine<S>
+where
+    S: ProjectionStore,
+    S: ProjectionReader<Error = crate::storage::StorageError>
+        + ProjectionWrite<Error = crate::storage::StorageError>,
+{
+    pub fn journal_activity(&self, limit: usize) -> Result<Vec<crate::domain::journal::ActivityRecord>, ApplicationError> {
+        self.journal.activity(limit).map_err(|e| ApplicationError::Storage {
+            kind: StorageErrorKind::Sqlite,
+            message: e.to_string(),
+        })
     }
 }
 

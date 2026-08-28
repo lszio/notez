@@ -1,4 +1,4 @@
-use crate::application::ApplicationService;
+use crate::application::Engine;
 use crate::domain::{LinkTarget, ResolutionStatus};
 use std::fs;
 use std::path::Path;
@@ -41,7 +41,7 @@ See [[Link Test]] and [Org doc](test.org) and [[id:01J000000000000000000000A1]].
     let db_path = root.join(".notez/index.sqlite");
     fs::create_dir_all(db_path.parent().unwrap()).unwrap();
     let store = SqliteProjection::open(&db_path).unwrap();
-    let mut service = ApplicationService::new(store);
+    let mut service = Engine::new(store);
     
     service.scan_native(root).unwrap();
     

@@ -1,14 +1,13 @@
-use notez_core::application::{ApplicationService, ResolveResult};
+use notez_core::application::{Engine, ResolveResult};
 use notez_core::domain::{ResourceKind, ResourceRef, Selector};
 use notez_core::storage::SqliteProjection;
 use std::fs;
-
-/// Build an `ApplicationService` with the canonical Org/Markdown parsers
-/// registered. Mirrors the composition root used by the CLI binary.
+/// Build an `Engine` with the canonical Org/Markdown parsers registered.
+/// Mirrors the composition root used by the CLI binary.
 fn build_service(
     root: &std::path::Path,
     db_path: &std::path::Path,
-) -> ApplicationService<SqliteProjection> {
+) -> Engine<SqliteProjection> {
     let store = SqliteProjection::open(db_path).unwrap();
     let config = notez_core::config::model::SourceConfig {
         version: 2,
@@ -22,7 +21,7 @@ fn build_service(
     };
     let ctx =
         notez_core::application::context::SourceContext::new("test", root.to_path_buf(), config);
-    let mut service = ApplicationService::with_source(store, ctx);
+    let mut service = Engine::with_source(store, ctx);
     service.register_format_parser(Box::new(orgmode::OrgParser::new()));
     service.register_format_parser(Box::new(markdown::MarkdownParser::new()));
     service

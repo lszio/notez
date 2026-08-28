@@ -1,10 +1,10 @@
-//! ResourceUseCase impl for `ApplicationFacade`.
+//! ResourceUseCase implementation for `Engine`.
 //!
 //! Method bodies were previously inlined in `service.rs`; this file
 //! is part of the 0.5.x-A1+A3 use-case impl split.
 
 use crate::application::service::{
-    ApplicationError, ApplicationFacade, ResolveResult, StorageErrorKind,
+    ApplicationError, Engine, ResolveResult, StorageErrorKind,
 };
 use crate::application::use_cases::ResourceUseCase;
 use crate::application::write_check;
@@ -13,7 +13,7 @@ use crate::domain::{
     ResolutionStatus, Resource, ResourceKind, ResourceRef, Selector,
 };
 
-impl<S> ResourceUseCase for ApplicationFacade<S>
+impl<S> ResourceUseCase for Engine<S>
 where
     S: ProjectionStore,
     S: ProjectionReader<Error = crate::storage::StorageError>

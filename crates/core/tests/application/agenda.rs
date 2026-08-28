@@ -1,4 +1,4 @@
-use crate::application::ApplicationService;
+use crate::application::Engine;
 use crate::domain::ResourceRef;
 use std::fs;
 use crate::storage::SqliteProjection;
@@ -27,7 +27,7 @@ fn agenda_views_task_transitions_and_para_overview() {
     fs::write(&file, content).unwrap();
 
     let store = SqliteProjection::in_memory().unwrap();
-    let mut service = ApplicationService::new(store);
+    let mut service = Engine::new(store);
     service.scan_native(source_root).unwrap();
 
     let agenda = service.agenda().unwrap();

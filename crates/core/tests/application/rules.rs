@@ -1,4 +1,4 @@
-use crate::application::ApplicationService;
+use crate::application::Engine;
 use crate::domain::ResourceRef;
 use std::fs;
 use crate::storage::SqliteProjection;
@@ -20,7 +20,7 @@ fn inspect_rules_and_evaluation() {
     fs::write(&file, content).unwrap();
 
     let store = SqliteProjection::in_memory().unwrap();
-    let mut service = ApplicationService::new(store);
+    let mut service = Engine::new(store);
     service.scan_native(source_root).unwrap();
 
     let r_ref = ResourceRef::parse("heading:01J00000000000000000000501").unwrap();

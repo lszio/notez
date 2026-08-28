@@ -5,7 +5,7 @@
 //! contract they both consume, rather than duplicating adapter rendering.
 
 use notez_core::application::dispatcher::{ApplicationDispatcher, Response};
-use notez_core::application::{ApplicationError, ApplicationService};
+use notez_core::application::{ApplicationError, Engine};
 use notez_core::config::model::{SourceConfig, SourceIdentity};
 use notez_core::storage::SqliteProjection;
 use notez_protocol::request::{
@@ -16,7 +16,7 @@ use std::path::PathBuf;
 
 struct Fixture {
     _dir: tempfile::TempDir,
-    service: ApplicationService<SqliteProjection>,
+    service: Engine<SqliteProjection>,
 }
 
 fn fixture() -> Fixture {
@@ -44,7 +44,7 @@ fn fixture() -> Fixture {
     );
     let db_path = dir.path().join(".notez/index.sqlite");
     let store = SqliteProjection::open(&db_path).expect("open fixture projection");
-    let mut service = ApplicationService::with_source(store, context);
+    let mut service = Engine::with_source(store, context);
     service.register_format_parser(Box::new(orgmode::OrgParser::new()));
     service.register_format_parser(Box::new(markdown::MarkdownParser::new()));
     Fixture { _dir: dir, service }

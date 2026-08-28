@@ -189,14 +189,19 @@ pub struct AgendaRequest {}
 pub struct ParaOverviewRequest {}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct CaptureInboxItemRequest {
+    pub source_id: String,
+    pub content: String,
+    #[serde(default)]
+    pub title: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct TransitionTaskRequest {
     pub r_ref: String,
     pub to_state: String,
-    /// Org-format timestamp. When omitted the engine stamps the
-    /// current time.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub timestamp: Option<String>,
-    /// Optimistic-concurrency guard for the transition.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub expected_revision: Option<String>,
 }
@@ -294,9 +299,6 @@ pub struct WritebackResourceRequest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub expected_revision: Option<String>,
 }
-// ---- envelope ---------------------------------------------------------------------------
-
-/// The complete operation set. Internally tagged so HTTP/web clients
 /// can POST `{"op": "query_resources", ...}` directly.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "op", rename_all = "snake_case")]
@@ -318,6 +320,7 @@ pub enum Request {
     ReindexLinks(ReindexLinksRequest),
     Agenda(AgendaRequest),
     ParaOverview(ParaOverviewRequest),
+    CaptureInboxItem(CaptureInboxItemRequest),
     TransitionTask(TransitionTaskRequest),
     AddAttachment(AddAttachmentRequest),
     ExtractAttachment(ExtractAttachmentRequest),

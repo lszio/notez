@@ -1,6 +1,6 @@
 //! Contract tests for `ScanUseCase`.
 
-use notez_core::application::ApplicationFacade;
+use notez_core::application::Engine;
 use notez_core::domain::{ProjectionReader, ProjectionWrite};
 use notez_core::application::use_cases::ScanUseCase;
 use notez_core::domain::ResourceKind;
@@ -8,7 +8,7 @@ use notez_core::domain::Selector;
 use notez_core::storage::SqliteProjection;
 use std::path::PathBuf;
 
-fn make_facade(space: &std::path::Path) -> ApplicationFacade<SqliteProjection> {
+fn make_facade(space: &std::path::Path) -> Engine<SqliteProjection> {
     let db = space.join(".notez/idx.sqlite");
     std::fs::create_dir_all(space.join(".notez")).unwrap();
     let store = SqliteProjection::open(&db).unwrap();
@@ -24,7 +24,7 @@ fn make_facade(space: &std::path::Path) -> ApplicationFacade<SqliteProjection> {
     };
     let ctx =
         notez_core::application::context::SourceContext::new("test", space.to_path_buf(), config);
-    let mut facade = ApplicationFacade::with_source(store, ctx);
+    let mut facade = Engine::with_source(store, ctx);
     facade.register_format_parser(Box::new(orgmode::OrgParser::new()));
     facade.register_format_parser(Box::new(markdown::MarkdownParser::new()));
     facade
@@ -41,7 +41,7 @@ fn scan_native_via_trait_returns_scan_report() {
     .unwrap();
     let mut facade = make_facade(space);
     let report =
-        <ApplicationFacade<_> as ScanUseCase>::scan_native(&mut facade).expect("scan must succeed");
+        <Engine<_> as ScanUseCase>::scan_native(&mut facade).expect("scan must succeed");
     assert_eq!(report.scanned_files, 1);
     assert!(report.scanned_resources >= 1);
     let page = facade
@@ -69,9 +69,9 @@ fn scan_native_without_parsers_returns_error() {
     };
     let ctx =
         notez_core::application::context::SourceContext::new("test", space.to_path_buf(), config);
-    let mut facade = ApplicationFacade::with_source(store, ctx);
+    let mut facade = Engine::with_source(store, ctx);
     // No parsers registered.
-    let err = <ApplicationFacade<_> as ScanUseCase>::scan_native(&mut facade)
+    let err = <Engine<_> as ScanUseCase>::scan_native(&mut facade)
         .expect_err("scan must fail without parsers");
     let msg = err.to_string();
     assert!(msg.contains("no format parsers"), "got: {msg}");
@@ -96,10 +96,10 @@ fn scan_federation_runs_without_crashing_on_empty_space() {
     };
     let ctx =
         notez_core::application::context::SourceContext::new("test", space.to_path_buf(), config);
-    let mut facade = ApplicationFacade::with_source(store, ctx);
+    let mut facade = Engine::with_source(store, ctx);
     facade.register_format_parser(Box::new(orgmode::OrgParser::new()));
     facade.register_format_parser(Box::new(markdown::MarkdownParser::new()));
-    let _ = <ApplicationFacade<_> as ScanUseCase>::scan_federation(&mut facade);
+    let _ = <Engine<_> as ScanUseCase>::scan_federation(&mut facade);
     // Empty space is not a contract violation here; the contract is
     // "the call returns and the result is observable".
     assert!(space.join(".notez/idx.sqlite").exists());

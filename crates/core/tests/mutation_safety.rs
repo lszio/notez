@@ -1,10 +1,9 @@
-//! Mutation safety contracts for `ApplicationService` and `ProjectionStore`.
+//! Mutation safety contracts for `Engine` and `ProjectionStore`.
 //!
-//! These tests pin the rule that writes must never report success for
-//! failure paths, must never delete siblings of a mutated resource, and
+//! These tests pin that writes never report success for failure paths.
 //! must never silently no-op when capability is missing.
 
-use notez_core::application::ApplicationService;
+use notez_core::application::Engine;
 use notez_core::domain::{Resource, ResourceKind, ResourceRef, Selector};
 use notez_core::source::protocol::{FormatParser, ParsedEntity, RawEntity};
 use notez_core::source::{
@@ -351,11 +350,9 @@ impl notez_core::source::SourceTransport for FailingTransport {
 }
 
 #[test]
-fn application_service_with_store_built_for_counting() {
-    // Smoke test: ensure we can build ApplicationService with a custom
-    // ProjectionStore impl. CountingStore is defined above; the goal is
-    // to assert that the service does not require a concrete SqliteProjection
-    // for mutation safety tests.
+fn engine_with_store_built_for_counting() {
+    // Smoke test: a custom ProjectionStore can back the Engine.
+    // CountingStore is defined above for mutation-safety assertions.
     let dir = tempdir().unwrap();
     let db_path = dir.path().join("idx.sqlite");
     let counter = CountingStore {

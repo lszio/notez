@@ -22,7 +22,7 @@ fn main() {
             eprintln!("Failed to open in-memory store: {e}");
             std::process::exit(5);
         });
-        let facade = notez_core::application::ApplicationFacade::new(store);
+        let facade = notez_core::application::Engine::new(store);
         let payload = facade.capabilities_json();
         match serde_json::to_string_pretty(&payload) {
             Ok(s) => println!("{s}"),
@@ -81,27 +81,27 @@ fn main() {
     let source_root = handle.ctx.root.clone();
     let r_config = handle.ctx.config.clone();
     let selected = handle.selected;
-    let mut service = handle.facade;
+    let mut engine = handle.engine;
     match cli.command {
-        Commands::Scan => handlers::scan::run_scan(cli.json, &mut service),
-        Commands::Resolve { query } => handlers::resource::run_resolve(cli.json, &mut service, &query),
-        Commands::Link(sub) => handlers::link::run_link(cli.json, &mut service, sub),
-        Commands::Query(args) => handlers::resource::run_query(cli.json, &mut service, args),
-        Commands::Recent { limit } => handlers::resource::run_recent(cli.json, &mut service, limit),
-        Commands::Read { r_ref } => handlers::resource::run_read(cli.json, &mut service, &r_ref),
+        Commands::Scan => handlers::scan::run_scan(cli.json, &mut engine),
+        Commands::Resolve { query } => handlers::resource::run_resolve(cli.json, &mut engine, &query),
+        Commands::Link(sub) => handlers::link::run_link(cli.json, &mut engine, sub),
+        Commands::Query(args) => handlers::resource::run_query(cli.json, &mut engine, args),
+        Commands::Recent { limit } => handlers::resource::run_recent(cli.json, &mut engine, limit),
+        Commands::Read { r_ref } => handlers::resource::run_read(cli.json, &mut engine, &r_ref),
         Commands::Inspect { r_ref, rules } => {
-            handlers::resource::run_inspect(cli.json, &mut service, &r_ref, rules)
+            handlers::resource::run_inspect(cli.json, &mut engine, &r_ref, rules)
         }
-        Commands::Resource(sub) => handlers::resource::run_resource(cli.json, &mut service, sub),
-        Commands::Agenda => handlers::task::run_agenda(cli.json, &mut service),
-        Commands::Task(sub) => handlers::task::run_task(cli.json, &mut service, sub, &source_root),
-        Commands::Source(sub) => handlers::source::run_source(cli.json, &mut service, sub),
+        Commands::Resource(sub) => handlers::resource::run_resource(cli.json, &mut engine, sub),
+        Commands::Agenda => handlers::task::run_agenda(cli.json, &mut engine),
+        Commands::Task(sub) => handlers::task::run_task(cli.json, &mut engine, sub, &source_root),
+        Commands::Source(sub) => handlers::source::run_source(cli.json, &mut engine, sub),
         Commands::Attachment(sub) => {
-            handlers::attachment::run_attachment(cli.json, &mut service, sub)
+            handlers::attachment::run_attachment(cli.json, &mut engine, sub)
         }
-        Commands::Community(sub) => handlers::community::run_community(cli.json, &mut service, sub),
+        Commands::Community(sub) => handlers::community::run_community(cli.json, &mut engine, sub),
         Commands::Derive(commands::DeriveArgs { community, recipe }) => {
-            handlers::community::run_derive(cli.json, &mut service, &community, &recipe)
+            handlers::community::run_derive(cli.json, &mut engine, &community, &recipe)
         }
         Commands::Skill(commands::SkillSubcommand {
             command:
@@ -112,15 +112,15 @@ fn main() {
                 },
         }) => handlers::community::run_skill_export(
             cli.json,
-            &mut service,
+            &mut engine,
             &community,
             &description,
             &out,
         ),
-        Commands::Sync(sub) => handlers::sync::run_sync(cli.json, &mut service, sub),
+        Commands::Sync(sub) => handlers::sync::run_sync(cli.json, &mut engine, sub),
         Commands::Artifact(commands::ArtifactSubcommand {
             command: commands::ArtifactCommands::Stale,
-        }) => handlers::community::run_artifact_stale(cli.json, &mut service),
+        }) => handlers::community::run_artifact_stale(cli.json, &mut engine),
         Commands::Janet {
             script,
             source_id,
@@ -129,7 +129,7 @@ fn main() {
             result_limit,
         } => handlers::janet::run_janet(
             cli.json,
-            &mut service,
+            &mut engine,
             script,
             source_id,
             document_ref,
@@ -138,9 +138,9 @@ fn main() {
         ),
         Commands::Mcp(commands::McpSubcommand {
             command: commands::McpCommands::Serve,
-        }) => handlers::mcp_cmd::run_mcp(service),
+        }) => handlers::mcp_cmd::run_mcp(engine),
         Commands::Workspace(sub) => {
-            handlers::workspace::run_workspace(cli.json, &mut service, sub, &cwd)
+            handlers::workspace::run_workspace(cli.json, &mut engine, sub, &cwd)
         }
         Commands::Config(sub) => {
             handlers::workspace::run_config(cli.json, &r_config, &source_root, &selected, sub)

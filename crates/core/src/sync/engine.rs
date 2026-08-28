@@ -134,7 +134,8 @@ impl SyncEngine {
         }
 
         let heads = HeadsTracker::new(self.transport.store.manifests_dir().parent().unwrap());
-        heads.set_head(&self.actor_id, &format!("snap_{pushed_files}"))?;
+        let head = format!("sha256:{:x}", Sha256::digest(format!("{}:{}", self.actor_id, pushed_files).as_bytes()));
+        heads.set_head(&self.actor_id, &head)?;
         sync_state.save(&self.device_space)?;
 
         Ok(PushReport {

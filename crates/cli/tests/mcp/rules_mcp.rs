@@ -1,6 +1,6 @@
 mod common;
 
-use notez_core::application::ApplicationService;
+use notez_core::application::Engine;
 use common::{initialize_request, run_session};
 use serde_json::{Value, json};
 use std::collections::HashMap;
@@ -19,7 +19,7 @@ async fn mcp_rules_agenda_and_task_transition() {
     ).unwrap();
 
     let store = SqliteProjection::in_memory().unwrap();
-    let mut service = ApplicationService::new(store);
+    let mut service = Engine::new(store);
     service.scan_native(source_root).unwrap();
 
     let requests = vec![

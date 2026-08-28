@@ -21,7 +21,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use crate::domain::{ProjectionReader, ProjectionWrite};
 
-use crate::application::service::ApplicationFacade;
+use crate::application::service::Engine;
 use crate::application::use_cases::{LinkUseCase, ResourceUseCase, ScanUseCase};
 use crate::domain::{ProjectionStore, ResolvedRelation, Resource, ResourceRef, Selector};
 use serde::{Deserialize, Serialize};
@@ -86,7 +86,7 @@ fn truncate(s: &str, max: usize) -> String {
 impl Graph {
     /// Build the full graph for a space using the storage facade.
     pub fn from_facade<S>(
-        facade: &ApplicationFacade<S>,
+        facade: &Engine<S>,
     ) -> Result<Self, crate::application::ApplicationError>
     where
         S: ProjectionStore,
@@ -164,7 +164,7 @@ impl Graph {
 
     /// Build a 1-hop subgraph around `focus`.
     pub fn neighborhood<S>(
-        facade: &ApplicationFacade<S>,
+        facade: &Engine<S>,
         focus_ref: &str,
     ) -> Result<Self, crate::application::ApplicationError>
     where

@@ -1,7 +1,5 @@
-//! Contract tests for the public `CapabilityDescriptor` and
-//! `ApplicationFacade::register_capability`, which persists descriptors
-//! into the active `CapabilityCatalog`.
-use notez_core::application::ApplicationService;
+//! Contract tests for public capability descriptors and Engine registration.
+use notez_core::application::Engine;
 use notez_core::capability::{CapabilityDescriptor, Mutability};
 use notez_core::storage::SqliteProjection;
 
@@ -18,7 +16,7 @@ fn register_capability_persists_descriptor_in_catalog() {
     let dir = tempfile::tempdir().unwrap();
     let db = dir.path().join("idx.sqlite");
     let store = SqliteProjection::open(&db).unwrap();
-    let mut facade = ApplicationService::new(store);
+    let mut facade = Engine::new(store);
     let before = facade.capability_catalog().list().len();
 
     let desc = CapabilityDescriptor::new("custom_test_cap", "custom test cap", Mutability::Read);

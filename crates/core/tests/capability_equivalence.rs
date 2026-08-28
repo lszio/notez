@@ -1,20 +1,18 @@
 //! Equivalence contract for the public capability listing.
 //!
-//! The CLI `list-capabilities` subcommand and the MCP `list_capabilities`
-//! tool must surface the same payload for a given `ApplicationFacade`.
-//! Both surfaces read through `ApplicationFacade::capabilities_json`,
-//! which delegates to `capability::catalog_to_json_array`.
+//! The CLI and MCP capability surfaces must return the same payload for an
+//! Engine. Both read the shared capability catalog.
 //!
 //! These tests pin the shape of that payload so future refactors cannot
 //! silently desynchronise the two surfaces.
 
-use notez_core::application::ApplicationFacade;
+use notez_core::application::Engine;
 use notez_core::capability::{CapabilityCatalog, Mutability, catalog_to_json_array};
 use notez_core::storage::SqliteProjection;
 
-fn facade_with_builtins() -> ApplicationFacade<SqliteProjection> {
+fn facade_with_builtins() -> Engine<SqliteProjection> {
     let store = SqliteProjection::in_memory().expect("in-memory store");
-    ApplicationFacade::new(store)
+    Engine::new(store)
 }
 
 #[test]

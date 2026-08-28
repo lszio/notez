@@ -21,6 +21,7 @@ pub use query::{
     Selector,
 };
 pub use resource::{
-    ObjectIdentity, ObjectIdentityError, Resource, ResourceKind, ResourceRef, ResourceRefError,
-    ResourceRelation, SegmentRecord, derived_id, derived_object_id,
+    DocumentKey, DocumentSnapshot, ObjectIdentity, ObjectIdentityError, ObjectSnapshot, Resource,
+    ResourceKind, ResourceRef, ResourceRefError, ResourceRelation, Revision, SegmentRecord, SourceId,
+    TaskState, derived_id, derived_object_id,
 };

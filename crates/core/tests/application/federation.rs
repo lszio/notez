@@ -1,4 +1,4 @@
-use crate::application::ApplicationService;
+use crate::application::Engine;
 use crate::domain::Selector;
 use crate::source::{SourceConfig, SourceKind};
 use std::fs;
@@ -29,7 +29,7 @@ fn multi_source_federation_scanning() {
     .unwrap();
 
     let store = SqliteProjection::open(&db_path).unwrap();
-    let mut service = ApplicationService::new(store);
+    let mut service = Engine::new(store);
 
     let vault_config = SourceConfig {
         id: "external_obsidian".to_string(),

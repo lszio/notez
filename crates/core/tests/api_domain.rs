@@ -1,4 +1,4 @@
-use notez_core::application::{ApplicationError, ApplicationService, ResolveResult, SourceContext};
+use notez_core::application::{ApplicationError, Engine, ResolveResult, SourceContext};
 use notez_core::config::SourceConfig;
 use notez_core::domain::community::Community;
 use notez_core::domain::schema::{
@@ -463,12 +463,12 @@ fn source_context_is_explicit_and_service_exposes_bound_or_unbound_state() {
         link_overrides: serde_json::Value::Null,
     };
     let context = SourceContext::new("source-1", PathBuf::from("/tmp/source"), cfg);
-    let service = ApplicationService::with_source(SqliteProjection::in_memory().unwrap(), context);
+    let service = Engine::with_source(SqliteProjection::in_memory().unwrap(), context);
     let bound = service.source().unwrap();
     assert_eq!(bound.source_id, "source-1");
     assert_eq!(bound.root, PathBuf::from("/tmp/source"));
     assert_eq!(bound.config.source.name, "personal");
-    let unbound = ApplicationService::new(SqliteProjection::in_memory().unwrap());
+    let unbound = Engine::new(SqliteProjection::in_memory().unwrap());
     assert!(unbound.source().is_none());
 }
 
@@ -491,7 +491,7 @@ fn application_scan_query_read_and_resolve_cover_success_and_not_found() {
         link_overrides: serde_json::Value::Null,
     };
     let ctx = SourceContext::new("test", dir.path().to_path_buf(), config);
-    let mut service = ApplicationService::with_source(SqliteProjection::in_memory().unwrap(), ctx);
+    let mut service = Engine::with_source(SqliteProjection::in_memory().unwrap(), ctx);
     service.register_format_parser(Box::new(MarkerParser));
 
     let report = service.scan_native().unwrap();
@@ -552,13 +552,13 @@ fn application_scan_rejects_missing_registry_and_storage_errors_are_preserved() 
     };
     let ctx = SourceContext::new("test", dir.path().to_path_buf(), config);
     let mut unregistered =
-        ApplicationService::with_source(SqliteProjection::in_memory().unwrap(), ctx);
+        Engine::with_source(SqliteProjection::in_memory().unwrap(), ctx);
     let err = unregistered.scan_native().unwrap_err();
     assert!(
         matches!(err, ApplicationError::Storage { kind: _, ref message } if message.contains("no format parsers"))
     );
 
-    let service = ApplicationService::new(FailingStore);
+    let service = Engine::new(FailingStore);
     for err in [
         service.query(&Selector::new()).unwrap_err(),
         service
@@ -581,7 +581,7 @@ fn application_scan_rejects_missing_registry_and_storage_errors_are_preserved() 
 
 #[test]
 fn application_mutation_listing_inspection_agenda_and_para_happy_paths() {
-    let mut service = ApplicationService::new(SqliteProjection::in_memory().unwrap());
+    let mut service = Engine::new(SqliteProjection::in_memory().unwrap());
     let mut project = resource(
         ResourceKind::Heading,
         HEADING_ID,
@@ -650,7 +650,7 @@ fn application_mutation_listing_inspection_agenda_and_para_happy_paths() {
 
 #[test]
 fn application_main_paths_surface_storage_errors() {
-    let mut service = ApplicationService::new(FailingStore);
+    let mut service = Engine::new(FailingStore);
     let doc = resource(ResourceKind::Document, DOC_ID, "Doc", "native", "1");
     for err in [
         service.upsert_resource(doc.clone()).unwrap_err(),
@@ -661,7 +661,7 @@ fn application_main_paths_surface_storage_errors() {
         );
     }
 
-    let service = ApplicationService::new(FailingStore);
+    let service = Engine::new(FailingStore);
     for err in [
         service.list_recent(5).unwrap_err(),
         service.list_by_source("native", 5).unwrap_err(),
@@ -688,7 +688,7 @@ fn application_error_variants_expose_not_found_and_unsupported_content() {
         link_overrides: serde_json::Value::Null,
     };
     let ctx = SourceContext::new("test", PathBuf::from("/tmp/space"), config);
-    let mut service = ApplicationService::with_source(SqliteProjection::in_memory().unwrap(), ctx);
+    let mut service = Engine::with_source(SqliteProjection::in_memory().unwrap(), ctx);
     let missing = rref(ResourceKind::Attachment, DOC_ID);
     let err = service.run_extraction(&missing).unwrap_err();
     assert!(matches!(err, ApplicationError::NotFound { r_ref, .. } if r_ref == missing));

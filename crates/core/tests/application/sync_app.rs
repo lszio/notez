@@ -1,4 +1,4 @@
-use crate::application::ApplicationService;
+use crate::application::Engine;
 use std::fs;
 use crate::storage::SqliteProjection;
 
@@ -20,7 +20,7 @@ fn application_sync_push_pull_and_conflicts() {
     .unwrap();
 
     let store_a = SqliteProjection::open(&space_a.join(".notez/index.sqlite")).unwrap();
-    let mut service_a = ApplicationService::new(store_a);
+    let mut service_a = Engine::new(store_a);
 
     let push_report = service_a
         .sync_push("actor_a", &space_a, &shared_folder)
@@ -28,7 +28,7 @@ fn application_sync_push_pull_and_conflicts() {
     assert_eq!(push_report.pushed_files, 1);
 
     let store_b = SqliteProjection::open(&space_b.join(".notez/index.sqlite")).unwrap();
-    let mut service_b = ApplicationService::new(store_b);
+    let mut service_b = Engine::new(store_b);
 
     let pull_report = service_b
         .sync_pull("actor_b", &space_b, &shared_folder)

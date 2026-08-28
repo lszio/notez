@@ -458,5 +458,6 @@ pub enum Response {
     /// `update_document`: saved, rescanned, revision refreshed.
     DocumentUpdated(DocumentUpdateReport),
     Janet(JanetResult),
+    InboxCaptured { r_ref: String, revision: String },
     Done,
 }

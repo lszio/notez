@@ -21,9 +21,11 @@
 //! one variant per operation, payload structs mirroring the engine's
 //! domain DTO shapes with identical JSON field names.
 
+pub mod error;
 pub mod request;
 pub mod response;
 pub mod schema;
 
 pub use request::Request;
+pub use error::Error;
 pub use response::{DocumentUpdateReport, Response};

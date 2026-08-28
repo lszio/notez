@@ -1,13 +1,10 @@
-//! This crate contains all shared UI for the workspace.
-
-mod hero;
-pub use hero::Hero;
+//! Shared Notez UI primitives.
 
 mod navbar;
 pub use navbar::Navbar;
 
-mod echo;
-pub use echo::Echo;
-
 pub mod notez;
 pub use notez::{NzBadge, NzButton, NzButtonGhost, NzCard, NzInput};
+
+pub mod store;
+pub use store::AppStore;

@@ -20,7 +20,7 @@ pub mod janet;
 
 /// The composed application service handed to every command handler.
 pub type Service =
-    notez_core::application::ApplicationFacade<notez_core::storage::SqliteProjection>;
+    notez_core::application::Engine<notez_core::storage::SqliteProjection>;
 
 /// Map an `ApplicationError` to a stable process exit code.
 ///

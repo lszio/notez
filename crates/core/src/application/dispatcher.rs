@@ -15,7 +15,7 @@ use std::path::PathBuf;
 use crate::domain::{ProjectionStore, QueryPage, Resource, ResourceKind, Selector};
 use crate::domain::{Community, ResourceRef};
 use crate::application::service::ApplicationError;
-use crate::application::{wire, ApplicationFacade};
+use crate::application::{wire, Engine};
 use crate::application::use_cases::{
     ArtifactUseCase, AttachmentUseCase, CommunityUseCase, InspectUseCase, LinkUseCase,
     ResourceUseCase, ScanUseCase, SyncUseCase, TaskUseCase,
@@ -88,7 +88,7 @@ pub fn org_now() -> String {
 
 /// Interpreter over a facade. Cheap to construct per dispatch.
 pub struct ApplicationDispatcher<'a, S: ProjectionStore> {
-    facade: &'a mut ApplicationFacade<S>,
+    facade: &'a mut Engine<S>,
 }
 impl<'a, S> ApplicationDispatcher<'a, S>
 where
@@ -96,7 +96,7 @@ where
         + crate::domain::ProjectionWrite<Error = crate::storage::StorageError>
         + ProjectionStore,
 {
-    pub fn new(facade: &'a mut ApplicationFacade<S>) -> Self {
+    pub fn new(facade: &'a mut Engine<S>) -> Self {
         Self { facade }
     }
 
@@ -106,10 +106,10 @@ where
         let f = &mut *self.facade;
         match req {
             Request::ScanNative(_) => Ok(Response::Scan(wire::scan_report(
-                &<ApplicationFacade<S> as ScanUseCase>::scan_native(f)?,
+                &<Engine<S> as ScanUseCase>::scan_native(f)?,
             ))),
             Request::ScanFederation(_) => Ok(Response::Scan(wire::scan_report(
-                &<ApplicationFacade<S> as ScanUseCase>::scan_federation(f)?,
+                &<Engine<S> as ScanUseCase>::scan_federation(f)?,
             ))),
             Request::QueryResources(r) => {
                 let mut selector = Selector::new();
@@ -128,13 +128,13 @@ where
                 // Push the page limit all the way into the store query.
                 selector.limit = r.limit.map(|l| l as usize).or(selector.limit);
                 let page: QueryPage =
-                    <ApplicationFacade<S> as ResourceUseCase>::query(f, &selector)?;
+                    <Engine<S> as ResourceUseCase>::query(f, &selector)?;
                 Ok(Response::ResourcePage(wire::page(&page)))
             }
             Request::ReadResource(r) => {
                 let rf = parse_ref(&r.r_ref)?;
                 Ok(Response::Resource(
-                    <ApplicationFacade<S> as ResourceUseCase>::read(f, &rf)?
+                    <Engine<S> as ResourceUseCase>::read(f, &rf)?
                         .as_ref()
                         .map(wire::resource),
                 ))
@@ -144,12 +144,12 @@ where
                 if let Some(expected) = effective_expected(&r.expected_revision, &None) {
                     write_check::check_revision(f, &rf, expected)?;
                 }
-                <ApplicationFacade<S> as ResourceUseCase>::delete_resource(f, &rf)?;
+                <Engine<S> as ResourceUseCase>::delete_resource(f, &rf)?;
                 Ok(Response::Done)
             }
             Request::ListRecent(r) => Ok(Response::Resources(
                 wire::resources(
-                    &<ApplicationFacade<S> as ResourceUseCase>::list_recent(
+                    &<Engine<S> as ResourceUseCase>::list_recent(
                         f,
                         r.limit.unwrap_or(20) as usize,
                     )?,
@@ -157,7 +157,7 @@ where
             )),
             Request::ListBySource(r) => Ok(Response::Resources(
                 wire::resources(
-                    &<ApplicationFacade<S> as ResourceUseCase>::list_by_source(
+                    &<Engine<S> as ResourceUseCase>::list_by_source(
                         f,
                         &r.source_id,
                         r.limit.unwrap_or(100) as usize,
@@ -165,7 +165,7 @@ where
                 ),
             )),
             Request::Resolve(r) => Ok(Response::Resolve(wire::resolve_result(
-                &<ApplicationFacade<S> as ResourceUseCase>::resolve(f, &r.query)?,
+                &<Engine<S> as ResourceUseCase>::resolve(f, &r.query)?,
             ))),
             Request::UpsertResource(r) => {
                 let p = r.resource;
@@ -192,47 +192,47 @@ where
                 if let Some(expected) = effective_expected(&r.expected_revision, &None) {
                     write_check::check_revision(f, &resource.r#ref, expected)?;
                 }
-                <ApplicationFacade<S> as ResourceUseCase>::upsert_resource(f, resource)?;
+                <Engine<S> as ResourceUseCase>::upsert_resource(f, resource)?;
                 Ok(Response::Done)
             }
             Request::LinkOccurrences(r) => {
                 let rf = parse_ref(&r.source_ref)?;
                 Ok(Response::Occurrences(wire::occurrences(
-                    &<ApplicationFacade<S> as LinkUseCase>::query_link_occurrences(f, &rf)?,
+                    &<Engine<S> as LinkUseCase>::query_link_occurrences(f, &rf)?,
                 )))
             }
             Request::ResolvedRelations(r) => {
                 let rf = parse_ref(&r.source_ref)?;
                 Ok(Response::Relations(wire::relations(
-                    &<ApplicationFacade<S> as LinkUseCase>::query_resolved_relations(f, &rf)?,
+                    &<Engine<S> as LinkUseCase>::query_resolved_relations(f, &rf)?,
                 )))
             }
             Request::ListLinks(r) => {
                 let rf = parse_ref(&r.source_ref)?;
                 Ok(Response::Occurrences(wire::occurrences(
-                    &<ApplicationFacade<S> as LinkUseCase>::list_links(f, &rf)?,
+                    &<Engine<S> as LinkUseCase>::list_links(f, &rf)?,
                 )))
             }
             Request::ResolveLinks(r) => {
                 let rf = parse_ref(&r.source_ref)?;
                 Ok(Response::Relations(wire::relations(
-                    &<ApplicationFacade<S> as LinkUseCase>::resolve_links(f, &rf)?,
+                    &<Engine<S> as LinkUseCase>::resolve_links(f, &rf)?,
                 )))
             }
             Request::DiagnoseLink(r) => {
                 let rf = parse_ref(&r.source_ref)?;
                 Ok(Response::Diagnostics(wire::diagnostics(
-                    &<ApplicationFacade<S> as LinkUseCase>::diagnose_link(f, &rf)?,
+                    &<Engine<S> as LinkUseCase>::diagnose_link(f, &rf)?,
                 )))
             }
             Request::ReindexLinks(_) => Ok(Response::Reindex(wire::reindex_report(
-                &<ApplicationFacade<S> as LinkUseCase>::reindex_links(f)?,
+                &<Engine<S> as LinkUseCase>::reindex_links(f)?,
             ))),
             Request::Agenda(_) => Ok(Response::Agenda(wire::agenda(
-                &<ApplicationFacade<S> as TaskUseCase>::agenda(f)?,
+                &<Engine<S> as TaskUseCase>::agenda(f)?,
             ))),
             Request::ParaOverview(_) => Ok(Response::Para(wire::para_overview(
-                &<ApplicationFacade<S> as TaskUseCase>::para_overview(f)?,
+                &<Engine<S> as TaskUseCase>::para_overview(f)?,
             ))),
             Request::TransitionTask(r) => {
                 let rf = parse_ref(&r.r_ref)?;
@@ -244,7 +244,7 @@ where
                     None => org_now(),
                 };
                 Ok(Response::Transition(wire::state_transition(
-                    &<ApplicationFacade<S> as TaskUseCase>::transition_task(
+                    &<Engine<S> as TaskUseCase>::transition_task(
                         f,
                         &rf,
                         &r.to_state,
@@ -256,20 +256,20 @@ where
                 let path = PathBuf::from(&r.file_path);
                 let mime = r.mime.as_deref().unwrap_or("application/octet-stream");
                 Ok(Response::AttachmentRef(
-                    <ApplicationFacade<S> as AttachmentUseCase>::add_attachment(f, &path, mime)?
+                    <Engine<S> as AttachmentUseCase>::add_attachment(f, &path, mime)?
                         .to_string(),
                 ))
             }
             Request::ExtractAttachment(r) => {
                 let rf = parse_ref(&r.source_ref)?;
                 Ok(Response::Segments(wire::segments(
-                    &<ApplicationFacade<S> as AttachmentUseCase>::run_extraction(f, &rf)?,
+                    &<Engine<S> as AttachmentUseCase>::run_extraction(f, &rf)?,
                 )))
             }
             Request::QuerySegments(r) => {
                 let rf = parse_ref(&r.source_ref)?;
                 Ok(Response::Segments(wire::segments(
-                    &<ApplicationFacade<S> as AttachmentUseCase>::query_segments(f, &rf)?,
+                    &<Engine<S> as AttachmentUseCase>::query_segments(f, &rf)?,
                 )))
             }
             Request::CreateCommunity(r) => {
@@ -287,14 +287,14 @@ where
                     pinned_members: Vec::new(),
                     excluded_members: Vec::new(),
                 };
-                <ApplicationFacade<S> as CommunityUseCase>::create_community(f, community)?;
+                <Engine<S> as CommunityUseCase>::create_community(f, community)?;
                 Ok(Response::Done)
             }
             Request::ListCommunities(_) => Ok(Response::Communities(wire::communities(
-                &<ApplicationFacade<S> as CommunityUseCase>::list_communities(f)?,
+                &<Engine<S> as CommunityUseCase>::list_communities(f)?,
             ))),
             Request::DeriveArtifact(r) => Ok(Response::Derived(wire::derived_artifact(
-                &<ApplicationFacade<S> as ArtifactUseCase>::derive_artifact(
+                &<Engine<S> as ArtifactUseCase>::derive_artifact(
                     f,
                     &r.community_id,
                     &r.recipe_name,
@@ -303,7 +303,7 @@ where
             Request::ExportSkill(r) => {
                 let out = PathBuf::from(&r.out_path);
                 Ok(Response::Skill(wire::skill_package(
-                    &<ApplicationFacade<S> as ArtifactUseCase>::export_skill(
+                    &<Engine<S> as ArtifactUseCase>::export_skill(
                         f,
                         &r.community_id,
                         r.description.as_deref().unwrap_or("Notez exported skill"),
@@ -314,39 +314,42 @@ where
             Request::InspectRules(r) => {
                 let rf = parse_ref(&r.source_ref)?;
                 Ok(Response::InspectRules(
-                    <ApplicationFacade<S> as InspectUseCase>::inspect_rules(f, &rf)?
+                    <Engine<S> as InspectUseCase>::inspect_rules(f, &rf)?
                         .as_ref()
                         .map(wire::inspect_result),
                 ))
             }
-            Request::SourceDoctor(_) => Ok(Response::Doctor(wire::doctor_report(
-                &<ApplicationFacade<S> as InspectUseCase>::source_doctor(f)?,
-            ))),
+            Request::CaptureInboxItem(_) => Err(ApplicationError::UnsupportedCapability {
+                capability: "capture_inbox_item",
+            }),
             Request::ListJobs(_) => Ok(Response::Jobs(wire::job_records(
-                &<ApplicationFacade<S> as InspectUseCase>::list_jobs(f)?,
+                &<Engine<S> as InspectUseCase>::list_jobs(f)?,
+            ))),
+            Request::SourceDoctor(_) => Ok(Response::Doctor(wire::doctor_report(
+                &<Engine<S> as InspectUseCase>::source_doctor(f)?,
             ))),
             Request::ArtifactFreshness(_) => Ok(Response::Freshness(wire::stale_report(
-                &<ApplicationFacade<S> as InspectUseCase>::check_artifact_freshness(f)?,
+                &<Engine<S> as InspectUseCase>::check_artifact_freshness(f)?,
             ))),
             Request::SyncPush(r) => Ok(Response::Pushed(wire::push_report(
-                &<ApplicationFacade<S> as SyncUseCase>::sync_push(
+                &<Engine<S> as SyncUseCase>::sync_push(
                     f,
                     &r.actor_id,
                     &PathBuf::from(&r.folder),
                 )?,
             ))),
             Request::SyncPull(r) => Ok(Response::Pulled(wire::pull_report(
-                &<ApplicationFacade<S> as SyncUseCase>::sync_pull(
+                &<Engine<S> as SyncUseCase>::sync_pull(
                     f,
                     &r.actor_id,
                     &PathBuf::from(&r.folder),
                 )?,
             ))),
             Request::RelaySync(_) => Ok(Response::Relay(wire::relay_sync_report(
-                &<ApplicationFacade<S> as SyncUseCase>::relay_sync(f)?,
+                &<Engine<S> as SyncUseCase>::relay_sync(f)?,
             ))),
             Request::ListConflicts(_) => Ok(Response::Conflicts(wire::conflicts(
-                &<ApplicationFacade<S> as SyncUseCase>::list_conflicts(f)?,
+                &<Engine<S> as SyncUseCase>::list_conflicts(f)?,
             ))),
             Request::WritebackResource(r) => {
                 let rf = parse_ref(&r.r_ref)?;
@@ -376,13 +379,13 @@ where
                     let source_scope = r.source_id.clone();
                     let mut selector = Selector::new();
                     selector.source_id = source_scope.clone();
-                    let resources = <ApplicationFacade<S> as ResourceUseCase>::query(f, &selector)?.items;
+                    let resources = <Engine<S> as ResourceUseCase>::query(f, &selector)?.items;
                     if let Some(doc) = &r.document_ref {
                         let target = parse_ref(doc)?;
                         if !resources.iter().any(|x| x.r#ref == target) { return Err(invalid("document scope is outside source scope")); }
                     }
                     let mut relations = Vec::new();
-                    for resource in &resources { relations.extend(<ApplicationFacade<S> as LinkUseCase>::query_resolved_relations(f, &resource.r#ref)?); }
+                    for resource in &resources { relations.extend(<Engine<S> as LinkUseCase>::query_resolved_relations(f, &resource.r#ref)?); }
                     let sources = serde_json::to_value(f.list_sources()?).unwrap_or_default();
                     let reads = resources.iter().filter(|x| r.document_ref.as_ref().map_or(true, |d| d == &x.r#ref.to_string())).map(|x| (x.r#ref.to_string(), serde_json::to_value(x).unwrap_or_default())).collect();
                     let snapshot = crate::application::service::JanetQuerySnapshot { sources, search: serde_json::to_value(&resources).unwrap_or_default(), objects: serde_json::to_value(&resources).unwrap_or_default(), relations: serde_json::to_value(&relations).unwrap_or_default(), reads, render_list: serde_json::to_value(&resources).unwrap_or_default() };

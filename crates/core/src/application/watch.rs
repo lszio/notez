@@ -108,6 +108,20 @@ pub struct WatchEvent {
     pub path: PathBuf,
 }
 
+/// A source observation is an explicit external-change input to the engine.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SourceObservation {
+    pub path: PathBuf,
+    pub kind: WatchKind,
+    pub observed_at: SystemTime,
+}
+
+impl From<WatchEvent> for SourceObservation {
+    fn from(event: WatchEvent) -> Self {
+        Self { path: event.path, kind: event.kind, observed_at: event.at }
+    }
+}
+
 /// Snapshot of a watch's state — returned by `status()` and exposed
 /// to the UI for the "watching / not watching" badge.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

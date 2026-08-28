@@ -16,7 +16,7 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
-use notez_core::application::ApplicationFacade;
+use notez_core::application::Engine;
 use notez_core::domain::{Resource, ResourceKind, Selector};
 use serde::{Deserialize, Serialize};
 
@@ -96,7 +96,7 @@ impl KindCounts {
 // ---- public entry points ----
 
 pub fn build_tree<S>(
-    facade: &ApplicationFacade<S>,
+    facade: &Engine<S>,
 ) -> Result<TreeNode, notez_core::application::ApplicationError>
 where
     S: notez_core::domain::ProjectionStore
@@ -110,7 +110,7 @@ where
 /// files on disk. Loose files get an empty `ref_str`; the panel
 /// renders them via the preview route.
 pub fn build_tree_with_disk<S>(
-    facade: &ApplicationFacade<S>,
+    facade: &Engine<S>,
     source_root: &Path,
 ) -> Result<TreeNode, notez_core::application::ApplicationError>
 where
@@ -124,7 +124,7 @@ where
 }
 
 pub fn build_source_files<S>(
-    facade: &ApplicationFacade<S>,
+    facade: &Engine<S>,
     source_root: &Path,
 ) -> Result<Vec<SourceFileRow>, notez_core::application::ApplicationError>
 where
@@ -137,7 +137,7 @@ where
 }
 
 pub fn build_kind_counts<S>(
-    facade: &ApplicationFacade<S>,
+    facade: &Engine<S>,
 ) -> Result<KindCounts, notez_core::application::ApplicationError>
 where
     S: notez_core::domain::ProjectionStore
@@ -149,7 +149,7 @@ where
 }
 
 pub fn build_index_entry<S>(
-    facade: &ApplicationFacade<S>,
+    facade: &Engine<S>,
 ) -> Result<Option<IndexEntryDto>, notez_core::application::ApplicationError>
 where
     S: notez_core::domain::ProjectionStore
@@ -161,7 +161,7 @@ where
 }
 
 pub fn build_search<S>(
-    facade: &ApplicationFacade<S>,
+    facade: &Engine<S>,
     source_root: &Path,
     q: &str,
 ) -> Result<Vec<SearchHit>, notez_core::application::ApplicationError>

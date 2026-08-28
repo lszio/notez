@@ -1,18 +1,10 @@
-//! `SourceContext` — the resolved runtime binding for a notez Source.
+//! `SourceContext` — the resolved runtime binding for a Notez source.
 //!
-//! `ApplicationService` MUST take an explicit `SourceContext` at construction;
-//! it must never infer the source from the process working directory or from a
-//! `.` path. This is the single source of truth for the active source's
-//! filesystem root and resolved runtime configuration.
-
-use std::path::PathBuf;
+//! `Engine` takes an explicit `SourceContext` and never infers the source
+//! from the process working directory.
 
 use crate::config::SourceConfig;
-
-/// Resolved binding between an `ApplicationService` and the source it operates
-/// on. The same `SourceContext` value is shared with the CLI startup, the MCP
-/// server, and the web front-end (when present) so that no transport can drift
-/// into a different filesystem root.
+use std::path::PathBuf;
 #[derive(Debug, Clone)]
 pub struct SourceContext {
     /// Stable identifier for the source. Used as the audit actor for

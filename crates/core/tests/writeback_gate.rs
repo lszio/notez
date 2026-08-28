@@ -10,7 +10,7 @@
 //! 3. `relay_sync` stays an unsupported capability until the 0.6 Change
 //!    delivery model lands.
 
-use notez_core::application::ApplicationFacade;
+use notez_core::application::Engine;
 use notez_core::application::context::SourceContext;
 use notez_core::application::use_cases::SyncUseCase;
 use notez_core::config::model::{
@@ -45,7 +45,7 @@ fn space_config_with_stub_source(root: &Path) -> SpaceConfig {
 #[test]
 fn writeback_requires_explicit_source_context() {
     let store = SqliteProjection::in_memory().unwrap();
-    let service = ApplicationFacade::new(store);
+    let service = Engine::new(store);
 
     let err = service
         .writeback_resource(
@@ -69,7 +69,7 @@ fn writeback_against_opt_in_stub_source_is_refused() {
         dir.path().to_path_buf(),
         space_config_with_stub_source(dir.path()),
     );
-    let mut facade = ApplicationFacade::with_source(store, ctx);
+    let mut facade = Engine::with_source(store, ctx);
 
     // Opt-in the stub factory explicitly; `with_builtins()` must NOT have
     // registered it already.
@@ -95,12 +95,12 @@ fn relay_sync_reports_unsupported() {
     let dir = tempfile::tempdir().unwrap();
     let store = SqliteProjection::in_memory().unwrap();
     let config = space_config_with_stub_source(dir.path());
-    let service = ApplicationFacade::with_source(
+    let service = Engine::with_source(
         store,
         SourceContext::new("any_src", dir.path().to_path_buf(), config),
     );
 
-    let err = <ApplicationFacade<_> as SyncUseCase>::relay_sync(&service)
+    let err = <Engine<_> as SyncUseCase>::relay_sync(&service)
         .expect_err("relay sync is not implemented yet");
     assert!(
         err.to_string().contains("not yet implemented"),

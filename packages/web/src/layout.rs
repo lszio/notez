@@ -19,7 +19,7 @@
 use dioxus::prelude::*;
 
 use crate::pages::{
-    CommandPalette, FilesPanel, GraphPanel, PropertiesPanel, SearchTrigger, SpaceDropdown, SpaceSidebar, TreePanel,
+    IntentPalette, FilesPanel, GraphPanel, PropertiesPanel, SearchTrigger, SpaceDropdown, SpaceSidebar, TreePanel,
 };
 use crate::space_ctx::{SpaceState, SpaceStatus};
 
@@ -221,7 +221,7 @@ pub fn Layout(children: Element) -> Element {
             // ----- Command palette overlay (⌘K / Esc handled by the
             // PR9 inline script at the top of the page; the overlay
             // renders here when PALETTE_OPEN is true).
-            CommandPalette {}
+            IntentPalette {}
         }
     }
 }
