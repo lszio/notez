@@ -107,16 +107,77 @@ pub struct SourceConfig {
 }
 
 impl SourceConfig {
+    /// Parse the current source schema, with an explicit compatibility path
+    /// for the original v1 `[space]` schema.
+    ///
+    /// The legacy parser is deliberately narrow: it is only selected when
+    /// the document declares version 1 and contains `[space]`. This prevents
+    /// a partially migrated document from being silently accepted while
+    /// retaining serde's `deny_unknown_fields` checks in both schemas.
     pub fn parse(text: &str) -> Result<Self, ConfigError> {
-        let cfg: SourceConfig = toml::from_str(text)?;
-        if cfg.version != CURRENT_VERSION {
-            return Err(ConfigError::UnsupportedVersion(cfg.version));
+        match toml::from_str::<SourceConfig>(text) {
+            Ok(cfg) => {
+                if cfg.version != CURRENT_VERSION {
+                    return Err(ConfigError::UnsupportedVersion(cfg.version));
+                }
+                if cfg.source.name.is_empty() {
+                    return Err(ConfigError::MissingField("source.name"));
+                }
+                Ok(cfg)
+            }
+            Err(v2_error) => {
+                let value = match toml::from_str::<toml::Value>(text) {
+                    Ok(value) => value,
+                    Err(_) => return Err(v2_error.into()),
+                };
+                let Some(table) = value.as_table() else {
+                    return Err(v2_error.into());
+                };
+                let is_v1_with_space = table
+                    .get("version")
+                    .and_then(toml::Value::as_integer)
+                    == Some(1)
+                    && table.get("space").is_some();
+                if !is_v1_with_space {
+                    return Err(v2_error.into());
+                }
+
+                let legacy: LegacySourceConfig = toml::from_str(text)?;
+                let cfg = SourceConfig {
+                    version: CURRENT_VERSION,
+                    source: SourceIdentity {
+                        name: legacy.space.name,
+                        database: legacy.space.database,
+                    },
+                    workflow: WorkflowConfig::default(),
+                    sources: Vec::new(),
+                    link_overrides: JsonValue::Null,
+                };
+                if cfg.source.name.is_empty() {
+                    return Err(ConfigError::MissingField("space.name"));
+                }
+                Ok(cfg)
+            }
         }
-        if cfg.source.name.is_empty() {
-            return Err(ConfigError::MissingField("source.name"));
-        }
-        Ok(cfg)
     }
+}
+
+/// The complete, intentionally strict v1 local workspace schema. Keeping
+/// this separate from `SourceConfig` makes mixed v1/v2 documents fail rather
+/// than dropping fields during migration.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct LegacySourceConfig {
+    version: u32,
+    space: LegacySpaceConfig,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct LegacySpaceConfig {
+    name: String,
+    #[serde(default = "default_database")]
+    database: PathBuf,
 }
 
 pub fn default_database() -> PathBuf {

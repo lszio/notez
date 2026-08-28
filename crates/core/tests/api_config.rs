@@ -109,6 +109,73 @@ name = ""
 }
 
 #[test]
+fn legacy_v1_source_config_converts_to_v2_defaults() {
+    let cfg = SourceConfig::parse(
+        r#"version = 1
+
+[space]
+name = "legacy"
+database = "custom/index.sqlite"
+"#,
+    )
+    .unwrap();
+    assert_eq!(cfg.version, CURRENT_VERSION);
+    assert_eq!(cfg.source.name, "legacy");
+    assert_eq!(cfg.source.database, PathBuf::from("custom/index.sqlite"));
+    assert_eq!(cfg.workflow, WorkflowConfig::default());
+    assert!(cfg.sources.is_empty());
+    assert!(cfg.link_overrides.is_null());
+}
+
+#[test]
+fn legacy_v1_unknown_fields_are_rejected_without_data_loss() {
+    let result = SourceConfig::parse(
+        r#"version = 1
+
+[space]
+name = "legacy"
+unexpected = true
+"#,
+    );
+    assert!(result.is_err());
+
+    let mixed = SourceConfig::parse(
+        r#"version = 1
+
+[space]
+name = "legacy"
+
+[source]
+name = "also-legacy"
+"#,
+    );
+    assert!(mixed.is_err());
+}
+
+#[test]
+fn discovery_and_select_source_support_legacy_v1_workspace() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("legacy");
+    let nested = root.join("nested");
+    fs::create_dir_all(&nested).unwrap();
+    fs::write(
+        root.join("notez.toml"),
+        "version = 1\n[space]\nname = \"legacy\"\ndatabase = \".notez/legacy.sqlite\"\n",
+    )
+    .unwrap();
+
+    let paths = ConfigPaths::discover(&environment(&dir.path().join("config")), &nested).unwrap();
+    let (config_path, cfg) = paths.source_config.as_ref().unwrap();
+    assert_eq!(config_path, &root.join("notez.toml"));
+    assert_eq!(cfg.version, CURRENT_VERSION);
+    assert_eq!(cfg.source.name, "legacy");
+
+    let selected = select_source(&paths, SourceSelector::Upward).unwrap();
+    assert_eq!(selected.source_name, "legacy");
+    assert_eq!(selected.root, root);
+}
+
+#[test]
 fn discovery_finds_xdg_global_and_nearest_source_and_reports_missing_home() {
     let dir = tempfile::tempdir().unwrap();
     let config_home = dir.path().join("config");
