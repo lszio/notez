@@ -40,23 +40,11 @@ pub fn TreePanel(active_encoded: Option<String>) -> Element {
     rsx! {
         div { class: "tree-panel",
             div { class: "tree-head",
-                span { class: "tree-label", "directory tree" }
-                if let Some(ref t) = tree {
-                    span { class: "tree-count", "({t.count})" }
-                }
+                div { class: "tree-head-main", span { class: "tree-label", "DOCUMENTS" }, span { class: "tree-subtitle", "Browse by heading" } }
+                span { class: "tree-count", if let Some(t) = tree.as_ref() { "{t.count}" } else { "…" } }
             }
-            div { class: "tree-body",
-                match &tree {
-                    Some(t) => rsx! { TreeNodeView { node: t.clone(), encoded: encoded_for_href.clone() } },
-                    None => rsx! {
-                        match space().map(|s| s.status.clone()) {
-                            Some(SpaceStatus::Resolving) => rsx! { p { class: "tree-empty", "loading…" } },
-                            Some(SpaceStatus::Error(e)) => rsx! { p { class: "tree-empty err-text", "error: {e}" } },
-                            _ => rsx! { p { class: "tree-empty", "no resources" } },
-                        }
-                    },
-                }
-            }
+            if let Some(t) = tree { TreeNodeView { node: t, encoded: encoded_for_href.clone() } }
+            else { p { class: "tree-empty", "Loading document tree…" } }
         }
     }
 }

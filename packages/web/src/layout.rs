@@ -136,9 +136,9 @@ pub fn Layout(children: Element) -> Element {
                 }
             }
 
-            // ----- Top navigation bar -----
             nav { class: "topnav",
                 div { class: "topnav-inner",
+                    a { class: "topnav-brand", href: "/", "Notez" }
                     button {
                         class: "drawer-toggle drawer-toggle-nav",
                         r#type: "button",
@@ -172,17 +172,34 @@ pub fn Layout(children: Element) -> Element {
                 }
             }
 
-            // ----- 3-column body -----
             div { class: "shell-body",
+                nav { class: "app-rail", "aria-label": "Workspace sections",
+                    a { class: "app-rail-brand", href: "/", aria_label: "Notez home", "N" }
+                    div { class: "app-rail-group",
+                        span { class: "app-rail-label", "WORKSPACE" }
+                        a { class: "app-rail-link is-current", href: "/", "⌂", span { "Home" } }
+                        if let Some(enc) = active_encoded.clone() {
+                            a { class: "app-rail-link", href: "{crate::router::route_for_space_list(&crate::router::decode_space(&enc))}", "▤", span { "Documents" } }
+                            a { class: "app-rail-link", href: "{crate::router::route_for_space_graph(&enc)}", "◎", span { "Graph" } }
+                            if let Some(path) = active_path.clone() {
+                                a { class: "app-rail-link", href: "{crate::router::route_for_space_activity(&path)}", "≡", span { "Activity" } }
+                            }
+                        }
+                    }
+                    div { class: "app-rail-foot",
+                        span { class: "app-rail-status-dot", "●" }
+                        span { class: "app-rail-status-label", "{space_status}" }
+                    }
+                }
                 aside { id: "col-left", class: "col-left",
+                    div { class: "pane-context",
+                        span { class: "pane-kicker", "NAVIGATION" }
+                        span { class: "pane-context-name", "{space_leaf}" }
+                    }
                     if active_path.is_some() {
-                        TreePanel {
-                            active_encoded: active_encoded.clone(),
-                        }
+                        TreePanel { active_encoded: active_encoded.clone() }
                         div { class: "left-divider" }
-                        FilesPanel {
-                            active_encoded: active_encoded.clone(),
-                        }
+                        FilesPanel { active_encoded: active_encoded.clone() }
                     } else {
                         SpaceSidebar { active_path: active_path_for_side.clone() }
                     }
@@ -191,13 +208,13 @@ pub fn Layout(children: Element) -> Element {
                     {children}
                 }
                 aside { id: "col-right", class: "col-right",
-                    PropertiesPanel {
-                        active_encoded: active_encoded.clone(),
+                    div { class: "pane-context inspector-context",
+                        span { class: "pane-kicker", "INSPECTOR" }
+                        span { class: "pane-context-name", "context" }
                     }
+                    PropertiesPanel { active_encoded: active_encoded.clone() }
                     div { class: "right-divider" }
-                    GraphPanel {
-                        active_encoded: active_encoded.clone(),
-                    }
+                    GraphPanel { active_encoded: active_encoded.clone() }
                 }
             }
             // Backdrop behind a slide-in drawer (tablet inspector /

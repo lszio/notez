@@ -79,151 +79,36 @@ pub fn HomePage() -> Element {
         .unwrap_or(0);
 
     rsx! {
-        div { class: "page",
-            section { class: "onboard",
-                h1 { "Notez" }
-                p { class: "lede",
-                    "a local-first, Org-mode-native knowledge federation engine."
-                }
-                p { class: "lede dim",
-                    "Files on disk are authoritative: every doc, heading, attachment and block lives in the original .org / .md files; the SQLite projection is rebuilt with `notez scan`."
+        div { class: "page workspace-home",
+            section { class: "workspace-hero",
+                div { class: "workspace-hero-kicker", "WORKSPACE OVERVIEW" }
+                h1 { "Good to see you." }
+                p { class: "lede", "A quiet place for local documents, connected sources, and the work waiting next." }
+                div { class: "workspace-hero-actions",
+                    button { class: "hero-command", r#type: "button", "data-palette-open": "true", "⌘K", span { "Search or run a command" } }
+                    if let Some(href) = first_ready_href.as_ref() { a { class: "hero-link", href: "{href}", "Open documents →" } }
                 }
             }
-
-            div { class: "home-grid",
-                // ---- Source health (real data) ----
-                section { class: "home-card", "aria-labelledby": "health-heading",
-                    div { class: "home-card-head",
-                        h2 { id: "health-heading", "Source health" }
-                        span { class: "home-card-count mono-sm", "{ready_count} ready · {broken_count} problem" }
-                    }
-                    if rows.is_empty() {
-                        NzCard {
-                            padded: true,
-                            p { class: "home-empty",
-                                "No sources registered yet."
-                            }
-                            p { class: "lede dim",
-                                "Use the register form in the space dropdown (top-left) to point Notez at a local folder, or run "
-                                span { class: "mono-sm", "notez source add" }
-                                " from the CLI. Once registered, a space shows its health here."
-                            }
-                        }
-                    } else {
-                        ul { class: "health-list",
-                            for row in rows.iter() {
-                                {
-                                    match row {
-                                        SpaceHealth::Ready { dto, space_name, total } => rsx! {
-                                            li { class: "health-row", key: "{dto.path}",
-                                                NzCard {
-                                                    padded: true,
-                                                    div { class: "health-row-body",
-                                                        div { class: "health-row-main",
-                                                            a { class: "health-row-name", href: "{route_for_space_list(&dto.path)}", "{space_name}" }
-                                                            if dto.source == "discovered" {
-                                                                NzBadge { text: "found".to_string(), tone: "info".to_string() }
-                                                            }
-                                                            div { class: "health-row-path mono-sm", "{dto.path}" }
-                                                        }
-                                                        div { class: "health-row-side",
-                                                            NzBadge { text: "ready".to_string(), tone: "ok".to_string() }
-                                                            span { class: "health-row-total mono-sm", "{total} resources" }
-                                                            a { class: "spine-action", href: "{route_for_space_list(&dto.path)}", "open →" }
-                                                        }
-                                                    }
-                                                }
-                                            }
-                                        },
-                                        SpaceHealth::Broken { dto, message } => rsx! {
-                                            li { class: "health-row", key: "{dto.path}",
-                                                NzCard {
-                                                    padded: true,
-                                                    div { class: "health-row-body",
-                                                        div { class: "health-row-main",
-                                                            span { class: "health-row-name", "{dto.name}" }
-                                                            div { class: "health-row-path mono-sm", "{dto.path}" }
-                                                        }
-                                                        div { class: "health-row-side",
-                                                            NzBadge { text: "unavailable".to_string(), tone: "err".to_string() }
-                                                            span { class: "health-row-err mono-sm", "{message}" }
-                                                            a { class: "spine-action", href: "/", "re-register" }
-                                                        }
-                                                    }
-                                                }
-                                            }
-                                        },
-                                    }
-                                }
-                            }
-                        }
-                    }
+            div { class: "workspace-columns",
+                section { class: "workspace-section workspace-continue", "aria-labelledby": "continue-heading",
+                    div { class: "workspace-section-head", span { class: "workspace-section-kicker", "CONTINUE" }, h2 { id: "continue-heading", "Pick up where you left off" } }
+                    if dashboard_loading { div { class: "workspace-empty", "Loading recent work…" } }
+                    else if recent_activity.is_empty() { div { class: "workspace-empty", p { "No recent documents yet." } p { class: "dim", "Open a source or search the workspace to begin." } } }
+                    else { div { class: "continue-list", for entry in recent_activity.iter().take(5) { HomeActivityRow { entry: entry.clone(), now_ms } } } }
                 }
-
-                // ---- Activity (journal-backed) ----
-                section { class: "home-card", "aria-labelledby": "activity-heading",
-                    div { class: "home-card-head",
-                        h2 { id: "activity-heading", "Activity" }
-                        span { class: "home-card-count mono-sm",
-                            if dashboard_loading {
-                                "…"
-                            } else {
-                                "{recent_activity.len()} recent"
-                            }
-                        }
-                    }
-                    if dashboard_loading {
-                        NzCard {
-                            padded: true,
-                            p { class: "home-empty", "loading activity…" }
-                        }
-                    } else if recent_activity.is_empty() {
-                        NzCard {
-                            padded: true,
-                            p { class: "home-empty",
-                                "No activity recorded yet — every space's journal is empty."
-                            }
-                            ul { class: "home-steps",
-                                li { "Run " span { class: "mono-sm", "scan" } " or save a document; every journaled write appears here with its actor, source and revision." }
-                                li { "Open a space and follow the " span { class: "mono-sm", "activity" } " link to see the full stream." }
-                            }
-                        }
-                    } else {
-                        NzCard {
-                            padded: true,
-                            ul { class: "activity-list activity-list-compact",
-                                for entry in recent_activity.iter() {
-                                    HomeActivityRow { entry: entry.clone(), now_ms }
-                                }
-                            }
-                            div { class: "home-card-foot",
-                                if let Some(href) = first_activity_href.as_ref() {
-                                    a { class: "spine-action", href: "{href}", "open the activity stream →" }
-                                }
-                                span { class: "home-card-note mono-sm", "journal-backed · real recorded writes" }
-                            }
-                        }
-                    }
+                section { class: "workspace-section workspace-sources", "aria-labelledby": "sources-heading",
+                    div { class: "workspace-section-head", span { class: "workspace-section-kicker", "SOURCES" }, h2 { id: "sources-heading", "Your connected spaces" } }
+                    if rows.is_empty() { div { class: "workspace-empty", p { "No sources registered." } p { class: "dim", "Register a local workspace from the source menu above." } } }
+                    else { div { class: "source-list", for row in rows.iter() { match row {
+                        SpaceHealth::Ready { dto, space_name, total } => rsx! { a { class: "source-card", href: "{route_for_space_list(&dto.path)}", div { class: "source-card-top", span { class: "source-dot", "●" } strong { "{space_name}" } span { class: "source-state", "ready" } }, div { class: "source-card-meta mono-sm", "{total} resources · {dto.path}" } } },
+                        SpaceHealth::Broken { dto, message } => rsx! { div { class: "source-card is-broken", div { class: "source-card-top", span { class: "source-dot", "!" } strong { "{dto.name}" } span { class: "source-state", "unavailable" } }, div { class: "source-card-meta mono-sm", "{message}" } } },
+                    } } } }
                 }
-
-                // ---- Continue working ----
-                section { class: "home-card", "aria-labelledby": "continue-heading",
-                    div { class: "home-card-head",
-                        h2 { id: "continue-heading", "Continue working" }
-                    }
-                    NzCard {
-                        padded: true,
-                        p { class: "home-empty",
-                            "Recent documents appear in the activity card above. Saved views have no server surface in this build — the list page keeps its view state in the URL, clearly labelled as unsaved."
-                        }
-                        div { class: "onboard-actions",
-                            a { class: "spine-action", href: "/", "search with ⌘K" }
-                            if let Some(href) = first_ready_href.as_ref() {
-                                a { class: "spine-action", href: "{href}", "open first healthy space" }
-                            }
-                        }
-                    }
-                }
+            }
+            section { class: "workspace-section workspace-activity", "aria-labelledby": "activity-heading",
+                div { class: "workspace-section-head", span { class: "workspace-section-kicker", "ACTIVITY" }, h2 { id: "activity-heading", "Recent changes" }, if let Some(href) = first_activity_href.as_ref() { a { class: "section-action", href: "{href}", "View all →" } } }
+                if recent_activity.is_empty() { div { class: "workspace-empty", "Journal activity will appear here after a scan or document save." } }
+                else { div { class: "activity-stream", for entry in recent_activity.iter() { HomeActivityRow { entry: entry.clone(), now_ms } } } }
             }
         }
     }
