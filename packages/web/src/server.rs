@@ -48,7 +48,7 @@ use notez_protocol::request::{Request, QueryResourcesRequest, ReadResourceReques
 
 
 #[cfg(not(target_arch = "wasm32"))]
-fn dispatch_query(source_root: &Path) -> Result<Vec<Resource>, String> {
+pub(crate) fn dispatch_query(source_root: &Path) -> Result<Vec<Resource>, String> {
     let engine = open_engine(source_root)?;
     let mut guard = engine.lock().map_err(|e| format!("engine lock: {e}"))?;
     let mut dispatcher = ApplicationDispatcher::new(&mut *guard);
@@ -921,6 +921,314 @@ pub async fn neighbor_graph_impl(source_root: &Path, focus_ref: &str) -> Result<
 #[cfg(target_arch = "wasm32")]
 pub async fn neighbor_graph_impl(_space_root: &Path, _focus_ref: &str) -> Result<Graph, String> {
     Err("server-only".to_string())
+}
+
+// ---- v2 note workspace: links / outline / journal / UI config --------------
+
+/// One incoming or outgoing link row for the note-page right rail.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LinkRow {
+    pub ref_str: String,
+    pub title: String,
+    pub kind: String,
+}
+
+/// Backlinks (incoming) and outgoing links for one resource. Both
+/// directions come from the same resolved-relations query; a row whose
+/// backing resource is gone renders with kind `missing`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct LinksDto {
+    pub incoming: Vec<LinkRow>,
+    pub outgoing: Vec<LinkRow>,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub fn list_links_impl(source_root: &Path, ref_str: &str) -> Result<LinksDto, String> {
+    use std::collections::BTreeSet;
+
+    let engine = open_engine(source_root)?;
+    let guard = engine.lock().map_err(|e| format!("engine lock: {e}"))?;
+    let page = guard.query(&Selector::new()).map_err(|e| e.to_string())?;
+    let focus = ref_str
+        .parse::<ResourceRef>()
+        .map_err(|e| format!("bad ref `{ref_str}`: {e}"))?;
+    let relations = guard
+        .query_resolved_relations(&focus)
+        .map_err(|e| e.to_string())?;
+
+    let row_for = |other: &str| -> LinkRow {
+        page.items
+            .iter()
+            .find(|item| item.r#ref.to_string() == other)
+            .map(|item| LinkRow {
+                ref_str: other.to_string(),
+                title: item.title.clone(),
+                kind: item.kind.to_string(),
+            })
+            .unwrap_or_else(|| LinkRow {
+                ref_str: other.to_string(),
+                title: other.to_string(),
+                kind: "missing".to_string(),
+            })
+    };
+
+    let mut dto = LinksDto::default();
+    let mut seen_in: BTreeSet<String> = BTreeSet::new();
+    let mut seen_out: BTreeSet<String> = BTreeSet::new();
+    for rel in relations {
+        let s = rel.source_ref.to_string();
+        let t = rel.target_ref.to_string();
+        if t == ref_str && s != ref_str && seen_in.insert(s.clone()) {
+            dto.incoming.push(row_for(&s));
+        } else if s == ref_str && t != ref_str && seen_out.insert(t.clone()) {
+            dto.outgoing.push(row_for(&t));
+        }
+    }
+    Ok(dto)
+}
+
+#[cfg(target_arch = "wasm32")]
+pub fn list_links_impl(_source_root: &Path, _ref_str: &str) -> Result<LinksDto, String> {
+    Err("server-only".to_string())
+}
+
+#[server]
+pub async fn list_links(source_root: String, ref_str: String) -> Result<LinksDto, ServerFnError> {
+    let sel = core_resolve_space(Path::new(&source_root))
+        .map_err(WebServerError::from)
+        .map_err(|e| ServerFnError::new(e.to_string()))?;
+    list_links_impl(&sel.root, &ref_str).map_err(|e| ServerFnError::new(e))
+}
+
+/// One heading in the document outline.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OutlineItemDto {
+    /// Heading level, 1..=6.
+    pub level: u8,
+    pub text: String,
+}
+
+/// Extract the heading outline from raw source text. `org` selects the
+/// `* stars` syntax; otherwise Markdown `# hashes` are parsed. Fenced
+/// code blocks and Org `#+begin_src` blocks are skipped; frontmatter is
+/// skipped.
+pub fn parse_outline(content: &str, org: bool) -> Vec<OutlineItemDto> {
+    let mut items: Vec<OutlineItemDto> = Vec::new();
+    let mut fence: Option<String> = None;
+    let mut org_block = false;
+    let mut in_frontmatter = false;
+    let mut first_content = true;
+    for raw in content.lines() {
+        let trimmed = raw.trim_end();
+        let t = trimmed.trim_start();
+        if first_content && !t.is_empty() {
+            first_content = false;
+            if t == "---" {
+                in_frontmatter = true;
+                continue;
+            }
+        }
+        if in_frontmatter {
+            if t == "---" || t == "..." {
+                in_frontmatter = false;
+            }
+            continue;
+        }
+        if let Some(f) = &fence {
+            if t.starts_with(f.as_str()) {
+                fence = None;
+            }
+            continue;
+        }
+        if t.starts_with("```") {
+            fence = Some("```".to_string());
+            continue;
+        }
+        if t.starts_with("~~~") {
+            fence = Some("~~~".to_string());
+            continue;
+        }
+        let lower = t.to_ascii_lowercase();
+        if org_block {
+            if lower.starts_with("#+end_src") || lower.starts_with("#+end_example") {
+                org_block = false;
+            }
+            continue;
+        }
+        if lower.starts_with("#+begin_src") || lower.starts_with("#+begin_example") {
+            org_block = true;
+            continue;
+        }
+        let marker = if org { '*' } else { '#' };
+        if !t.starts_with(marker) {
+            continue;
+        }
+        let marks = t.len() - t.trim_start_matches(marker).len();
+        if !(1..=6).contains(&marks) {
+            continue;
+        }
+        let rest = &t[marks..];
+        if !rest.starts_with(' ') || rest.starts_with("  ") {
+            continue;
+        }
+        let text = rest.trim().trim_end_matches(&marker.to_string()).trim_end();
+        if text.is_empty() {
+            continue;
+        }
+        items.push(OutlineItemDto {
+            level: marks as u8,
+            text: text.to_string(),
+        });
+    }
+    items
+}
+
+#[server]
+pub async fn get_outline(
+    source_root: String,
+    ref_str: String,
+) -> Result<Vec<OutlineItemDto>, ServerFnError> {
+    let sel = core_resolve_space(Path::new(&source_root))
+        .map_err(WebServerError::from)
+        .map_err(|e| ServerFnError::new(e.to_string()))?;
+    let raw = read_document_content(sel.root.to_string_lossy().into_owned(), ref_str.clone())
+        .await
+        .ok()
+        .flatten();
+    let Some(doc) = raw else {
+        return Ok(Vec::new());
+    };
+    let ext = std::path::Path::new(&doc.locator)
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    Ok(parse_outline(&doc.content, ext == "org"))
+}
+
+/// Today's date as `YYYY-MM-DD` (UTC).
+pub fn today_iso_date() -> String {
+    let days = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() / 86_400)
+        .unwrap_or(0) as i64;
+    let (y, m, d) = civil_from_days(days);
+    format!("{y:04}-{m:02}-{d:02}")
+}
+
+/// Howard Hinnant's `civil_from_days`: days since 1970-01-01 →
+/// (year, month, day). <http://howardhinnant.github.io/date_algorithms.html>
+pub fn civil_from_days(z: i64) -> (i64, i64, i64) {
+    let z = z + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = (z - era * 146_097) as i64;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146_096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    (if m <= 2 { y + 1 } else { y }, m, d)
+}
+
+/// Locator of today's journal note: `journal/YYYY-MM-DD.md`.
+pub fn today_journal_locator() -> String {
+    format!("journal/{}.md", today_iso_date())
+}
+
+/// `journal/2026-09-01.md` → `Some("2026-09-01")`. Only `journal/`
+/// files whose stem is a strict ISO date count as journal entries.
+pub fn journal_date_of(display_path: &str) -> Option<String> {
+    let name = display_path.rsplit('/').next()?;
+    let (stem, ext) = name.rsplit_once('.')?;
+    if !matches!(ext, "md" | "org") {
+        return None;
+    }
+    let mut parts = stem.split('-');
+    let (y, m, d) = (parts.next()?, parts.next()?, parts.next()?);
+    if parts.next().is_some() {
+        return None;
+    }
+    let digits = |s: &str, n: usize| s.len() == n && s.bytes().all(|b| b.is_ascii_digit());
+    if digits(y, 4) && digits(m, 2) && digits(d, 2) {
+        Some(stem.to_string())
+    } else {
+        None
+    }
+}
+
+/// One journal entry row.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct JournalEntryDto {
+    /// ISO date `YYYY-MM-DD` parsed from the filename.
+    pub date: String,
+    pub locator: String,
+    pub title: String,
+    /// Empty for loose (not yet scanned) files — the UI links those to
+    /// the preview page instead of the note page.
+    pub ref_str: String,
+    pub mtime_ms: u64,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub fn list_journal_impl(source_root: &Path) -> Result<Vec<JournalEntryDto>, String> {
+    let engine = open_engine(source_root)?;
+    let guard = engine.lock().map_err(|e| format!("engine lock: {e}"))?;
+    let files = tree::build_source_files(&guard, source_root).map_err(|e| e.to_string())?;
+    let mut entries: Vec<JournalEntryDto> = files
+        .into_iter()
+        .filter_map(|f| {
+            journal_date_of(&f.display_path).map(|date| JournalEntryDto {
+                date,
+                locator: f.display_path.clone(),
+                title: f.title,
+                ref_str: f.ref_str,
+                mtime_ms: f.mtime_ms,
+            })
+        })
+        .collect();
+    entries.sort_by(|a, b| b.date.cmp(&a.date));
+    Ok(entries)
+}
+
+#[cfg(target_arch = "wasm32")]
+pub fn list_journal_impl(_source_root: &Path) -> Result<Vec<JournalEntryDto>, String> {
+    Err("server-only".to_string())
+}
+
+#[server]
+pub async fn list_journal(source_root: String) -> Result<Vec<JournalEntryDto>, ServerFnError> {
+    let sel = core_resolve_space(Path::new(&source_root))
+        .map_err(WebServerError::from)
+        .map_err(|e| ServerFnError::new(e.to_string()))?;
+    crate::routes::auto_start_watch(&sel.root);
+    list_journal_impl(&sel.root).map_err(|e| ServerFnError::new(e))
+}
+
+/// Landing mode + starred refs for one space, read from `web.toml`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SpaceUiDto {
+    pub landing: String,
+    pub starred: Vec<String>,
+}
+
+#[server]
+pub async fn get_space_ui(source_root: String) -> Result<SpaceUiDto, ServerFnError> {
+    let cfg = crate::ui_config::load_web_ui_config();
+    Ok(SpaceUiDto {
+        landing: cfg.landing_for(&source_root).to_string(),
+        starred: cfg
+            .starred
+            .get(&source_root)
+            .cloned()
+            .unwrap_or_default(),
+    })
+}
+
+/// Visible home dashboard widgets in display order.
+#[server]
+pub async fn get_home_widgets() -> Result<Vec<String>, ServerFnError> {
+    Ok(crate::ui_config::load_web_ui_config().visible_home_widgets())
 }
 
 // ---- tests -----------------------------------------------------------------

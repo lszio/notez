@@ -7,7 +7,7 @@ use ui::notez::NzInput;
 use crate::model::ResourceRow;
 use crate::pages::ui::KindIcon;
 use crate::pages::use_space_layout;
-use crate::router::{encode_space, route_for_space_list_with_query, ListQuery};
+use crate::router::{encode_space, route_for_space_files_with_query, ListQuery};
 use crate::server::list_resources;
 use crate::space_ctx::{SpaceState, SpaceStatus};
 
@@ -201,7 +201,7 @@ pub fn ListPage(encoded: String, query: ListQuery) -> Element {
     // points at the canonical URL of the current page.
     let space_path_for_view = active_path_for_view.clone().unwrap_or_default();
     let mode_href = |m: ListMode| -> String {
-        route_for_space_list_with_query(&space_path_for_view, &ListQuery {
+        route_for_space_files_with_query(&space_path_for_view, &ListQuery {
             q: q_filter(),
             kind: kind_filter(),
             sort: sort_key(),
@@ -209,7 +209,7 @@ pub fn ListPage(encoded: String, query: ListQuery) -> Element {
             mode: m.as_str().to_string(),
         })
     };
-    let current_url = route_for_space_list_with_query(&space_path_for_view, &view_query);
+    let current_url = route_for_space_files_with_query(&space_path_for_view, &view_query);
     // Source coverage of the visible results — how many rows come from
     // each source, so a filtered view always shows where the data lives.
     let mut source_counts: std::collections::BTreeMap<String, usize> = std::collections::BTreeMap::new();
@@ -251,7 +251,7 @@ pub fn ListPage(encoded: String, query: ListQuery) -> Element {
             div { class: "controls-wrapper", style: "display:flex; gap:1rem; align-items:center; width:100%; flex-wrap:wrap;",
                 form {
                     class: "controls",
-                    action: format!("/source/{}/list", encoded),
+                    action: format!("/source/{}/files", encoded),
                     style: "flex:1; display:flex; gap:0.6rem; align-items:center;",
                     div { class: "control",
                         span { class: "control-label", "find" }
@@ -481,7 +481,7 @@ fn WatchPanel(active_path: Option<String>) -> Element {
 #[component]
 fn ResultRow(row: ResourceRow, current: String) -> Element {
     let ref_link = format!(
-        "/source/{}/resource/{}",
+        "/source/{}/note/{}",
         current,
         encode_space(&row.ref_str)
     );
@@ -555,7 +555,7 @@ fn ModeTable(rows: Vec<ResourceRow>, current: String) -> Element {
 #[component]
 fn TableRow(row: ResourceRow, current: String) -> Element {
     let ref_link = format!(
-        "/source/{}/resource/{}",
+        "/source/{}/note/{}",
         current,
         encode_space(&row.ref_str)
     );
@@ -585,7 +585,7 @@ fn ModeCards(rows: Vec<ResourceRow>, current: String) -> Element {
 #[component]
 fn CardRow(row: ResourceRow, current: String) -> Element {
     let ref_link = format!(
-        "/source/{}/resource/{}",
+        "/source/{}/note/{}",
         current,
         encode_space(&row.ref_str)
     );
@@ -619,7 +619,7 @@ fn ModeStream(rows: Vec<ResourceRow>, current: String) -> Element {
 #[component]
 fn StreamRow(row: ResourceRow, current: String) -> Element {
     let ref_link = format!(
-        "/source/{}/resource/{}",
+        "/source/{}/note/{}",
         current,
         encode_space(&row.ref_str)
     );

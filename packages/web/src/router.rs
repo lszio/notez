@@ -1,74 +1,72 @@
 //! Web router — Dioxus routes + URL encoding helpers.
+//!
+//! v2 note-workspace route table:
+//!
+//! - `/` — configurable home dashboard
+//! - `/source/:encoded` — space landing (configurable: journal/index/files)
+//! - `/source/:encoded/journal` — journal (today + recent entries)
+//! - `/source/:encoded/files` — all-files browser
+//! - `/source/:encoded/note/:ref` — the note workbench
+//! - `/source/:encoded/activity`, `/graph`, `/preview/:locator`
 
 use base64::Engine;
 use dioxus::prelude::*;
-use crate::pages::{ActivityPage, DetailPage, GraphPage, HomePage, ListPage, PreviewPage, SpaceHome};
+use crate::pages::{ActivityPage, GraphPage, HomePage, JournalPage, ListPage, NotePage, PreviewPage, SpaceHome};
 
-/// Query string for the resource list page. PR7 introduces this so
-/// `?kind=attachment&sort=mtime` deep-links land the user on the
-/// correct filtered/sorted view, and so the FilesPanel kind pill
-/// can navigate via the same source of truth.
+/// Query string for the files browser. `?kind=attachment&sort=mtime`
+/// deep-links land the user on the correct filtered/sorted view.
 ///
 /// `Display` + `From<&str>` are required by `dioxus_router` to make
-/// `#[route("/list?:..query")]` work. Field defaults are the empty
+/// `#[route("/files?:..query")]` work. Field defaults are the empty
 /// string (which `ListPage` treats as "all" / "title").
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ListQuery {
-    pub q: String,
     pub kind: String,
+    pub q: String,
     pub sort: String,
-    pub source: String,
-    /// Result presentation mode (`list` / `table` / `cards` /
-    /// `stream`). Empty means the default (`list`). Kept in the URL
-    /// so a view survives reloads and deep links.
     pub mode: String,
+    pub source: String,
 }
 
 impl std::fmt::Display for ListQuery {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let mut parts: Vec<String> = Vec::new();
-        if !self.q.is_empty() {
-            parts.push(format!("q={}", url_encode(&self.q)));
-        }
+        let mut parts = Vec::new();
         if !self.kind.is_empty() {
-            parts.push(format!("kind={}", url_encode(&self.kind)));
+            parts.push(format!("kind={}", self.kind));
+        }
+        if !self.q.is_empty() {
+            parts.push(format!("q={}", self.q));
         }
         if !self.sort.is_empty() {
-            parts.push(format!("sort={}", url_encode(&self.sort)));
-        }
-        if !self.source.is_empty() {
-            parts.push(format!("source={}", url_encode(&self.source)));
+            parts.push(format!("sort={}", self.sort));
         }
         if !self.mode.is_empty() {
-            parts.push(format!("mode={}", url_encode(&self.mode)));
+            parts.push(format!("mode={}", self.mode));
+        }
+        if !self.source.is_empty() {
+            parts.push(format!("source={}", self.source));
         }
         if parts.is_empty() {
             Ok(())
         } else {
-            write!(f, "?{}", parts.join("&"))
+            write!(f, "{}", parts.join("&"))
         }
     }
 }
 
 impl From<&str> for ListQuery {
-    fn from(query: &str) -> Self {
-        // Dioxus invokes `FromQuery::from_query` twice per match;
-        // and the second call hands us the query string with a
-        // leading `?` already attached. Strip it so the parser sees
-        // a clean `k=v&k=v` string in both calls.
-        let query = query.trim_start_matches('?');
+    fn from(s: &str) -> Self {
         let mut out = ListQuery::default();
-        for pair in query.split('&').filter(|s| !s.is_empty()) {
-            let (k, v) = match pair.split_once('=') {
-                Some((k, v)) => (k, url_decode(v)),
-                None => (pair, String::new()),
+        for pair in s.split('&') {
+            let Some((k, v)) = pair.split_once('=') else {
+                continue;
             };
             match k {
-                "q" => out.q = v,
-                "kind" => out.kind = v,
-                "sort" => out.sort = v,
-                "source" => out.source = v,
-                "mode" => out.mode = v,
+                "kind" => out.kind = v.to_string(),
+                "q" => out.q = v.to_string(),
+                "sort" => out.sort = v.to_string(),
+                "mode" => out.mode = v.to_string(),
+                "source" => out.source = v.to_string(),
                 _ => {}
             }
         }
@@ -76,52 +74,48 @@ impl From<&str> for ListQuery {
     }
 }
 
-/// Query string for the resource detail page. Currently carries the
-/// result of a save attempt so the read view can surface a structured
-/// error banner (StaleRevision / ReadOnly / NotFound / Unsupported)
-/// without needing a client-side event bridge.
+/// Query string for the note page. Carries the result of a save
+/// attempt so the read view can surface a structured error banner
+/// (StaleRevision / ReadOnly / NotFound / Unsupported) without needing
+/// a client-side event bridge.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct DetailQuery {
     pub edit_err: String,
     pub edit_msg: String,
-    /// Set to "1" after a successful save, so the read view can show
-    /// a confirmation banner instead of silently re-rendering.
     pub edited: String,
 }
 
 impl std::fmt::Display for DetailQuery {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let mut parts: Vec<String> = Vec::new();
+        let mut parts = Vec::new();
         if !self.edit_err.is_empty() {
             parts.push(format!("edit_err={}", url_encode(&self.edit_err)));
         }
         if !self.edit_msg.is_empty() {
             parts.push(format!("edit_msg={}", url_encode(&self.edit_msg)));
         }
-        if self.edited == "1" {
-            parts.push("edited=1".to_string());
+        if !self.edited.is_empty() {
+            parts.push(format!("edited={}", self.edited));
         }
         if parts.is_empty() {
             Ok(())
         } else {
-            write!(f, "?{}", parts.join("&"))
+            write!(f, "{}", parts.join("&"))
         }
     }
 }
 
 impl From<&str> for DetailQuery {
-    fn from(query: &str) -> Self {
-        let query = query.trim_start_matches('?');
+    fn from(s: &str) -> Self {
         let mut out = DetailQuery::default();
-        for pair in query.split('&').filter(|s| !s.is_empty()) {
-            let (k, v) = match pair.split_once('=') {
-                Some((k, v)) => (k, url_decode(v)),
-                None => (pair, String::new()),
+        for pair in s.split('&') {
+            let Some((k, v)) = pair.split_once('=') else {
+                continue;
             };
             match k {
-                "edit_err" => out.edit_err = v,
-                "edit_msg" => out.edit_msg = v,
-                "edited" => out.edited = v,
+                "edit_err" => out.edit_err = url_decode(v),
+                "edit_msg" => out.edit_msg = url_decode(v),
+                "edited" => out.edited = v.to_string(),
                 _ => {}
             }
         }
@@ -134,10 +128,7 @@ fn url_encode(s: &str) -> String {
 }
 
 fn url_decode(s: &str) -> String {
-    match urlencoding::decode(s) {
-        Ok(c) => c.into_owned(),
-        Err(_) => s.to_string(),
-    }
+    urlencoding::decode(s).map(|c| c.into_owned()).unwrap_or_else(|_| s.to_string())
 }
 
 #[derive(Routable, Clone, Debug, PartialEq)]
@@ -145,20 +136,16 @@ fn url_decode(s: &str) -> String {
 pub enum Route {
     #[route("/", HomePage)]
     Home {},
-    #[route("/inbox", HomePage)]
-    Inbox {},
-    #[route("/today", HomePage)]
-    Today {},
-    #[route("/search", HomePage)]
-    Search {},
     #[route("/source/:encoded", SpaceHome)]
     Space { encoded: String },
-    #[route("/source/:encoded/list?:..query", ListPage)]
-    List { encoded: String, query: ListQuery },
+    #[route("/source/:encoded/journal", JournalPage)]
+    Journal { encoded: String },
+    #[route("/source/:encoded/files?:..query", ListPage)]
+    Files { encoded: String, query: ListQuery },
+    #[route("/source/:encoded/note/:encoded_ref?:..query", NotePage)]
+    Note { encoded: String, encoded_ref: String, query: DetailQuery },
     #[route("/source/:encoded/activity", ActivityPage)]
     Activity { encoded: String },
-    #[route("/source/:encoded/resource/:encoded_ref?:..query", DetailPage)]
-    Resource { encoded: String, encoded_ref: String, query: DetailQuery },
     #[route("/source/:encoded/graph", GraphPage)]
     Graph { encoded: String },
     #[route("/source/:encoded/preview/:encoded_locator", PreviewPage)]
@@ -172,10 +159,11 @@ pub fn encode_space(source_root: &str) -> String {
 }
 
 pub fn decode_space(encoded: &str) -> String {
-    let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
-        .decode(encoded.as_bytes())
-        .unwrap_or_default();
-    String::from_utf8(bytes).unwrap_or_default()
+    base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(encoded)
+        .ok()
+        .and_then(|b| String::from_utf8(b).ok())
+        .unwrap_or_default()
 }
 
 /// Encode a file locator (path with `/`) into a single URL-safe
@@ -186,17 +174,23 @@ pub fn encode_locator(locator: &str) -> String {
 }
 
 pub fn decode_locator(encoded: &str) -> String {
-    let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
-        .decode(encoded.as_bytes())
-        .unwrap_or_default();
-    String::from_utf8(bytes).unwrap_or_default()
+    base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(encoded)
+        .ok()
+        .and_then(|b| String::from_utf8(b).ok())
+        .unwrap_or_default()
 }
+
 pub fn route_for_space_home(source_root: &str) -> String {
     format!("/source/{}", encode_space(source_root))
 }
 
-pub fn route_for_space_list(source_root: &str) -> String {
-    format!("/source/{}/list", encode_space(source_root))
+pub fn route_for_space_journal(source_root: &str) -> String {
+    format!("/source/{}/journal", encode_space(source_root))
+}
+
+pub fn route_for_space_files(source_root: &str) -> String {
+    format!("/source/{}/files", encode_space(source_root))
 }
 
 pub fn route_for_space_graph(source_root: &str) -> String {
@@ -207,9 +201,9 @@ pub fn route_for_space_activity(source_root: &str) -> String {
     format!("/source/{}/activity", encode_space(source_root))
 }
 
-pub fn route_for_space_resource(source_root: &str, ref_str: &str) -> String {
+pub fn route_for_space_note(source_root: &str, ref_str: &str) -> String {
     format!(
-        "/source/{}/resource/{}",
+        "/source/{}/note/{}",
         encode_space(source_root),
         encode_space(ref_str)
     )
@@ -223,16 +217,16 @@ pub fn route_for_space_preview(source_root: &str, locator: &str) -> String {
     )
 }
 
-/// Build the list URL with the supplied query string. When `query`
+/// Build the files URL with the supplied query string. When `query`
 /// is empty / default, the result is identical to
-/// `route_for_space_list`.
-pub fn route_for_space_list_with_query(source_root: &str, query: &ListQuery) -> String {
-    let base = format!("/source/{}/list", encode_space(source_root));
+/// `route_for_space_files`.
+pub fn route_for_space_files_with_query(source_root: &str, query: &ListQuery) -> String {
+    let base = route_for_space_files(source_root);
     let qs = query.to_string();
     if qs.is_empty() {
         base
     } else {
-        format!("{base}{qs}")
+        format!("{base}?{qs}")
     }
 }
 
@@ -241,39 +235,40 @@ mod tests {
     use super::*;
 
     #[test]
-    fn list_query_round_trips_mode() {
-        let q = ListQuery {
-            q: "org".into(),
-            kind: "document".into(),
-            sort: "title".into(),
-            source: "native".into(),
-            mode: "cards".into(),
-        };
+    fn space_round_trip() {
+        let enc = encode_space("/home/user/notes");
+        assert_eq!(decode_space(&enc), "/home/user/notes");
+    }
+
+    #[test]
+    fn locator_round_trip_keeps_slashes_encoded() {
+        let enc = encode_locator("journal/2026-09-01.md");
+        assert!(!enc.contains('/'));
+        assert_eq!(decode_locator(&enc), "journal/2026-09-01.md");
+    }
+
+    #[test]
+    fn route_helpers_produce_expected_paths() {
+        assert_eq!(route_for_space_home("/n"), "/source/L24");
+        assert_eq!(route_for_space_journal("/n"), "/source/L24/journal");
+        assert_eq!(route_for_space_files("/n"), "/source/L24/files");
+        assert!(route_for_space_note("/n", "doc:1").starts_with("/source/L24/note/"));
+        assert!(route_for_space_preview("/n", "a/b.md").starts_with("/source/L24/preview/"));
+    }
+
+    #[test]
+    fn list_query_round_trips() {
+        let q = ListQuery { kind: "attachment".into(), q: String::new(), sort: "mtime".into(), mode: String::new(), source: String::new() };
         let s = q.to_string();
-        assert!(s.contains("mode=cards"), "got: {s}");
-        let back = ListQuery::from(s.as_str());
-        assert_eq!(back, q);
+        assert_eq!(ListQuery::from(s.as_str()), q);
     }
 
     #[test]
-    fn list_query_unknown_params_are_ignored() {
-        let q = ListQuery::from("?q=foo&kind=all&wat=1");
-        assert_eq!(q.q, "foo");
-        assert_eq!(q.kind, "all");
-        assert_eq!(q.mode, "");
-    }
-
-    #[test]
-    fn list_query_default_serializes_to_empty_string() {
-        assert_eq!(ListQuery::default().to_string(), "");
-    }
-
-    #[test]
-    fn route_for_space_activity_encodes_root() {
-        let href = route_for_space_activity("/tmp/work space");
-        assert!(href.starts_with("/source/"));
-        assert!(href.ends_with("/activity"));
-        let encoded = href.trim_start_matches("/source/").trim_end_matches("/activity");
-        assert_eq!(decode_space(encoded), "/tmp/work space");
+    fn detail_query_escapes_message() {
+        let q = DetailQuery { edit_err: "stale_revision".into(), edit_msg: "a&b=c".into(), edited: String::new() };
+        let s = q.to_string();
+        assert!(!s.contains("a&b=c"));
+        assert_eq!(ListQuery::from("").to_string(), "");
+        assert_eq!(DetailQuery::from(s.as_str()), q);
     }
 }

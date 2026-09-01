@@ -9,7 +9,7 @@
 
 use dioxus::prelude::*;
 
-use crate::router::{route_for_space_preview, route_for_space_resource, ListQuery};
+use crate::router::{route_for_space_preview, route_for_space_note, ListQuery};
 use crate::server::list_filesystem;
 use crate::space_ctx::{SpaceState, SpaceStatus};
 use crate::tree::SourceFileRow;
@@ -83,7 +83,7 @@ pub fn FilesPanel(active_encoded: Option<String>) -> Element {
                         let active_path_pill = active_path_for_pills.clone().unwrap_or_default();
                         let count = counts.get(key).copied().unwrap_or(0);
                         let query = ListQuery { q: String::new(), kind: if *key == "all" { String::new() } else { key.to_string() }, sort: String::new(), source: String::new(), mode: String::new() };
-                        let href = crate::router::route_for_space_list_with_query(&active_path_pill, &query);
+                        let href = crate::router::route_for_space_files_with_query(&active_path_pill, &query);
                         rsx! {
                             a {
                                 class: "files-pill files-pill-{key}",
@@ -111,7 +111,7 @@ pub fn FilesPanel(active_encoded: Option<String>) -> Element {
                             {
                                 let is_indexed = !f.ref_str.is_empty();
                                 let href = if is_indexed {
-                                    route_for_space_resource(&decoded_space, &f.ref_str)
+                                    route_for_space_note(&decoded_space, &f.ref_str)
                                 } else {
                                     route_for_space_preview(&decoded_space, &f.display_path)
                                 };
@@ -162,7 +162,8 @@ fn format_size(size: u64) -> String {
 
 /// Format a mtime as a short relative label: "just now", "5m ago",
 /// "2h ago", "3d ago", "Jan 2". Returns "" when mtime_ms is 0.
-fn format_mtime(mtime_ms: u64) -> String {
+/// Public so the home dashboard's recent-files widget reuses it.
+pub fn format_mtime(mtime_ms: u64) -> String {
     if mtime_ms == 0 {
         return String::new();
     }

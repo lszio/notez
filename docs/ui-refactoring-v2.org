@@ -1,0 +1,396 @@
+# Notez Web UI — "Quiet Note Workspace" v2
+
+Status: implemented on branch `dev`; verified end-to-end against the
+live web binary on `127.0.0.1:8891` against the notez repo as the
+primary space.
+
+This document supersedes / refines the UI surface in
+`docs/ui-refactoring-v1.org`; it is the authoritative description of
+the shipped web client. The core architecture constraints
+(`docs/architecture-v2.org`, `docs/refactoring-v1.org`) still apply —
+no change to the write pipeline, expected-revision semantics, or
+Engine/Protocol boundaries.
+
+## 1 Goals and non-goals
+
+Goals:
+
+1. A note-first visual and interaction language. The page reads like
+   a workspace, not a settings panel — Obsidian and Logseq are the
+   reference points.
+2. One persistent sidebar carries navigation; the main column is a
+   reading surface. Right rail is reserved for the note page
+   (outline, linked mentions, properties, local graph) — never
+   fighting the main column for space.
+3. **Configurable home dashboard.** Widgets are first-class, the
+   configuration is plain web-owned state (`~/.config/notez/web.toml`),
+   and reordering / hiding works without hydration.
+4. Daily notes ("Journal") as a first-class destination — Logseq's
+   daily-note pattern.
+5. SSR-deterministic. No hydration; progressive enhancement handles
+   interactivity. The right rail renders on the server with the
+   correct data the first time.
+
+Non-goals:
+
+- Wikilinks parsing / `[[...]]` rewrites. Out of scope for the UI;
+  markdown links are honoured but no new link syntax is introduced.
+- Tabs (per-note), graph-overlap minimap, outliner block editing —
+  reserved for later iterations.
+- Drag-and-drop widget reordering (up/down buttons only).
+- Client-side persistence in addition to `web.toml`. The server is
+  the single source of truth.
+
+## 2 Information architecture
+
+### Shell
+
+```
+.shell  (grid: sidebar | main-col)
+├── .sidebar
+│   ├── .sb-brand         (wordmark + theme toggle)
+│   ├── .sb-switch        (SpaceDropdown: source switcher)
+│   ├── .sb-search        (Ctrl+K / Cmd-K trigger)
+│   ├── .sb-nav           (Home · Journal · Files · Graph · Activity)
+│   ├── .sb-tree          (TreePanel + FilesPanel for current space)
+└── .main-col
+    ├── .topbar           (drawer toggles + space name + "+ note" menu)
+    └── .content          (routed .page-*)
+```
+
+The note page renders its own right rail inside the content area
+(`div.note-grid` + `aside.rail`) so the rail is SSR-deterministic
+and not dependent on a context signal that fires only after
+hydration.
+
+### Routes
+
+| Route                                              | Component    | Notes                          |
+|----------------------------------------------------|--------------|--------------------------------|
+| `/`                                                | `HomePage`   | configurable widget dashboard  |
+| `/source/:e`                                       | `SpaceHome`  | per-space landing              |
+| `/source/:e/journal`                               | `JournalPage`| daily notes                    |
+| `/source/:e/note/:ref`                             | `NotePage`   | note page + right rail         |
+| `/source/:e/files`                                 | `ListPage`   | all-files browser              |
+| `/source/:e/activity`                              | `ActivityPage` | journal stream               |
+| `/source/:e/graph`                                 | `GraphPage`  | full-space force graph         |
+| `/source/:e/preview/:locator`                      | `PreviewPage`| loose-file preview             |
+
+### Naming migration from v0.2
+
+| v0.2 (old)                | v2 (new)                |
+|---------------------------|-------------------------|
+| `/source/:e/list`         | `/source/:e/files`      |
+| `/source/:e/resource/:r`  | `/source/:e/note/:r`    |
+| `/inbox`, `/today`, `/search` aliases | (removed — dead) |
+
+The old aliases were unused leftovers; the rename makes the route
+table self-documenting.
+
+## 3 Home dashboard (configurable)
+
+### Widget set (canonical order)
+
+```
+journal  recent  activity  spaces  graph
+```
+
+| Widget    | Data source                                              |
+|-----------|-----------------------------------------------------------|
+| `journal` | `JournalWidget` — primary space journal today + recent    |
+| `recent`  | `RecentWidget` — primary space files sorted by mtime desc  |
+| `activity`| `ActivitySection` — merged cross-space journal stream     |
+| `spaces`  | `SpacesSection` — registered sources list                 |
+| `graph`   | `GraphWidget` — primary space mini graph (640×320, 80 iters) |
+
+Widgets are rendered in the order stored in `web.toml` (`home_widgets`).
+Unknown ids are dropped, missing known ids are appended in canonical
+order. Hidden widgets stay in the list so reordering survives
+hide/show cycles.
+
+### `~/.config/notez/web.toml`
+
+```toml
+version = 1
+home_widgets = ["journal", "recent", "activity", "spaces", "graph"]
+hidden_home_widgets = []
+
+[landing]
+"/home/user/notes" = "journal"   # journal | index | files
+
+[starred]
+"/home/user/notes" = ["document:01HZ…", "document:01HZ…"]
+```
+
+The file is **web-owned** — the core config parser rejects unknown
+fields, and this state has no business outside the web client.
+Storage is atomic (tmp file + rename), same pattern as `do_register`.
+Unknown widget ids and unknown landing modes fall back to safe
+defaults (`index` for unknown landings).
+
+### Customize UX
+
+The home page renders a `<details>` "Customize home" panel listing
+the visible widgets in order with up/down/hide buttons, plus any
+hidden widget as a "show" button. Every action is a plain POST
+form to `/api/web/widgets` (body: `widget=<id>&op=up|down|hide|show`).
+No JavaScript, no hydration.
+
+### Primary space
+
+`primary_space` = the first registered source (after auto-discovery).
+Widgets that need a concrete space resolve to it. This is honest
+behaviour: with multiple sources the dashboard always reflects one
+of them; the explicit "Sources" widget lists all of them and links
+to each.
+
+## 4 Note page
+
+The note workbench at `/source/:e/note/:ref`:
+
+- **Header** — title, star toggle, ref + back link, badges (source,
+  format, editable/read-only, revision short hash).
+- **Three mode tabs** — Read / Edit / Source. Pure CSS radio tabs
+  (`#doc-mode-edit:checked ~ .doc-mode-panes .doc-pane-editor`)
+  with a single shared `<textarea>` so drafts survive mode
+  switches. Edit and Source only differ in the chrome label.
+- **Reading pane** — `.note-body` typography (headings, lists,
+  tables, code, blockquotes, images, hr, mermaid); `body_html`
+  comes from the prebuilt markdown/org renderers in `notez-preview`,
+  not from inline hacks.
+- **Right rail** — `OutlinePanel`, `BacklinksPanel`,
+  `PropertiesPanel`, `GraphPanel`. Each takes `active_ref` as a
+  prop (no context dependency) so SSR renders correct data.
+- **Star** — POST `/api/web/star` toggles starred state persisted in
+  `web.toml`; the button shows ★ / ☆ and `aria-pressed`.
+- **Janet** — a `<details>` panel posting to `/api/janet/eval`. The
+  sandbox stays as documented in `memory://` (no fs / net / spawn).
+- **Metadata** — a `<details>` panel exposing locator, revision,
+  object_id, kind, source.
+
+### Right rail semantics
+
+| Card          | Data                                                | Empty state        |
+|---------------|-----------------------------------------------------|--------------------|
+| Outline       | headings from `get_outline(source_root, ref_str)`   | "no headings"      |
+| Linked mentions | incoming + outgoing from `list_links`             | "no notes link here yet" |
+| Properties    | the active `ResourceRow`'s metadata + properties    | "no properties"    |
+| Local graph   | `neighbor_graph` (1-hop), mini render               | "no links yet"     |
+
+Outline entries are buttons with `data-outline-idx`. The delegated
+click handler in `index.html` scrolls to the Nth `h1..h6` inside
+`.note-body`. Backlinks rows whose backing resource was deleted
+render with kind `missing` and strike-through, no link.
+
+### Responsive
+
+- ≥ 68rem: note-grid = article | rail (right rail sticky).
+- 45–68rem: rail becomes a slide-in drawer (`.drawer-open-inspector`
+  on the shell; topbar `+` toggles it). The drawer has a backdrop.
+- < 45rem: sidebar also becomes a drawer (the hamburger in the
+  topbar toggles it; links inside the drawer close it after
+  navigation).
+
+## 5 Journal
+
+`/source/:e/journal` — daily notes following the Logseq convention:
+
+- File pattern: `journal/YYYY-MM-DD.md` (also `.org`).
+- The page shows:
+  - **Today card** — open (if exists) or create (POST to
+    `/api/sources/document/create` with `journal_date=2026-09-01`).
+  - **Recent entries** — `list_journal(source_root)` returns
+    `{date, locator, title, ref_str, mtime_ms}` sorted by date desc;
+    rows with empty `ref_str` link to the preview route (the file
+    hasn't been scanned yet).
+  - **New entry for another day** — `<details>` form with
+    `<input type="date">` posting the same create endpoint with
+    `journal_date`.
+
+`create` semantics are open-or-create: an existing file at the
+locator is indexed and redirected without overwriting.
+
+## 7 Space home (configurable landing)
+
+Per-source landing is configurable via `web.toml` (`landing` map)
+or the radio form at the bottom of the space home page:
+
+| Mode      | Renders                                              |
+|-----------|------------------------------------------------------|
+| `journal` | Today's entry + recent entries                       |
+| `index`   | `index.md` / `index.org` / `README.*` rendered body |
+| `files`   | Top 12 most recently modified files                  |
+
+The landing picker is a `<details>` strip with three radios + Save
+button — POSTs `/api/web/landing`. Default mode when unset: `index`.
+
+## 8 UI configuration storage
+
+Module: `packages/web/src/ui_config.rs`.
+
+| Function                | Purpose                                          |
+|-------------------------|--------------------------------------------------|
+| `load_web_ui_config()`   | Read from XDG, falling back to defaults         |
+| `store_web_ui_config()` | Atomic write (`tmp + rename`)                   |
+| `WebUiConfig::moveable`  | Move widget id up/down (self-heals order)       |
+| `WebUiConfig::set_widget_hidden` | Hide/show a widget                     |
+| `WebUiConfig::toggle_star`     | Star/unstar one note per space          |
+| `WebUiConfig::landing_for`     | Resolve landing mode with safe default  |
+
+Tests cover defaults, self-healing, hidden filtering, star round
+trip, landing fall-back, toml round trip, corrupt-file fall-back.
+
+## 9 SSR / no-hydration strategy
+
+Dioxus fullstack is SSR-only (`hydrate(false)`); `use_effect` never
+runs on the client. Every interactive bit is one of:
+
+- a plain link (`<a href>`),
+- a POST form (`<form method="post">`),
+- or a delegated vanilla JS listener registered from `index.html`
+  or the inline `SHELL_ENHANCE_JS` block in `src/layout.rs`.
+
+JS responsibilities:
+
+- `Ctrl/Cmd+K` opens the command palette; `Esc` closes.
+- The palette modal closes on backdrop click.
+- `.drawer-toggle-nav` / `.drawer-toggle-inspector` toggle
+  `.drawer-open-{nav,inspector}` on `.shell`.
+- Outline entries with `data-outline-idx` scroll the Nth heading of
+  the note body into view.
+- `.search-trigger` toggles the palette.
+- `[data-theme-toggle]` cycles Light / Dark / System and persists
+  to `localStorage` (read before first paint to avoid FOUC).
+- The files page `input[name="q"]` is a live list filter that
+  updates row visibility and the "showing x / y" counter (runs
+  until the Dioxus client mounts; stands down on hydration).
+- The command-palette fallback corpus is the rendered `.result`
+  rows; arrow keys move selection, Enter navigates. Same stand-down
+  pattern.
+- The note editor textarea is mirrored to `sessionStorage` keyed by
+  ref, restored after a failed save (`?edit_err=`), cleared after a
+  successful save (`?edited=1`).
+
+The M6 wasm script tag is loaded harmlessly; it 404s in SSR-only
+builds and stands down.
+
+## 10 Theming
+
+Two themes (`light` / `dark`) plus `system`. Default dark. Tokens are
+defined per theme with both `:root` defaults and explicit overrides
+in `html[data-theme="…"]`. The system mode resolves through
+`prefers-color-scheme`. CSS custom property indirection keeps the
+`ui` crate's legacy tokens (`--ink`, `--paper-2`, `--r-sm`, etc.)
+working alongside the new ones.
+
+Fonts: system sans (with Chinese stack), ui-monospace for code.
+Typography surface: `.note-body` — comfortable reading column,
+scroll-margin-top reserved for sticky topbar.
+
+## 11 CSS architecture
+
+Everything ships in a single `<style>` block in
+`packages/web/public/index.html` (Dioxus fullstack resolves
+`public/` relative to the binary directory). The stylesheet is
+~1400 lines and organises itself as:
+
+1. Tokens (colour, spacing, font, radius, shadow).
+2. Legacy token aliases (`--ink`, `--sp-*`, …) for the shared `ui` crate.
+3. Base reset.
+4. Shell grid + sidebar + topbar.
+5. Generic page primitives (`.page`, `.page-head`, `.btn`,
+   `.field`, `.kind-*`).
+6. Home widgets (`.widget*`, `.recent-*`, `.activity-*`, `.space-*`,
+   `.customize`).
+7. Journal (`.journal-*`).
+8. Note page (`.note-grid`, `.note-*`, `.note-body` typography,
+   `.doc-modes`, `.doc-banner`, `.editor-*`, `.readonly-note`).
+9. Note-page right rail (`.rail`, `.rail-card`, `.outline-*`,
+   `.link-*`, `.props-*`).
+10. Graph page (`.graph-layout`, `.graph-svg`, `.graph-node-*`).
+11. Files list page (`.controls`, `.mode-tabs`, `.result*`).
+12. Activity + preview pages.
+13. Command palette overlay.
+14. Responsive: < 68rem (drawer rail), < 45rem (drawer sidebar).
+15. Reduced motion + print.
+
+## 12 API additions
+
+New endpoints (mutation middleware applies; loopback trusted):
+
+| Method · Path                    | Body                       | Effect                       |
+|----------------------------------|----------------------------|------------------------------|
+| POST `/api/web/widgets`          | `widget, op`               | reorder/hide/show widget     |
+| POST `/api/web/star`             | `source_root/encoded, ref_str` | toggle star                |
+| POST `/api/web/landing`          | `source_root/encoded, landing` | set per-space landing    |
+| POST `/api/sources/document/create` | `source_root/encoded, locator? title? journal_date?` | open-or-create note |
+
+New server functions (`#[server]`, all SSR):
+
+- `get_home_widgets() -> Vec<String>` — visible widget ids in order.
+- `get_space_ui(source_root) -> { landing, starred }` — used by
+  the note page (star) and the space home (landing picker).
+- `list_links(source_root, ref_str) -> { incoming, outgoing }` —
+  partitions `Engine::query_resolved_relations` by direction.
+- `get_outline(source_root, ref_str) -> Vec<OutlineItemDto>` —
+  `parse_outline(content, org)` covers markdown `#`, org `*`,
+  frontmatter, fenced code, org `#+begin_src` blocks.
+- `list_journal(source_root) -> Vec<JournalEntryDto>` —
+  `tree::build_source_files` filtered by `journal/` prefix and
+  ISO date filename.
+
+Date helpers: `today_iso_date()` (UTC, `civil_from_days`), and
+`today_journal_locator() -> "journal/YYYY-MM-DD.md"`.
+
+## 13 What did NOT change
+
+- Core write pipeline. Same `ApplicationDispatcher`, same
+  expected-revision semantics, same Janet sandbox.
+- The note body rendering stays in `notez-preview` (markdown via
+  pulldown-cmark, org via `org_html`).
+- The Engine / Projection / Protocol boundaries.
+- The mutation authentication policy (loopback trusted; non-loopback
+  requires `NOTEZ_WEB_TOKEN`).
+
+## 14 Verification record
+
+The work was verified end-to-end on `127.0.0.1:8891` against the
+notez repository itself as the primary source:
+
+- `cargo test -p web --lib` — 63 passed, 0 failed.
+- `cargo build -p web --bin web` — clean.
+- Browser screenshot of `/` shows the dashboard rendering all five
+  widgets with real data.
+- "Create today's note" button → POST `/api/sources/document/create`
+  with `journal_date=2026-09-01` → file written to
+  `journal/2026-09-01.md`; redirect to the new note page; title
+  renders as the ISO date (not `2026 09 01`).
+- Note page renders article + right rail (Outline / Linked mentions /
+  Properties / Local graph) with no errors; the file tree in the
+  sidebar matches.
+- Star button POST `/api/web/star` toggles `web.toml`'s
+  `starred` map and the visual state (★ / ☆).
+- `web.toml` after star toggle:
+  ```toml
+  version = 1
+  home_widgets = ["journal", "recent", "activity", "spaces", "graph"]
+  hidden_home_widgets = []
+  [starred]
+  "/home/lszio/Projects/notez" = ["document:00…"]
+  ```
+
+The customize panel reorders / hides via plain POST forms; the
+visible widget set is computed by `WebUiConfig::visible_home_widgets`
+(self-heals).
+
+## 15 Future work
+
+- Drag-and-drop widget reordering (currently up/down only).
+- Wikilinks / block references — `[[Note Title]]` parsed and rendered
+  in the body, backlinks updated.
+- Per-note tabs (currently single-tab with mode tabs).
+- Per-source preferences beyond landing/starred.
+- Native CSS lightbox / image viewer.
+- WASM hydration of the right rail once Dioxus' SSR/hydration path
+  for `use_server_future` is reliable — for now we render the
+  right rail server-side on every note page.

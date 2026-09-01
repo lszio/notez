@@ -1,114 +1,336 @@
-//! Landing page at `/` — Source health, Activity and Continue-working
-//! affordances per `docs/ui-refactoring-v1.org` §4.1.
+//! Landing page at `/` — the configurable home dashboard.
 //!
-//! Data honesty: Source health is real (every registered space is
-//! resolved server-side via `selected_space` + `list_kind_counts`),
-//! and the Activity card is backed by the durable journal (real
-//! recorded writes, never fabricated rows; empty = genuinely no
-//! journal entries yet). Saved views still have no server surface,
-//! so the Continue card labels that state explicitly.
+//! Widgets render in the order stored in `~/.config/notez/web.toml`
+//! (`home_widgets` + `hidden_home_widgets`; see `crate::ui_config`).
+//! The built-in widget set:
+//!
+//! - `journal`  — today's entry (open-or-create) + recent entries for
+//!   the primary space
+//! - `recent`   — recently modified files in the primary space
+//! - `activity` — merged cross-space journal stream
+//! - `spaces`   — registered sources
+//! - `graph`    — mini graph of the primary space
+//!
+//! The "Customize" panel is plain HTML forms posting to
+//! `/api/web/widgets` (`up` / `down` / `hide` / `show`) — no
+//! hydration involved. All widget data is real: journal entries come
+//! from the filesystem, activity from the durable journal, files from
+//! the disk listing.
 
 use dioxus::prelude::*;
-use ui::notez::{NzBadge, NzCard};
 
 use crate::pages::activity::{format_relative_time, space_leaf};
-use crate::router::{route_for_space_activity, route_for_space_list, route_for_space_resource};
+use crate::pages::journal::JournalWidget;
+use crate::pages::panel_files::format_mtime;
 use crate::server::{
-    list_kind_counts, list_recent_activity, list_registered_spaces, selected_space,
-    ActivityEntryDto, RegisteredSpaceDto,
+    list_recent_activity, list_registered_spaces, list_source_files, ActivityEntryDto,
+    RegisteredSpaceDto,
 };
-use crate::tree::KindCounts;
+use crate::ui_config::WIDGET_IDS;
 
-/// One row of the Source-health dashboard.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-enum SpaceHealth {
-    Ready {
-        dto: RegisteredSpaceDto,
-        space_name: String,
-        total: usize,
-    },
-    Broken { dto: RegisteredSpaceDto, message: String },
+/// Primary space = the first registered source. Used by widgets that
+/// need a concrete space when the user has not picked one.
+fn primary_space(spaces: &[RegisteredSpaceDto]) -> Option<RegisteredSpaceDto> {
+    spaces.first().cloned()
 }
 
 #[component]
 pub fn HomePage() -> Element {
-    // One future for the whole dashboard so SSR renders one
-    // deterministic payload (no multi-future races): health rows +
-    // the merged recent activity stream.
-    let health_resource = use_server_future(|| async {
-        let mut rows: Vec<SpaceHealth> = Vec::new();
-        let spaces = list_registered_spaces().await.unwrap_or_default();
-        for s in spaces {
-            match selected_space(s.path.clone()).await {
-                Ok(sel) => {
-                    let counts: KindCounts =
-                        list_kind_counts(s.path.clone()).await.unwrap_or_default();
-                    rows.push(SpaceHealth::Ready {
-                        dto: s,
-                        space_name: sel.name,
-                        total: counts.total(),
-                    });
-                }
-                Err(e) => rows.push(SpaceHealth::Broken {
-                    dto: s,
-                    message: e.to_string(),
-                }),
-            }
-        }
-        let activity = list_recent_activity(12).await.unwrap_or_default();
-        (rows, activity)
+    let spaces_resource = use_server_future(|| async {
+        list_registered_spaces().await.unwrap_or_default()
     })?;
+    let spaces: Vec<RegisteredSpaceDto> = spaces_resource.cloned().unwrap_or_default();
+    let widgets_resource = use_server_future(|| async {
+        crate::server::get_home_widgets().await.unwrap_or_default()
+    })?;
+    let widgets: Vec<String> = widgets_resource.cloned().unwrap_or_default();
 
-    let (rows, recent_activity): (Vec<SpaceHealth>, Vec<ActivityEntryDto>) =
-        health_resource.cloned().unwrap_or_default();
-    let dashboard_loading = health_resource().is_none();
-    let ready_count = rows
-        .iter()
-        .filter(|r| matches!(r, SpaceHealth::Ready { .. }))
-        .count();
-    let broken_count = rows.len() - ready_count;
-    let first_ready_path = rows.iter().find_map(|r| match r {
-        SpaceHealth::Ready { dto, .. } => Some(dto.path.clone()),
-        _ => None,
-    });
-    let first_ready_href = first_ready_path.as_ref().map(|p| route_for_space_list(p));
-    let first_activity_href = first_ready_path.as_ref().map(|p| route_for_space_activity(p));
     let now_ms = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis() as i64)
         .unwrap_or(0);
 
     rsx! {
-        div { class: "page workspace-home",
-            section { class: "workspace-hero",
-                div { class: "workspace-hero-kicker", "WORKSPACE OVERVIEW" }
-                h1 { "Good to see you." }
-                p { class: "lede", "A quiet place for local documents, connected sources, and the work waiting next." }
-                div { class: "workspace-hero-actions",
-                    button { class: "hero-command", r#type: "button", "data-palette-open": "true", "⌘K", span { "Search or run a command" } }
-                    if let Some(href) = first_ready_href.as_ref() { a { class: "hero-link", href: "{href}", "Open documents →" } }
+        div { class: "page page-home",
+            header { class: "page-head",
+                p { class: "page-eyebrow", "notez" }
+                h1 { class: "page-title", "Home" }
+                p { class: "page-lede",
+                    if spaces.is_empty() {
+                        "Register a source to start writing notes."
+                    } else {
+                        "{spaces.len()} source(s) registered. Widgets below are configurable."
+                    }
                 }
             }
-            div { class: "workspace-columns",
-                section { class: "workspace-section workspace-continue", "aria-labelledby": "continue-heading",
-                    div { class: "workspace-section-head", span { class: "workspace-section-kicker", "CONTINUE" }, h2 { id: "continue-heading", "Pick up where you left off" } }
-                    if dashboard_loading { div { class: "workspace-empty", "Loading recent work…" } }
-                    else if recent_activity.is_empty() { div { class: "workspace-empty", p { "No recent documents yet." } p { class: "dim", "Open a source or search the workspace to begin." } } }
-                    else { div { class: "continue-list", for entry in recent_activity.iter().take(5) { HomeActivityRow { entry: entry.clone(), now_ms } } } }
-                }
-                section { class: "workspace-section workspace-sources", "aria-labelledby": "sources-heading",
-                    div { class: "workspace-section-head", span { class: "workspace-section-kicker", "SOURCES" }, h2 { id: "sources-heading", "Your connected spaces" } }
-                    if rows.is_empty() { div { class: "workspace-empty", p { "No sources registered." } p { class: "dim", "Register a local workspace from the source menu above." } } }
-                    else { div { class: "source-list", for row in rows.iter() { match row {
-                        SpaceHealth::Ready { dto, space_name, total } => rsx! { a { class: "source-card", href: "{route_for_space_list(&dto.path)}", div { class: "source-card-top", span { class: "source-dot", "●" } strong { "{space_name}" } span { class: "source-state", "ready" } }, div { class: "source-card-meta mono-sm", "{total} resources · {dto.path}" } } },
-                        SpaceHealth::Broken { dto, message } => rsx! { div { class: "source-card is-broken", div { class: "source-card-top", span { class: "source-dot", "!" } strong { "{dto.name}" } span { class: "source-state", "unavailable" } }, div { class: "source-card-meta mono-sm", "{message}" } } },
-                    } } } }
+
+            CustomizePanel { widgets: widgets.clone() }
+
+            if widgets.is_empty() {
+                p { class: "empty-hint", "All widgets are hidden. Use Customize to bring some back." }
+            } else {
+                div { class: "widget-grid",
+                    for id in widgets.iter() {
+                        {match id.as_str() {
+                            "journal" => rsx! { JournalSection { spaces: spaces.clone() } },
+                            "recent" => rsx! { RecentSection { spaces: spaces.clone() } },
+                            "activity" => rsx! { ActivitySection { now_ms } },
+                            "spaces" => rsx! { SpacesSection { spaces: spaces.clone() } },
+                            "graph" => rsx! { GraphSection { spaces: spaces.clone() } },
+                            _ => rsx! {},
+                        }}
+                    }
                 }
             }
-            section { class: "workspace-section workspace-activity", "aria-labelledby": "activity-heading",
-                div { class: "workspace-section-head", span { class: "workspace-section-kicker", "ACTIVITY" }, h2 { id: "activity-heading", "Recent changes" }, if let Some(href) = first_activity_href.as_ref() { a { class: "section-action", href: "{href}", "View all →" } } }
-                if recent_activity.is_empty() { div { class: "workspace-empty", "Journal activity will appear here after a scan or document save." } }
-                else { div { class: "activity-stream", for entry in recent_activity.iter() { HomeActivityRow { entry: entry.clone(), now_ms } } } }
+        }
+    }
+}
+
+/// Widget visibility editor. `widgets` = visible ids in display
+/// order; the hidden rest of `WIDGET_IDS` renders show buttons.
+#[component]
+fn CustomizePanel(widgets: Vec<String>) -> Element {
+    let hidden_ids: Vec<&str> = WIDGET_IDS
+        .iter()
+        .copied()
+        .filter(|id| !widgets.iter().any(|w| w == id))
+        .collect();
+
+    rsx! {
+        details { class: "customize",
+            summary { "Customize home" }
+            div { class: "customize-body",
+                div { class: "customize-col",
+                    h3 { class: "customize-title", "Visible" }
+                    if widgets.is_empty() {
+                        p { class: "empty-hint", "none" }
+                    }
+                    ul { class: "customize-list",
+                        for (idx, w) in widgets.iter().enumerate() {
+                            li { class: "customize-row",
+                                span { class: "customize-name", "{widget_label(w)}" }
+                                div { class: "customize-actions",
+                                    form { method: "post", action: "/api/web/widgets",
+                                        input { r#type: "hidden", name: "widget", value: "{w}" }
+                                        input { r#type: "hidden", name: "op", value: "up" }
+                                        button { class: "mini-btn", r#type: "submit", disabled: idx == 0, "aria-label": "Move up", "↑" }
+                                    }
+                                    form { method: "post", action: "/api/web/widgets",
+                                        input { r#type: "hidden", name: "widget", value: "{w}" }
+                                        input { r#type: "hidden", name: "op", value: "down" }
+                                        button { class: "mini-btn", r#type: "submit", disabled: idx == widgets.len() - 1, "aria-label": "Move down", "↓" }
+                                    }
+                                    form { method: "post", action: "/api/web/widgets",
+                                        input { r#type: "hidden", name: "widget", value: "{w}" }
+                                        input { r#type: "hidden", name: "op", value: "hide" }
+                                        button { class: "mini-btn mini-btn-warn", r#type: "submit", "aria-label": "Hide widget", "hide" }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                if !hidden_ids.is_empty() {
+                    div { class: "customize-col",
+                        h3 { class: "customize-title", "Hidden" }
+                        ul { class: "customize-list",
+                            for w in hidden_ids.iter() {
+                                li { class: "customize-row",
+                                    span { class: "customize-name dim", "{widget_label(w)}" }
+                                    form { method: "post", action: "/api/web/widgets",
+                                        input { r#type: "hidden", name: "widget", value: "{w}" }
+                                        input { r#type: "hidden", name: "op", value: "show" }
+                                        button { class: "mini-btn", r#type: "submit", "show" }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn widget_label(id: &str) -> &'static str {
+    match id {
+        "journal" => "Journal",
+        "recent" => "Recent files",
+        "activity" => "Activity",
+        "spaces" => "Sources",
+        "graph" => "Graph",
+        _ => "Widget",
+    }
+}
+
+#[component]
+fn JournalSection(spaces: Vec<RegisteredSpaceDto>) -> Element {
+    match primary_space(&spaces) {
+        Some(s) => rsx! { JournalWidget { decoded_space: s.path.clone() } },
+        None => rsx! { WidgetEmpty { title: "Journal", hint: "Register a source first." } },
+    }
+}
+
+#[component]
+fn RecentSection(spaces: Vec<RegisteredSpaceDto>) -> Element {
+    match primary_space(&spaces) {
+        Some(s) => rsx! { RecentWidget { decoded_space: s.path } },
+        None => rsx! { WidgetEmpty { title: "Recent files", hint: "Register a source first." } },
+    }
+}
+
+#[component]
+fn GraphSection(spaces: Vec<RegisteredSpaceDto>) -> Element {
+    match primary_space(&spaces) {
+        Some(s) => rsx! { GraphWidget { decoded_space: s.path } },
+        None => rsx! { WidgetEmpty { title: "Graph", hint: "Register a source first." } },
+    }
+}
+
+#[component]
+fn WidgetEmpty(title: String, hint: String) -> Element {
+    rsx! {
+        section { class: "widget",
+            div { class: "widget-head", h2 { class: "widget-title", "{title}" } }
+            div { class: "widget-body", p { class: "empty-hint", "{hint}" } }
+        }
+    }
+}
+
+/// Recently modified files in the primary space (mtime desc).
+#[component]
+fn RecentWidget(decoded_space: String) -> Element {
+    let ds = decoded_space.clone();
+    let files_resource = use_server_future(move || {
+        let p = ds.clone();
+        async move {
+            let mut files = list_source_files(p).await.unwrap_or_default();
+            files.sort_by(|a, b| b.mtime_ms.cmp(&a.mtime_ms));
+            files.truncate(10);
+            files
+        }
+    })?;
+    let files = files_resource.cloned().unwrap_or_default();
+
+    rsx! {
+        section { class: "widget widget-recent",
+            div { class: "widget-head",
+                h2 { class: "widget-title", "Recent files" }
+                a { class: "widget-more", href: "{crate::router::route_for_space_files(&decoded_space)}", "all →" }
+            }
+            div { class: "widget-body",
+                if files.is_empty() {
+                    p { class: "empty-hint", "No files indexed yet." }
+                } else {
+                    ul { class: "recent-list",
+                        for f in files.iter() {
+                            li { class: "recent-row",
+                                a {
+                                    class: "recent-link",
+                                    href: if f.ref_str.is_empty() {
+                                        crate::router::route_for_space_preview(&decoded_space, &f.display_path)
+                                    } else {
+                                        crate::router::route_for_space_note(&decoded_space, &f.ref_str)
+                                    },
+                                    "{f.title}"
+                                }
+                                span { class: "recent-when dim", "{format_mtime(f.mtime_ms)}" }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Merged cross-space activity stream.
+#[component]
+fn ActivitySection(now_ms: i64) -> Element {
+    let activity_resource = use_server_future(|| async {
+        list_recent_activity(10).await.unwrap_or_default()
+    })?;
+    let entries: Vec<ActivityEntryDto> = activity_resource.cloned().unwrap_or_default();
+
+    rsx! {
+        section { class: "widget widget-activity",
+            div { class: "widget-head", h2 { class: "widget-title", "Activity" } }
+            div { class: "widget-body",
+                if entries.is_empty() {
+                    p { class: "empty-hint", "No writes recorded yet — edits land here." }
+                } else {
+                    ul { class: "activity-list",
+                        for entry in entries.iter() {
+                            li { class: "activity-row", HomeActivityRow { entry: entry.clone(), now_ms } }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Registered sources.
+#[component]
+fn SpacesSection(spaces: Vec<RegisteredSpaceDto>) -> Element {
+    rsx! {
+        section { class: "widget widget-spaces",
+            div { class: "widget-head", h2 { class: "widget-title", "Sources" } }
+            div { class: "widget-body",
+                if spaces.is_empty() {
+                    p { class: "empty-hint", "No sources registered yet." }
+                } else {
+                    ul { class: "space-list",
+                        for s in spaces.iter() {
+                            li { class: "space-row",
+                                a { class: "space-link", href: "{crate::router::route_for_space_home(&s.path)}",
+                                    span { class: "space-name", "{s.name}" }
+                                    span { class: "space-path dim mono-sm", "{s.path}" }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Mini force-directed graph of the primary space.
+#[component]
+fn GraphWidget(decoded_space: String) -> Element {
+    let ds = decoded_space.clone();
+    let graph_resource = use_server_future(move || {
+        let p = ds.clone();
+        async move { crate::server::list_graph(p).await.ok() }
+    })?;
+    let graph = graph_resource
+        .cloned()
+        .flatten()
+        .unwrap_or_else(|| notez_core::application::Graph {
+            nodes: Vec::new(),
+            edges: Vec::new(),
+            total_nodes: 0,
+            truncated: false,
+        });
+    rsx! {
+        section { class: "widget widget-graph",
+            div { class: "widget-head",
+                h2 { class: "widget-title", "Graph" }
+                a { class: "widget-more", href: "{crate::router::route_for_space_graph(&decoded_space)}", "full →" }
+            }
+            div { class: "widget-body widget-body-graph",
+                if graph.nodes.is_empty() {
+                    p { class: "empty-hint", "No linked notes yet." }
+                } else {
+                    crate::pages::graph::GraphSvg {
+                        graph,
+                        space_decoded: decoded_space.clone(),
+                        width: 640.0,
+                        height: 320.0,
+                        iterations: 80,
+                    }
+                }
             }
         }
     }
@@ -118,26 +340,20 @@ pub fn HomePage() -> Element {
 /// different spaces, so the space leaf is shown alongside the action.
 #[component]
 fn HomeActivityRow(entry: ActivityEntryDto, now_ms: i64) -> Element {
-    let when = format_relative_time(entry.at_unix_millis, now_ms);
-    let leaf = space_leaf(&entry.source_root);
-    let target_link = entry.target.as_ref().map(|t| {
-        let href = route_for_space_resource(&entry.source_root, t);
-        (t.clone(), href)
-    });
+    let href = if entry.target.is_some() {
+        crate::router::route_for_space_note(&entry.source_root, entry.target.as_deref().unwrap_or(""))
+    } else {
+        crate::router::route_for_space_activity(&entry.source_root)
+    };
     rsx! {
-        li { class: "activity-row", key: "{entry.sequence}-{entry.source_root}",
-            div { class: "activity-line",
-                span { class: "activity-action mono-sm", "{entry.action}" }
-                span { class: "activity-actor", "{entry.actor}" }
-                span { class: "activity-when mono-sm", "{when}" }
-                span { class: "activity-space mono-sm", "{leaf}" }
+        div { class: "activity-inner",
+            span { class: "activity-action", "{entry.action}" }
+            if let Some(t) = entry.target.as_ref() {
+                span { class: "activity-target mono-sm", "{space_leaf(t)}" }
             }
-            if let Some((t, href)) = target_link {
-                div { class: "activity-target mono-sm",
-                    span { class: "activity-target-mark", "→" }
-                    a { href: "{href}", "{t}" }
-                }
-            }
+            span { class: "activity-space dim", "{space_leaf(&entry.source_root)}" }
+            span { class: "activity-when dim", "{format_relative_time(entry.at_unix_millis, now_ms)}" }
+            a { class: "activity-link", href: "{href}", "view" }
         }
     }
 }

@@ -2,7 +2,7 @@
 
 use dioxus::prelude::*;
 
-use crate::router::{route_for_space_preview, route_for_space_resource};
+use crate::router::{route_for_space_preview, route_for_space_note};
 use crate::server::list_space_tree;
 use crate::space_ctx::{SpaceState, SpaceStatus};
 use crate::tree::{TreeChild, TreeNode};
@@ -76,7 +76,7 @@ fn TreeNodeView(node: TreeNode, encoded: String) -> Element {
                                 let href = if ref_str.is_empty() {
                                     route_for_space_preview(&decoded_for_child, &path)
                                 } else {
-                                    route_for_space_resource(&decoded_for_child, &ref_str)
+                                    route_for_space_note(&decoded_for_child, &ref_str)
                                 };
                                 rsx! {
                                     li { class: "tree-leaf",

@@ -12,7 +12,7 @@ use ui::notez::NzBadge;
 
 use crate::pages::ui::{Breadcrumb, BreadcrumbSegment};
 use crate::pages::use_space_layout;
-use crate::router::{route_for_space_list, route_for_space_resource};
+use crate::router::{route_for_space_files, route_for_space_note};
 use crate::server::{list_space_activity, ActivityEntryDto};
 use crate::space_ctx::{SpaceState, SpaceStatus};
 
@@ -133,7 +133,7 @@ pub fn ActivityPage(encoded: String) -> Element {
                     leaf_for_crumb.clone(),
                     active_path
                         .as_ref()
-                        .map(|p| route_for_space_list(p))
+                        .map(|p| route_for_space_files(p))
                         .unwrap_or_else(|| "/".to_string()),
                 ),
                 BreadcrumbSegment::here("activity".to_string()),
@@ -201,7 +201,7 @@ fn ActivityRow(entry: ActivityEntryDto, now_ms: i64, current: String) -> Element
     let when = format_relative_time(entry.at_unix_millis, now_ms);
     let change_short: String = entry.change_id.chars().take(8).collect();
     let target_link = entry.target.as_ref().map(|t| {
-        let href = route_for_space_resource(&entry.source_root, t);
+        let href = route_for_space_note(&entry.source_root, t);
         (t.clone(), href)
     });
     rsx! {

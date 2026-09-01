@@ -1,41 +1,37 @@
-//! Resource detail page — the document workbench.
+//! `NotePage` — the note workbench at `/source/:encoded/note/:ref`.
 //!
-//! One page context hosts three modes per `docs/ui-refactoring-v1.org`
-//! §5.1:
+//! One page hosts three modes per note (pure-CSS radio tabs, no
+//! hydration): **Read** (rendered body), **Edit** (raw editor), and
+//! **Source** (same editor with on-disk chrome). A single
+//! `<textarea>` is shared by Edit and Source so a draft is never
+//! duplicated. `dangerous_inner_html` + `html_escape::encode_text`
+//! keeps SSR textarea content clean.
 //!
-//! - **Read** — the rendered document body (default).
-//! - **Edit** — the raw Markdown/Org editor with save state.
-//! - **Source** — the same raw editor with source-file chrome
-//!   (locator + on-disk revision), so raw text is always one tab
-//!   away without a separate route.
+//! The right rail (outline / linked mentions / properties / local
+//! graph) is driven by the `resource_ref` context signal this page
+//! publishes. Save/conflict feedback arrives via `DetailQuery` params
+//! redirected back from `/api/sources/document/edit`; the browser
+//! keeps a `sessionStorage` draft keyed by ref so a failed save never
+//! destroys edits.
 //!
-//! Mode switching is a pure-CSS radio-tab pattern (no JavaScript, no
-//! reload): the three radios are visually hidden but keyboard
-//! reachable; labels toggle the active pane. The editor pane is a
-//! single `<textarea>` shared by Edit and Source, so a draft is never
-//! duplicated or lost when switching modes. `dangerous_inner_html`
-//! + `html_escape::encode_text` keeps SSR textarea content clean
-//! (Dioxus hydration comments would otherwise leak into the value).
-//!
-//! Save/conflict feedback arrives via the `DetailQuery` params that
-//! the `/api/sources/document/edit` route redirects back with; stale
-//! revisions and read-only sources render as structured banners with
-//! next actions, and the browser keeps a `sessionStorage` draft keyed
-//! by ref so a failed save does not destroy the user's edits.
-
 use dioxus::prelude::*;
-use ui::notez::{NzBadge, NzButton, NzCard};
+use ui::notez::{NzBadge, NzButton};
 
 use crate::model::ResourceRow;
-use crate::pages::ui::{Breadcrumb, BreadcrumbSegment, KindIcon};
+use crate::pages::ui::KindIcon;
 use crate::pages::use_space_layout;
-use crate::router::{DetailQuery, route_for_space_list, route_for_space_home, route_for_space_preview};
-use crate::server::{get_resource, read_document_content};
+use crate::pages::{
+    BacklinksPanel, GraphPanel, OutlinePanel, PropertiesPanel,
+};
+use crate::router::{
+    route_for_space_files, route_for_space_note, route_for_space_preview,
+    DetailQuery,
+};
+use crate::server::{get_resource, get_space_ui, read_document_content};
 use crate::space_ctx::{SpaceState, SpaceStatus};
 
 /// Combined payload for the workbench: the indexed `ResourceRow` plus
-/// the raw on-disk source text (the server's `get_resource` returns
-/// rendered HTML only; `read_document_content` supplies the editor).
+/// the raw on-disk source text.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 struct DocDetail {
     row: ResourceRow,
@@ -44,38 +40,30 @@ struct DocDetail {
 
 /// Human format label derived from the locator extension.
 fn format_label(locator: &str) -> &'static str {
-    let ext = std::path::Path::new(locator)
-        .extension()
-        .and_then(|e| e.to_str())
-        .unwrap_or("");
-    match ext.to_ascii_lowercase().as_str() {
+    match locator.rsplit('.').next().unwrap_or("").to_ascii_lowercase().as_str() {
         "md" | "markdown" => "markdown",
         "org" => "org",
         "txt" => "text",
-        _ => "document",
+        _ => "file",
     }
 }
 
 /// Short tail of a revision hash for display.
 fn short_rev(rev: &str) -> String {
-    if rev.len() > 10 {
-        format!("…{}", &rev[rev.len() - 10..])
+    if rev.len() > 12 {
+        format!("{}…", &rev[..12])
     } else {
         rev.to_string()
     }
 }
 
 #[component]
-pub fn DetailPage(encoded: String, encoded_ref: String, query: DetailQuery) -> Element {
+pub fn NotePage(encoded: String, encoded_ref: String, query: DetailQuery) -> Element {
     use_space_layout(&encoded);
     let space = use_context::<Signal<Option<SpaceState>>>();
 
     let decoded_ref = crate::router::decode_space(&encoded_ref);
 
-    // Publish the active ref so the right rail can render.
-    let mut resource_ref_ctx = use_context::<Signal<Option<String>>>();
-    let decoded_ref_for_effect = decoded_ref.clone();
-    use_effect(move || resource_ref_ctx.set(Some(decoded_ref_for_effect.clone())));
 
     let space_snapshot = space().clone();
     let path_for_fetch = space_snapshot.as_ref().map(|s| s.path.clone());
@@ -121,43 +109,30 @@ pub fn DetailPage(encoded: String, encoded_ref: String, query: DetailQuery) -> E
         }
     })?;
 
-    let decoded_space = crate::router::decode_space(&current_encoded);
-    let list_href = route_for_space_list(&decoded_space);
-    let home_href = route_for_space_home(&decoded_space);
+    // Star state (web.toml) for the header toggle.
+    let path_for_star = space_snapshot.as_ref().map(|s| s.path.clone());
+    let ref_for_star = decoded_ref.clone();
+    let star_resource = use_server_future(move || {
+        let p = path_for_star.clone();
+        let r = ref_for_star.clone();
+        async move {
+            match p {
+                Some(p) => get_space_ui(p).await.map(|ui| ui.starred.iter().any(|s| s == &r)).unwrap_or(false),
+                None => false,
+            }
+        }
+    })?;
+    let starred: bool = star_resource.cloned().unwrap_or(false);
 
-    let ref_tail = decoded_ref
-        .rsplit_once(':')
-        .map(|(_, id)| id.to_string())
-        .unwrap_or_else(|| decoded_ref.clone());
-    let ref_tail_short = if ref_tail.len() > 12 {
-        format!("…{}", &ref_tail[ref_tail.len() - 12..])
-    } else {
-        ref_tail.clone()
-    };
-
-    let crumb_kind = match detail.cloned() {
-        Some(Ok(Some(d))) => d.row.kind.clone(),
-        _ => "?".to_string(),
-    };
 
     rsx! {
-        div { class: "page",
-            Breadcrumb {
-                segments: vec![
-                    BreadcrumbSegment::link("notez", "/"),
-                    BreadcrumbSegment::link(home_href.clone(), home_href.clone()),
-                    BreadcrumbSegment::link(source_name.clone(), list_href.clone()),
-                    BreadcrumbSegment::link(crumb_kind.clone(), list_href.clone()),
-                    BreadcrumbSegment::here(ref_tail_short.clone()),
-                ],
-            }
-
+        div { class: "page page-note",
             match (space_snapshot.as_ref(), detail.cloned()) {
                 (Some(s), _) if !matches!(s.status, SpaceStatus::Ready(_)) => rsx! {
-                    div { class: "page-h",
-                        p { class: "eyebrow", "space" }
-                        h1 { "{decoded_ref}" }
-                        p { class: "lede",
+                    header { class: "page-head",
+                        p { class: "page-eyebrow", "space" }
+                        h1 { class: "page-title", "{decoded_ref}" }
+                        p { class: "page-lede",
                             "Source status: "
                             {match &s.status {
                                 SpaceStatus::Resolving => "resolving…".to_string(),
@@ -168,32 +143,39 @@ pub fn DetailPage(encoded: String, encoded_ref: String, query: DetailQuery) -> E
                     }
                 },
                 (_, Some(Err(e))) => rsx! {
-                    div { class: "page-h",
-                        p { class: "eyebrow", "error" }
-                        h1 { "load failed" }
-                        p { class: "lede err-text", "{e}" }
+                    header { class: "page-head",
+                        p { class: "page-eyebrow", "error" }
+                        h1 { class: "page-title", "load failed" }
+                        p { class: "page-lede err-text", "{e}" }
                     }
                 },
                 (_, Some(Ok(None))) => rsx! {
-                    div { class: "page-h",
-                        p { class: "eyebrow", "not found" }
-                        h1 { "{decoded_ref}" }
-                        p { class: "lede", "no resource with that ref in this space." }
+                    header { class: "page-head",
+                        p { class: "page-eyebrow", "not found" }
+                        h1 { class: "page-title", "{decoded_ref}" }
+                        p { class: "page-lede", "no resource with that ref in this space." }
                     }
                 },
                 (_, Some(Ok(Some(d)))) => rsx! {
-                    DetailBody {
-                        row: d.row.clone(),
-                        raw_content: d.raw_content.clone(),
-                        list_href: list_href.clone(),
-                        current_encoded: current_encoded.clone(),
-                        query: query.clone(),
+                    div { class: "note-grid",
+                        NoteBody {
+                            row: d.row.clone(),
+                            raw_content: d.raw_content.clone(),
+                            current_encoded: current_encoded.clone(),
+                            source_name: source_name.clone(),
+                            starred,
+                            query: query.clone(),
+                        }
+                        aside { class: "rail", "aria-label": "Note inspector",
+                            OutlinePanel { active_encoded: current_encoded.clone(), active_ref: decoded_ref.clone() }
+                            BacklinksPanel { active_encoded: current_encoded.clone(), active_ref: decoded_ref.clone() }
+                            PropertiesPanel { active_encoded: current_encoded.clone(), active_ref: decoded_ref.clone() }
+                            GraphPanel { active_encoded: current_encoded.clone(), active_ref: decoded_ref.clone() }
+                        }
                     }
                 },
                 (_, None) => rsx! {
-                    div { class: "page-h",
-                        p { class: "skel", "loading…" }
-                    }
+                    p { class: "skel", "loading…" }
                 },
             }
         }
@@ -201,63 +183,76 @@ pub fn DetailPage(encoded: String, encoded_ref: String, query: DetailQuery) -> E
 }
 
 #[component]
-fn DetailBody(
+fn NoteBody(
     row: ResourceRow,
     raw_content: String,
-    list_href: String,
     current_encoded: String,
+    source_name: String,
+    starred: bool,
     query: DetailQuery,
 ) -> Element {
     let decoded_space = crate::router::decode_space(&current_encoded);
+    let files_href = route_for_space_files(&decoded_space);
     let editable = row.kind == "document";
     let format = format_label(&row.locator);
     let rev_short = short_rev(&row.revision);
     let is_attachment = row.kind == "attachment";
 
     rsx! {
-        div { class: "detail-main",
+        div { class: "note-main",
+
             // ---- Save / conflict banners (redirected back from the
-            // edit route). Structured, with next actions; never
-            // colour-only. ----
-            div { class: "doc-banners",
-                if !query.edit_err.is_empty() {
-                    div { class: "doc-banner doc-banner-err", role: "alert",
-                        div { class: "doc-banner-head",
-                            span { class: "doc-banner-kind", "{query.edit_err}" }
-                            if !query.edit_msg.is_empty() {
-                                span { class: "doc-banner-msg", "{query.edit_msg}" }
-                            }
-                        }
-                        div { class: "doc-banner-actions",
-                            if query.edit_err == "stale_revision" {
-                                a { class: "doc-banner-action", href: "{crate::router::route_for_space_resource(&decoded_space, &row.ref_str)}", "reload" }
-                                span { class: "doc-banner-note", "your draft is kept in this browser and restored on reload." }
-                            } else if query.edit_err == "read_only" || query.edit_err == "unsupported" {
-                                a { class: "doc-banner-action", href: "{list_href}", "back to index" }
-                            }
+            // edit route). Structured, with next actions. ----
+            if !query.edit_err.is_empty() {
+                div { class: "doc-banner doc-banner-err", role: "alert",
+                    div { class: "doc-banner-head",
+                        span { class: "doc-banner-kind", "{query.edit_err}" }
+                        if !query.edit_msg.is_empty() {
+                            span { class: "doc-banner-msg", "{query.edit_msg}" }
                         }
                     }
-                } else if query.edited == "1" {
-                    div { class: "doc-banner doc-banner-ok", role: "status",
-                        div { class: "doc-banner-head",
-                            span { class: "doc-banner-kind", "saved" }
-                            span { class: "doc-banner-msg", "changes written to the source file." }
+                    div { class: "doc-banner-actions",
+                        if query.edit_err == "stale_revision" {
+                            a { class: "doc-banner-action", href: "{route_for_space_note(&decoded_space, &row.ref_str)}", "reload" }
+                            span { class: "doc-banner-note", "your draft is kept in this browser and restored on reload." }
+                        } else if query.edit_err == "read_only" || query.edit_err == "unsupported" {
+                            a { class: "doc-banner-action", href: "{files_href}", "back to files" }
                         }
+                    }
+                }
+            } else if query.edited == "1" {
+                div { class: "doc-banner doc-banner-ok", role: "status",
+                    div { class: "doc-banner-head",
+                        span { class: "doc-banner-kind", "saved" }
+                        span { class: "doc-banner-msg", "changes written to the source file." }
                     }
                 }
             }
 
-            // ---- Document header: source / format / editability /
-            // revision / save state, all explicit text. ----
-            div { class: "doc-header",
-                h1 { "{row.title}" }
-                div { class: "doc-refline",
-                    span { class: "mono-sm", "{row.ref_str}" }
-                    span { class: "dim", "  ·  " }
-                    a { href: "{list_href}", "back to index" }
+            // ---- Note header: title, star toggle, ref line, badges. ----
+            header { class: "note-head",
+                div { class: "note-head-top",
+                    h1 { class: "note-title", "{row.title}" }
+                    form { method: "post", action: "/api/web/star", class: "star-form",
+                        input { r#type: "hidden", name: "source_root", value: "{decoded_space}" }
+                        input { r#type: "hidden", name: "ref_str", value: "{row.ref_str}" }
+                        button {
+                            class: if starred { "star-btn is-starred" } else { "star-btn" },
+                            r#type: "submit",
+                            "aria-pressed": "{starred}",
+                            "aria-label": if starred { "Remove star" } else { "Star this note" },
+                            title: if starred { "starred" } else { "star" },
+                            if starred { "★" } else { "☆" }
+                        }
+                    }
                 }
-                div { class: "doc-status",
-                    NzBadge { text: row.source_id.clone(), tone: "info".to_string() }
+                div { class: "note-refline",
+                    span { class: "mono-sm note-ref", "{row.ref_str}" }
+                    span { class: "dim", "·" }
+                    a { href: "{files_href}", "all files" }
+                }
+                div { class: "note-status",
+                    NzBadge { text: source_name.clone(), tone: "info".to_string() }
                     NzBadge { text: format.to_string(), tone: "info".to_string() }
                     if editable {
                         NzBadge { text: "editable".to_string(), tone: "ok".to_string() }
@@ -265,19 +260,11 @@ fn DetailBody(
                         NzBadge { text: "read-only".to_string(), tone: "warn".to_string() }
                     }
                     NzBadge { text: format!("rev {}", rev_short.clone()), tone: "info".to_string() }
-                    span {
-                        class: "doc-save-state",
-                        "aria-live": "polite",
-                        "data-save-state": "true",
-                        if editable { "Saved" } else { "Read-only" }
-                    }
                 }
             }
 
             if editable {
-                // ---- Read / Edit / Source mode tabs. Pure-CSS radio
-                // tabs: works without hydration, keeps every pane in
-                // the DOM so drafts survive mode switches. ----
+                // ---- Read / Edit / Source mode tabs (pure CSS). ----
                 div { class: "doc-modes",
                     input { id: "doc-mode-read", class: "doc-mode-input", name: "doc_mode", r#type: "radio", value: "read", checked: true }
                     input { id: "doc-mode-edit", class: "doc-mode-input", name: "doc_mode", r#type: "radio", value: "edit" }
@@ -290,12 +277,12 @@ fn DetailBody(
                     div { class: "doc-mode-panes",
                         div { class: "doc-pane doc-pane-read",
                             if !row.body_html.is_empty() {
-                                div { class: "detail-body",
+                                article { class: "note-body",
                                     div { dangerous_inner_html: "{row.body_html}" }
                                 }
                             } else {
-                                p { class: "props-empty",
-                                    "No rendered body yet — add a `* heading` line to the document and rescan."
+                                p { class: "empty-hint",
+                                    "No rendered body yet — add a `# heading` (or `* heading` in Org) and rescan."
                                 }
                             }
                         }
@@ -332,7 +319,7 @@ fn DetailBody(
                                         aria_label: "Save changes".to_string(),
                                         "save changes"
                                     }
-                                    a { class: "edit-source-cancel", href: "{crate::router::route_for_space_resource(&decoded_space, &row.ref_str)}", "cancel" }
+                                    a { class: "edit-source-cancel", href: "{route_for_space_note(&decoded_space, &row.ref_str)}", "cancel" }
                                 }
                             }
                         }
@@ -341,19 +328,16 @@ fn DetailBody(
             } else {
                 // ---- Honest read-only state for non-documents. ----
                 if !row.body_html.is_empty() {
-                    div { class: "detail-body",
+                    article { class: "note-body",
                         div { dangerous_inner_html: "{row.body_html}" }
                     }
                 }
-                NzCard {
-                    padded: true,
-                    div { class: "readonly-note",
-                        p { "{row.kind} content cannot be edited from Notez." }
-                        if is_attachment {
-                            p { class: "lede dim",
-                                "Open the raw file instead: "
-                                a { href: "{route_for_space_preview(&decoded_space, &row.locator)}", "preview ↗" }
-                            }
+                div { class: "readonly-note",
+                    p { "{row.kind} content cannot be edited from Notez." }
+                    if is_attachment {
+                        p { class: "dim",
+                            "Open the raw file: "
+                            a { href: "{route_for_space_preview(&decoded_space, &row.locator)}", "preview ↗" }
                         }
                     }
                 }
@@ -398,23 +382,6 @@ fn DetailBody(
                         dd { class: "muted", "{row.revision}" }
                         dt { "object_id" }
                         dd { class: "muted", "{row.object_id}" }
-                    }
-                }
-            }
-
-            h2 { "Properties" }
-            if row.properties.is_empty() {
-                p { class: "props-empty", "no properties attached to this resource." }
-            } else {
-                NzCard {
-                    padded: true,
-                    div { class: "props",
-                        for (k, v) in row.properties.iter() {
-                            div { class: "row",
-                                span { class: "k", "{k}" }
-                                span { class: "v", "{v}" }
-                            }
-                        }
                     }
                 }
             }

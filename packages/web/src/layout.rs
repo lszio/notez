@@ -1,39 +1,39 @@
-//! App shell — top nav bar + 3-column body + responsive drawers.
+//! App shell — sidebar + topbar + content slot.
 //!
-//! Responsive tiers (matching the CSS in `public/index.html`):
+//! v2 note-workspace shell (replaces the topnav + app-rail + fixed
+//! three-column shell):
 //!
-//! - Wide (> 68.75rem): three columns; both rails sticky.
-//! - Tablet (45rem – 68.75rem): left rail + main; the right rail
-//!   (properties + graph) becomes a slide-in drawer driven by the
-//!   `.drawer-toggle-inspector` button.
-//! - Mobile (≤ 45rem): single column; the left rail becomes a
-//!   slide-in drawer driven by `.drawer-toggle-nav`.
+//! - **Sidebar** (`.sidebar`): brand, space switcher, quick search,
+//!   primary nav (Home / Journal / Files / Graph / Activity), the
+//!   file tree, and recent files for the active space. On narrow
+//!   screens it becomes a slide-in drawer (`.drawer-open-nav` on the
+//!   shell, toggled by `.drawer-toggle-nav`; delegated click handling
+//!   lives in `public/index.html`).
+//! - **Topbar** (`.topbar`): drawer toggle, current space name, the
+//!   new-note menu, and (once a page opts in) the inspector drawer
+//!   toggle. Pages render their own breadcrumbs inside `.content`.
+//! - **Content slot**: the routed page. The note page renders its own
+//!   right rail (outline / linked mentions / properties / local
+//!   graph) so everything is SSR-deterministic.
 //!
-//! Drawer toggling is delegated from `public/index.html` (class
-//! toggles on `.shell`, `aria-expanded` kept in sync, Escape and
-//! backdrop click close, links inside the drawer close it after
-//! navigation). The palette keyboard listener lives in an inline
-//! script here because Dioxus fullstack is SSR-only for events —
-//! `use_effect` never runs on the client.
+//! Dioxus fullstack is SSR-only for events: every interactive bit is
+//! either a plain link, a POST form, or delegated vanilla JS.
 
 use dioxus::prelude::*;
 
 use crate::pages::{
-    IntentPalette, FilesPanel, GraphPanel, PropertiesPanel, SearchTrigger, SpaceDropdown, SpaceSidebar, TreePanel,
+    FilesPanel, IntentPalette, SearchTrigger, SpaceDropdown, TreePanel,
 };
 use crate::space_ctx::{SpaceState, SpaceStatus};
 
-/// PR9:
-/// layer for the command palette. Lives in inline `<script>` (not
-/// in `use_effect`) because Dioxus fullstack is SSR-only — effects
-/// never run client-side. The script also wires the trigger /
-/// close / backdrop click handlers because the same constraint
-/// leaves the `<button onclick="…">` markup inert.
-const PALETTE_KEY_LISTENER_JS: &str = r#"
+/// Ctrl/Cmd-K + Esc + trigger clicks for the command palette, plus
+/// drawer toggling and outline jumps. Inline `<script>` because
+/// `use_effect` never runs on the client (no hydration).
+pub const SHELL_ENHANCE_JS: &str = r#"
     <script>
     (function () {
-        if (window.__notezPaletteKeybound) { return; }
-        window.__notezPaletteKeybound = true;
+        if (window.__notezShellEnhance) { return; }
+        window.__notezShellEnhance = true;
         var overlay = null;
         function getOverlay() {
             if (overlay && document.body.contains(overlay)) return overlay;
@@ -58,14 +58,42 @@ const PALETTE_KEY_LISTENER_JS: &str = r#"
             if (ov.classList.contains('is-open')) { closePalette(); }
             else { openPalette(); }
         }
+        function drawer(side) {
+            var shell = document.querySelector('.shell');
+            if (!shell) return;
+            var cls = side === 'right' ? 'drawer-open-inspector' : 'drawer-open-nav';
+            shell.classList.toggle(cls);
+            var btn = document.querySelector(side === 'right' ? '.drawer-toggle-inspector' : '.drawer-toggle-nav');
+            if (btn) { btn.setAttribute('aria-expanded', shell.classList.contains(cls) ? 'true' : 'false'); }
+        }
+        function closeDrawers() {
+            var shell = document.querySelector('.shell');
+            if (shell) { shell.classList.remove('drawer-open-nav', 'drawer-open-inspector'); }
+        }
         document.addEventListener('click', function (e) {
-            var trigger = e.target && e.target.closest && e.target.closest('.search-trigger');
+            var t = e.target;
+            var trigger = t && t.closest && t.closest('.search-trigger');
             if (trigger) { e.preventDefault(); togglePalette(); return; }
-            var closeBtn = e.target && e.target.closest && e.target.closest('.palette-close');
+            var closeBtn = t && t.closest && t.closest('.palette-close');
             if (closeBtn) { e.preventDefault(); closePalette(); return; }
-            // Backdrop click: target === overlay div itself.
             var ov = getOverlay();
-            if (ov && e.target === ov) { e.preventDefault(); closePalette(); }
+            if (ov && t === ov) { e.preventDefault(); closePalette(); return; }
+            if (t && t.closest && t.closest('.drawer-toggle-nav')) { e.preventDefault(); drawer('nav'); return; }
+            if (t && t.closest && t.closest('.drawer-toggle-inspector')) { e.preventDefault(); drawer('right'); return; }
+            // Links close the mobile drawer after navigation.
+            if (t && t.closest && t.closest('.sidebar a')) { closeDrawers(); return; }
+            var backdrop = t && t.closest && t.closest('.drawer-backdrop');
+            if (backdrop) { closeDrawers(); return; }
+            // Outline jump: scroll to the idx-th heading of the note body.
+            var outlineBtn = t && t.closest && t.closest('[data-outline-idx]');
+            if (outlineBtn) {
+                e.preventDefault();
+                var body = document.querySelector('.note-body');
+                if (!body) return;
+                var heads = body.querySelectorAll('h1,h2,h3,h4,h5,h6');
+                var idx = parseInt(outlineBtn.getAttribute('data-outline-idx'), 10);
+                if (heads && idx < heads.length) { heads[idx].scrollIntoView({ behavior: 'smooth', block: 'start' }); }
+            }
         });
         document.addEventListener('keydown', function (e) {
             var meta = e.metaKey || e.ctrlKey;
@@ -76,228 +104,113 @@ const PALETTE_KEY_LISTENER_JS: &str = r#"
             }
             if (e.key === 'Escape') {
                 var ov = getOverlay();
-                if (ov && ov.classList.contains('is-open')) {
-                    e.preventDefault();
-                    closePalette();
-                }
+                if (ov && ov.classList.contains('is-open')) { closePalette(); return; }
+                closeDrawers();
             }
         });
     })();
     </script>
 "#;
+
 #[component]
 pub fn Layout(children: Element) -> Element {
     use_context_provider(|| Signal::new(None::<SpaceState>));
     use_context_provider(|| Signal::new(None::<String>));
-    // Palette open/closed flag — toggled by the search trigger and
-    // read by the modal component. Kept here so any descendant
-    // component (not just header siblings) can toggle it.
     use_context_provider(|| Signal::new(false));
     let space_ctx = use_context::<Signal<Option<SpaceState>>>();
     let active_path = space_ctx().map(|s| s.path.clone());
-    let active_path_for_side = active_path.clone();
     let active_encoded = space_ctx().map(|s| s.encoded.clone());
-
-    // Status bar values: honest text state, never colour alone.
     let space_leaf = active_path
         .as_deref()
         .and_then(|p| std::path::Path::new(p).file_name().and_then(|s| s.to_str()).map(|s| s.to_string()))
-        .unwrap_or_else(|| "(select space)".to_string());
-    let space_status = match space_ctx().as_ref().map(|s| &s.status) {
-        Some(SpaceStatus::Ready(_)) => "ready",
-        Some(SpaceStatus::Resolving) => "resolving…",
-        Some(SpaceStatus::Error(_)) => "error",
-        None => "no space",
-    };
-    let space_path = active_path.clone().unwrap_or_default();
+        .unwrap_or_else(|| "notez".to_string());
+    let space_ready = matches!(space_ctx().as_ref().map(|s| &s.status), Some(SpaceStatus::Ready(_)));
 
     rsx! {
-        // PR9: install the ⌘K / Esc listener as an inline script so
-        // it runs at page load (no hydration dependency).
-        div { dangerous_inner_html: "{PALETTE_KEY_LISTENER_JS}" }
+        div { dangerous_inner_html: "{SHELL_ENHANCE_JS}" }
         div { class: "shell",
-            {
-                let s = space_ctx();
-                if let Some(SpaceState { status: SpaceStatus::Error(e), path, .. }) = s.clone() {
-                    rsx! {
-                        div { class: "banner-err",
-                            div { class: "banner-err-inner",
-                                span { class: "label", "space error →" }
-                                span { class: "banner-err-kind", "{e.kind()}" }
-                                span { class: "label", "—" }
-                                span { class: "mono-sm", "{path}" }
-                                span { class: "label", "—" }
-                                span { "{e}" }
-                            }
+            aside { id: "col-left", class: "sidebar", "aria-label": "Workspace sidebar",
+                div { class: "sb-brand",
+                    a { class: "sb-wordmark", href: "/", "Notez" }
+                    ThemeToggle {}
+                }
+                div { class: "sb-switch",
+                    SpaceDropdown {
+                        active_path: active_path.clone(),
+                        active_encoded: active_encoded.clone(),
+                    }
+                }
+                div { class: "sb-search",
+                    SearchTrigger {}
+                }
+                nav { class: "sb-nav", "aria-label": "Sections",
+                    a { class: if active_path.is_none() { "sb-link is-current" } else { "sb-link" }, href: "/",
+                        span { class: "sb-link-icon", "⌂" }
+                        span { "Home" }
+                    }
+                    if let Some(enc) = active_encoded.clone() {
+                        a { class: "sb-link", href: "{crate::router::route_for_space_journal(&crate::router::decode_space(&enc))}",
+                            span { class: "sb-link-icon", "🗓" }
+                            span { "Journal" }
+                        }
+                        a { class: "sb-link", href: "{crate::router::route_for_space_files(&crate::router::decode_space(&enc))}",
+                            span { class: "sb-link-icon", "▤" }
+                            span { "Files" }
+                        }
+                        a { class: "sb-link", href: "{crate::router::route_for_space_graph(&enc)}",
+                            span { class: "sb-link-icon", "◎" }
+                            span { "Graph" }
+                        }
+                        a { class: "sb-link", href: "{crate::router::route_for_space_activity(&crate::router::decode_space(&enc))}",
+                            span { class: "sb-link-icon", "≡" }
+                            span { "Activity" }
                         }
                     }
-                } else {
-                    rsx! { Fragment {} }
+                }
+                div { class: "sb-tree",
+                    if space_ready {
+                        TreePanel { active_encoded: active_encoded.clone() }
+                        FilesPanel { active_encoded: active_encoded.clone() }
+                    } else if active_path.is_none() {
+                        p { class: "sb-hint", "Open or register a source to browse its notes." }
+                    }
                 }
             }
 
-            nav { class: "topnav",
-                div { class: "topnav-inner",
-                    a { class: "topnav-brand", href: "/", "Notez" }
+            div { class: "main-col",
+                div { class: "topbar",
                     button {
                         class: "drawer-toggle drawer-toggle-nav",
                         r#type: "button",
                         "aria-controls": "col-left",
                         "aria-expanded": "false",
-                        "aria-label": "Open navigation",
-                        title: "Navigation",
-                        span { class: "drawer-toggle-mark", "☰" }
-                        span { class: "drawer-toggle-label", "nav" }
+                        "aria-label": "Toggle sidebar",
+                        title: "Sidebar",
+                        "☰"
                     }
-                    SpaceSwitcher {
-                        active_path: active_path_for_side.clone(),
-                        active_encoded: active_encoded.clone(),
-                    }
-                    SearchTrigger {}
-                    div { class: "topnav-sourcer" }
-                    button {
-                        class: "drawer-toggle drawer-toggle-inspector",
-                        r#type: "button",
-                        "aria-controls": "col-right",
-                        "aria-expanded": "false",
-                        "aria-label": "Open inspector",
-                        title: "Inspector: properties + graph",
-                        span { class: "drawer-toggle-mark", "▤" }
-                        span { class: "drawer-toggle-label", "inspector" }
-                    }
-                    TopNavActions {
-                        active_path: active_path_for_side.clone(),
-                        active_encoded: active_encoded.clone(),
-                    }
-                }
-            }
-
-            div { class: "shell-body",
-                nav { class: "app-rail", "aria-label": "Workspace sections",
-                    a { class: "app-rail-brand", href: "/", aria_label: "Notez home", "N" }
-                    div { class: "app-rail-group",
-                        span { class: "app-rail-label", "WORKSPACE" }
-                        a { class: "app-rail-link is-current", href: "/", "⌂", span { "Home" } }
-                        if let Some(enc) = active_encoded.clone() {
-                            a { class: "app-rail-link", href: "{crate::router::route_for_space_list(&crate::router::decode_space(&enc))}", "▤", span { "Documents" } }
-                            a { class: "app-rail-link", href: "{crate::router::route_for_space_graph(&enc)}", "◎", span { "Graph" } }
-                            if let Some(path) = active_path.clone() {
-                                a { class: "app-rail-link", href: "{crate::router::route_for_space_activity(&path)}", "≡", span { "Activity" } }
+                    span { class: "topbar-space", "{space_leaf}" }
+                    div { class: "topbar-spacer" }
+                    if space_ready {
+                        details { class: "new-note",
+                            summary { class: "btn btn-accent new-note-btn", "+ note" }
+                            form { class: "new-note-form", method: "post", action: "/api/sources/document/create",
+                                input { r#type: "hidden", name: "source_root", value: "{active_path.clone().unwrap_or_default()}" }
+                                label { class: "field",
+                                    span { class: "field-label", "Note title" }
+                                    input { name: "title", r#type: "text", required: true, placeholder: "my-next-idea", "aria-label": "New note title" }
+                                }
+                                button { class: "btn btn-accent", r#type: "submit", "Create" }
                             }
                         }
                     }
-                    div { class: "app-rail-foot",
-                        span { class: "app-rail-status-dot", "●" }
-                        span { class: "app-rail-status-label", "{space_status}" }
-                    }
                 }
-                aside { id: "col-left", class: "col-left",
-                    div { class: "pane-context",
-                        span { class: "pane-kicker", "NAVIGATION" }
-                        span { class: "pane-context-name", "{space_leaf}" }
-                    }
-                    if active_path.is_some() {
-                        TreePanel { active_encoded: active_encoded.clone() }
-                        div { class: "left-divider" }
-                        FilesPanel { active_encoded: active_encoded.clone() }
-                    } else {
-                        SpaceSidebar { active_path: active_path_for_side.clone() }
-                    }
-                }
-                main { class: "col-main",
+                main { class: "content",
                     {children}
                 }
-                aside { id: "col-right", class: "col-right",
-                    div { class: "pane-context inspector-context",
-                        span { class: "pane-kicker", "INSPECTOR" }
-                        span { class: "pane-context-name", "context" }
-                    }
-                    PropertiesPanel { active_encoded: active_encoded.clone() }
-                    div { class: "right-divider" }
-                    GraphPanel { active_encoded: active_encoded.clone() }
-                }
             }
-            // Backdrop behind a slide-in drawer (tablet inspector /
-            // mobile nav). Clicking it closes the drawer; rendered by
-            // the shell's delegated click handler in index.html.
+
             div { class: "drawer-backdrop" }
-
-            // ----- Status bar (UI-1: space summary line) -----
-            footer { class: "statusbar",
-                span { class: "statusbar-label", "space" }
-                span { class: "statusbar-value", "{space_leaf}" }
-                span { class: "statusbar-sep", "·" }
-                span { class: "statusbar-label", "status" }
-                span { class: "statusbar-value", "{space_status}" }
-                span { class: "statusbar-spacer" }
-                if !space_path.is_empty() {
-                    span { class: "statusbar-path mono-sm", "{space_path}" }
-                }
-            }
-
-            // ----- Command palette overlay (⌘K / Esc handled by the
-            // PR9 inline script at the top of the page; the overlay
-            // renders here when PALETTE_OPEN is true).
             IntentPalette {}
-        }
-    }
-}
-
-#[component]
-fn SpaceSwitcher(active_path: Option<String>, active_encoded: Option<String>) -> Element {
-    rsx! {
-        div { class: "space-switcher",
-            SpaceDropdown {
-                active_path,
-                active_encoded,
-            }
-        }
-    }
-}
-
-#[component]
-fn TopNavActions(active_path: Option<String>, active_encoded: Option<String>) -> Element {
-    rsx! {
-        div { class: "topnav-actions",
-            ThemeToggle {}
-            if let (Some(p), Some(enc)) = (active_path.clone(), active_encoded.clone()) {
-                form {
-                    class: "topnav-form",
-                    action: "/api/sources/scan",
-                    method: "post",
-                    input {
-                        r#type: "hidden",
-                        name: "source_root",
-                        value: "{p}",
-                    }
-                    button {
-                        class: "topnav-action",
-                        r#type: "submit",
-                        title: "Re-index the space",
-                        "scan"
-                    }
-                }
-                a {
-                    class: "topnav-action",
-                    href: "{crate::router::route_for_space_list(&p)}",
-                    title: "Resource list",
-                    "list"
-                }
-                a {
-                    class: "topnav-action",
-                    href: "{crate::router::route_for_space_graph(&enc)}",
-                    title: "Graph view",
-                    "graph"
-                }
-                a {
-                    class: "topnav-action",
-                    href: "{crate::router::route_for_space_activity(&p)}",
-                    title: "Journal activity for this space",
-                    "activity"
-                }
-            } else {
-                a { class: "topnav-action", href: "/", "home" }
-            }
         }
     }
 }
@@ -308,11 +221,10 @@ fn ThemeToggle() -> Element {
         button {
             class: "theme-toggle",
             r#type: "button",
-            title: "Theme: light, dark, or system",
-            "aria-label": "Theme: system",
             "data-theme-toggle": "true",
-            span { class: "theme-glyph", "☼" }
-            span { class: "theme-mode", "system" }
+            "aria-label": "Theme: system",
+            title: "Theme: light / dark / system",
+            "◐"
         }
     }
 }

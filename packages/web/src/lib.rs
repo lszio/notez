@@ -26,6 +26,7 @@ pub mod routes;
 pub mod server;
 pub mod space_ctx;
 pub mod tree;
+pub mod ui_config;
 
 #[component]
 fn App() -> Element {

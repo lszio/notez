@@ -1,31 +1,27 @@
-//! `SpaceHome` — the per-space welcome at `/source/:encoded`.
+//! `SpaceHome` — the per-space landing at `/source/:encoded`.
 //!
-//! The page is a single round-trip dashboard:
+//! The landing mode is configurable per source (`web.toml`, edited
+//! via the selector on this page):
 //!
-//! - **`load_index_document(source_root)`** returns both the index
-//!   entry (`index.org` / `index.md` / `README.*`) and the rendered
-//!   document body in one server call. Earlier code fired two
-//!   independent `use_server_future`s, and the document future ran
-//!   before the entry future had resolved — so the body never
-//!   appeared when an index existed. The single-call API eliminates
-//!   that race.
-//! - **`list_filesystem(source_root)`** returns the loose-files
-//!   listing for the dashboard "recently modified" section.
+//! - `journal` — today's entry (open-or-create) + recent entries
+//! - `index`   — the `index.org` / `index.md` / `README.*` document
+//! - `files`   — recently modified files in the space
 //!
-//! Both round trips suspend on SSR; the page renders only after both
-//! are ready so the dashboard never shows a half-empty state.
+//! The mode defaults to `index` and falls back gracefully when the
+//! chosen surface has no content (missing index → files listing, no
+//! journal dir → create prompt).
 
 use dioxus::prelude::*;
 
-use crate::pages::ui::KindIcon;
+use crate::pages::journal::JournalWidget;
+use crate::pages::panel_files::format_mtime;
 use crate::pages::use_space_layout;
-use crate::router::{route_for_space_list, route_for_space_preview, route_for_space_resource};
-use crate::server::{list_filesystem, load_index_document, IndexDocumentDto};
+use crate::router::{route_for_space_files, route_for_space_note, route_for_space_preview};
+use crate::server::{
+    get_space_ui, list_source_files, load_index_document, IndexDocumentDto,
+};
+use crate::tree::SourceFileRow;
 use crate::space_ctx::{SpaceState, SpaceStatus};
-
-/// Cap on the dashboard file list. The full list is reachable via
-/// the "open full list" link.
-const DASHBOARD_FILES_LIMIT: usize = 8;
 
 #[component]
 pub fn SpaceHome(encoded: String) -> Element {
@@ -35,275 +31,194 @@ pub fn SpaceHome(encoded: String) -> Element {
     let active_path = space().map(|s| s.path.clone());
     let current_encoded = space().map(|s| s.encoded.clone()).unwrap_or_default();
 
-    // Single combined call: entry + document together. See module
-    // docs for why this is one future instead of two.
+    // Config for the landing mode (web.toml).
+    let path_for_ui = active_path.clone();
+    let ui_resource = use_server_future(move || {
+        let p = path_for_ui.clone();
+        async move {
+            match p {
+                Some(p) => get_space_ui(p).await.ok(),
+                None => None,
+            }
+        }
+    })?;
+    let landing = ui_resource
+        .cloned()
+        .flatten()
+        .map(|ui| ui.landing)
+        .unwrap_or_else(|| "index".to_string());
+
+    // Index document (needed in `index` mode and as fallback).
     let path_for_index = active_path.clone();
     let index_resource = use_server_future(move || {
         let p = path_for_index.clone();
         async move {
             match p {
-                Some(p) => load_index_document(p).await,
-                None => Ok(IndexDocumentDto {
-                    entry: None,
-                    document: None,
-                }),
+                Some(p) => load_index_document(p).await.ok(),
+                None => None,
             }
         }
     })?;
+    let index_doc: Option<IndexDocumentDto> = index_resource.cloned().flatten();
 
+    // Files listing (`files` mode + fallbacks).
     let path_for_files = active_path.clone();
     let files_resource = use_server_future(move || {
         let p = path_for_files.clone();
         async move {
             match p {
-                Some(p) => list_filesystem(p).await,
-                None => Ok(Vec::new()),
+                Some(p) => {
+                    let mut files = list_source_files(p).await.unwrap_or_default();
+                    files.sort_by(|a, b| b.mtime_ms.cmp(&a.mtime_ms));
+                    files.truncate(12);
+                    files
+                }
+                None => Vec::new(),
             }
         }
     })?;
-
-    let index_doc: Option<IndexDocumentDto> = index_resource.cloned().and_then(|r| r.ok());
-    let files = files_resource.cloned().and_then(|r| r.ok()).unwrap_or_default();
+    let files: Vec<SourceFileRow> = files_resource.cloned().unwrap_or_default();
 
     let space_snapshot = space().clone();
     let source_name = match &space_snapshot {
         Some(SpaceState { status: SpaceStatus::Ready(s), .. }) => s.name.clone(),
         _ => "space".to_string(),
     };
-    let space_resolving = matches!(
-        space_snapshot.as_ref().map(|s| &s.status),
-        Some(SpaceStatus::Resolving)
-    );
     let space_error = match space_snapshot.as_ref().map(|s| &s.status) {
         Some(SpaceStatus::Error(e)) => Some(e.to_string()),
         _ => None,
     };
     let no_space = matches!(space_snapshot, None);
 
+    let decoded_space = crate::router::decode_space(&current_encoded);
+    let files_href = route_for_space_files(&decoded_space);
+
     let index_entry = index_doc.as_ref().and_then(|d| d.entry.clone());
-    let rendered_doc = index_doc.and_then(|d| d.document);
+    let rendered_doc = index_doc.as_ref().and_then(|d| d.document.as_ref());
 
-    let dashboard_files: Vec<_> = files.iter().take(DASHBOARD_FILES_LIMIT).collect();
-    let has_index = index_entry.is_some();
-    let has_rendered_body = rendered_doc
-    .as_ref()
-    .map(|d| !d.body_html.is_empty())
-    .unwrap_or(false);
-
-    let decoded = crate::router::decode_space(&current_encoded);
-    let active_path_for_list = active_path.clone().unwrap_or_default();
-    let active_path_for_watch = active_path.clone().unwrap_or_default();
-    let active_path_for_scan = active_path.clone().unwrap_or_default();
-
-    let (eyebrow, h1, lede) = if space_resolving {
-        (
-            "resolving".to_string(),
-            "Welcome".to_string(),
-            "looking up the space…".to_string(),
-        )
+    // Headline copy per state.
+    let (eyebrow, h1, lede) = if space_resolving(&space_snapshot) {
+        ("space".to_string(), "resolving…".to_string(), "checking the source path.".to_string())
     } else if let Some(err) = space_error.as_ref() {
-        (
-            "error".to_string(),
-            "Welcome".to_string(),
-            format!("space error: {err}"),
-        )
+        ("space error".to_string(), source_name.clone(), err.clone())
     } else if no_space {
-        (
-            "no space".to_string(),
-            "Welcome".to_string(),
-            "pick a space to begin.".to_string(),
-        )
-    } else if let Some(entry) = index_entry.as_ref() {
-        (
-            format!("space · {source_name}"),
-            entry.title.clone(),
-            format!(
-                "{count} file{s} on disk · rendered from {loc}.",
-                count = files.len(),
-                s = if files.len() == 1 { "" } else { "s" },
-                loc = entry.locator,
-            ),
-        )
+        ("notez".to_string(), "no space selected".to_string(), "pick a source from the sidebar.".to_string())
     } else {
-        (
-            format!("space · {source_name}"),
-            "No index document".to_string(),
-            format!(
-                "{count} file{s} on disk · create `index.org` or `README.md` to set a landing page.",
-                count = files.len(),
-                s = if files.len() == 1 { "" } else { "s" },
-            ),
-        )
+        ("space".to_string(), source_name.clone(), match landing.as_str() {
+            "journal" => "daily journal landing — today's note is one click away.".to_string(),
+            "files" => "recent files landing — the freshest notes first.".to_string(),
+            _ => "index document landing.".to_string(),
+        })
     };
 
     rsx! {
-        div { class: "page",
-            div { class: "page-h",
-                p { class: "eyebrow", "{eyebrow}" }
-                h1 { "{h1}" }
-                p { class: "lede", "{lede}" }
-                // Dashboard actions: list / rescan / watch toggle.
-                // These are plain HTML forms so they work without
-                // WASM hydration (the rest of the site is SSR-only).
-                div { class: "dashboard-actions",
-                    a {
-                        class: "spine-action",
-                        href: "{route_for_space_list(&active_path_for_list)}",
-                        "open full list →"
-                    }
-                    form {
-                        class: "dashboard-form",
-                        method: "post",
-                        action: "/api/sources/scan",
-                        input { type: "hidden", name: "source_root", value: "{active_path_for_scan}" }
-                        button { class: "spine-action", r#type: "submit", "force rescan" }
-                    }
-                    form {
-                        class: "dashboard-form",
-                        method: "post",
-                        action: "/api/sources/watch/start",
-                        input { type: "hidden", name: "source_root", value: "{active_path_for_watch}" }
-                        button { class: "spine-action", r#type: "submit", "watch this space" }
-                    }
-                }
+        div { class: "page page-space-home",
+            header { class: "page-head",
+                p { class: "page-eyebrow", "{eyebrow}" }
+                h1 { class: "page-title", "{h1}" }
+                p { class: "page-lede", "{lede}" }
             }
 
-            if !has_index {
-                // No-index CTA. The dashboard shows the user exactly
-                // what to do next: drop an `index.org` at the space
-                // root and rescan. The recently-modified list below
-                // is already populated from `list_filesystem`, so
-                // users can still navigate.
-                div { class: "welcome-empty",
-                    h2 { "Set a landing page" }
-                    p { class: "lede dim",
-                        "Notez renders `index.org` (or `index.md` / `README.*`) at the root of every space as the welcome page. Drop one in and run \"force rescan\" to pick it up."
-                    }
-                    ul { class: "welcome-empty-hints",
-                        li { "Title becomes the page heading (the first `*` heading)." }
-                        li { "Anything you link via `[[id:…]]` becomes a backlink." }
-                        li { "Org-mode `#+BEGIN_SRC query` blocks render as query embeds." }
-                    }
-                }
-            }
-
-            if let (Some(_entry), Some(doc)) = (index_entry.as_ref(), rendered_doc.as_ref()) {
-                div { class: "welcome-index",
-                    div { class: "welcome-index-meta mono-sm",
-                        KindIcon { kind: doc.kind.clone() }
-                        a { href: "{route_for_space_resource(&decoded, &doc.ref_str)}", "{doc.ref_str}" }
-                        span { class: "dim", " · {doc.locator}" }
-                    }
-                    if has_rendered_body {
-                        div { class: "detail-body",
-                            div { dangerous_inner_html: "{doc.body_html}" }
+            if space_error.is_none() && !no_space {
+                details { class: "customize customize-landing",
+                    summary { "Landing" }
+                    form { class: "landing-form", method: "post", action: "/api/web/landing",
+                        input { r#type: "hidden", name: "source_root", value: "{decoded_space}" }
+                        label { class: "radio",
+                            input { r#type: "radio", name: "landing", value: "journal", checked: landing == "journal" }
+                            span { "Journal (today's note)" }
                         }
-                    } else {
-                        p { class: "props-empty",
-                            "Index document is empty — add a `* heading` line and rescan."
+                        label { class: "radio",
+                            input { r#type: "radio", name: "landing", value: "index", checked: landing == "index" }
+                            span { "Index document" }
                         }
+                        label { class: "radio",
+                            input { r#type: "radio", name: "landing", value: "files", checked: landing == "files" }
+                            span { "Recent files" }
+                        }
+                        button { class: "btn", r#type: "submit", "Save" }
                     }
                 }
-            }
 
-            div { class: "welcome-files",
-                div { class: "welcome-files-head",
-                    span { class: "welcome-files-label", if has_index { "files on disk" } else { "recently modified" } }
-                    a { class: "welcome-files-link mono-sm", href: "{route_for_space_list(&active_path_for_list)}", "open full list →" }
-                }
-                if dashboard_files.is_empty() {
-                    p { class: "welcome-files-empty", "no files yet." }
-                } else {
-                    ul { class: "welcome-files-list",
-                        for f in dashboard_files.iter() {
-                            {
-                                let is_indexed = !f.ref_str.is_empty();
-                                let href = if is_indexed {
-                                    route_for_space_resource(&decoded, &f.ref_str)
-                                } else {
-                                    route_for_space_preview(&decoded, &f.display_path)
-                                };
-                                let label = if f.ext.is_empty() { f.kind.to_uppercase() } else { f.ext.to_uppercase() };
-                                let mtime_label = format_mtime(f.mtime_ms);
-                                rsx! {
-                                    li { class: "welcome-files-row", key: "{f.display_path}",
-                                        a { class: "welcome-files-link2", href: "{href}",
-                                            span { class: "welcome-files-ext kind-{f.kind}", "{label}" }
-                                            span { class: "welcome-files-name", "{f.display_path}" }
-                                            span { class: "welcome-files-title dim", "{f.title}" }
-                                            if !mtime_label.is_empty() {
-                                                span { class: "welcome-files-mtime mono-sm dim", "{mtime_label}" }
-                                            }
-                                        }
+                {match landing.as_str() {
+                    "journal" => rsx! {
+                        if space_ready_snapshot(&space_snapshot) {
+                            JournalWidget { decoded_space: decoded_space.clone() }
+                        }
+                    },
+                    "files" => rsx! {
+                        section { class: "widget widget-recent",
+                            div { class: "widget-head",
+                                h2 { class: "widget-title", "Recent files" }
+                                a { class: "widget-more", href: "{files_href}", "all →" }
+                            }
+                            FilesTable { files: files.clone(), decoded_space: decoded_space.clone() }
+                        }
+                    },
+                    _ => rsx! {
+                        match (index_entry.as_ref(), rendered_doc) {
+                            (Some(_), Some(doc)) if !doc.body_html.is_empty() => rsx! {
+                                article { class: "note-body note-body-landing",
+                                    div { dangerous_inner_html: "{doc.body_html}" }
+                                }
+                            },
+                            (Some(entry), _) => rsx! {
+                                section { class: "widget",
+                                    div { class: "widget-body",
+                                        p { class: "empty-hint", "Index document has no rendered body yet." }
+                                        a { class: "btn", href: "{route_for_space_note(&decoded_space, &entry.ref_str)}", "open {entry.title}" }
                                     }
                                 }
-                            }
+                            },
+                            _ => rsx! {
+                                section { class: "widget widget-recent",
+                                    div { class: "widget-head",
+                                        h2 { class: "widget-title", "Recent files" }
+                                        a { class: "widget-more", href: "{files_href}", "all →" }
+                                    }
+                                    p { class: "empty-hint", "No index document (index.org / index.md / README) — showing recent files instead." }
+                                    FilesTable { files: files.clone(), decoded_space: decoded_space.clone() }
+                                }
+                            },
                         }
-                    }
-                }
+                    },
+                }}
             }
         }
     }
 }
 
-/// Format a mtime as a short relative label: "just now", "5m ago",
-/// "2h ago", "3d ago", "Jan 2". Returns "" when mtime_ms is 0.
-fn format_mtime(mtime_ms: u64) -> String {
-    if mtime_ms == 0 {
-        return String::new();
-    }
-    let now_ms = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_millis() as u64)
-        .unwrap_or(0);
-    if now_ms <= mtime_ms {
-        return "just now".into();
-    }
-    let delta_ms = now_ms - mtime_ms;
-    let sec = delta_ms / 1000;
-    if sec < 60 {
-        return format!("{sec}s ago");
-    }
-    let min = sec / 60;
-    if min < 60 {
-        return format!("{min}m ago");
-    }
-    let hr = min / 60;
-    if hr < 24 {
-        return format!("{hr}h ago");
-    }
-    let day = hr / 24;
-    if day < 14 {
-        return format!("{day}d ago");
-    }
-    // Older than 14 days: fall back to month-day.
-    let secs = mtime_ms / 1000;
-    let days = (secs / 86400) as i64;
-    let (_y, m, d) = civil_from_days(days);
-    format!("{} {}", month_short(m), d)
+fn space_resolving(s: &Option<SpaceState>) -> bool {
+    matches!(s.as_ref().map(|x| &x.status), Some(SpaceStatus::Resolving))
 }
 
-fn month_short(m: i64) -> &'static str {
-    match m {
-        1 => "Jan", 2 => "Feb", 3 => "Mar", 4 => "Apr", 5 => "May", 6 => "Jun",
-        7 => "Jul", 8 => "Aug", 9 => "Sep", 10 => "Oct", 11 => "Nov", 12 => "Dec",
-        _ => "?",
-    }
+fn space_ready_snapshot(s: &Option<SpaceState>) -> bool {
+    matches!(s.as_ref().map(|x| &x.status), Some(SpaceStatus::Ready(_)))
 }
 
-/// Convert an absolute day count (days since 1970-01-01) to
-/// (year, month, day). Howard Hinnant's algorithm from
-/// <http://howardhinnant.github.io/date_algorithms.html>.
-fn civil_from_days(days: i64) -> (i64, i64, i64) {
-    let z = days + 719468;
-    let era = if z >= 0 { z } else { z - 146096 } / 146097;
-    let doe = (z - era * 146097) as u64;
-    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
-    let y = (yoe as i64) + era * 400;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let d = (doy - (153 * mp + 2) / 5 + 1) as i64;
-    let m = if mp < 10 { mp + 3 } else { mp - 9 } as i64;
-    let y = if m <= 2 { y + 1 } else { y };
-    (y, m, d)
+#[component]
+fn FilesTable(files: Vec<SourceFileRow>, decoded_space: String) -> Element {
+    if files.is_empty() {
+        return rsx! { p { class: "empty-hint", "No files indexed yet." } };
+    }
+    rsx! {
+        div { class: "widget-body",
+            ul { class: "recent-list",
+                for f in files.iter() {
+                    li { class: "recent-row",
+                        a {
+                            class: "recent-link",
+                            href: if f.ref_str.is_empty() {
+                                route_for_space_preview(&decoded_space, &f.display_path)
+                            } else {
+                                route_for_space_note(&decoded_space, &f.ref_str)
+                            },
+                            "{f.title}"
+                        }
+                        span { class: "recent-when dim", "{format_mtime(f.mtime_ms)}" }
+                    }
+                }
+            }
+        }
+    }
 }

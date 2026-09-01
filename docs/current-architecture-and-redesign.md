@@ -193,7 +193,8 @@ SSR HTML
 - client feature 使用 `LaunchBuilder` / `dioxus::launch`；
 - `packages/web/public/index.html` 同时包含 CSS、hydration loader 和原生 JavaScript fallback。
 
-当前页面路由主要包括：
+> **已过时** — 当前路由与信息架构以 `docs/ui-refactoring-v2.org`
+> 为准（v2 笔记工作台）。下列表格保留作为历史快照：
 
 ```text
 /                                      space picker
@@ -204,33 +205,35 @@ SSR HTML
 /source/<encoded>/preview/<locator>   file/attachment preview
 ```
 
-路径参数使用 base64url 编码，避免文件系统路径中的 `/` 破坏路由。
-
-### 4.2 当前页面信息架构
-
-Space 内部基本是三栏：
+当前路由（v2）：
 
 ```text
-左栏                       中间                     右栏
-Source / directory tree    Page / resource list     Properties / graph
-Files                      Detail / preview         neighborhood / counts
+/                                          configurable home dashboard
+/source/:encoded                           per-space landing (journal/index/files)
+/source/:encoded/journal                   daily journal (today + recent)
+/source/:encoded/note/:encoded_ref         note workbench (read/edit/source + right rail)
+/source/:encoded/files?:..query            all-files browser
+/source/:encoded/activity                  journal stream
+/source/:encoded/graph                     full-space force graph
+/source/:encoded/preview/:encoded_locator  loose-file preview
 ```
 
-当前主要 UI 元素：
+v2 信息架构（来自 `docs/ui-refactoring-v2.org`）：
 
-- Source picker；
-- 文件树；
-- 文件列表；
-- 资源查询过滤器；
-- 资源详情；
-- 图谱；
-- 附件和文件预览；
-- 命令面板；
-- watch start/stop；
-- scan；
-- 右侧属性和邻接关系。
+- Source picker（顶部下拉）、文件树侧栏、活动流合并在主页
+  可配置挂件仪表盘上；
+- Daily journal（`/journal`）作为一等目的地，与文件树并排展示；
+- 笔记工作台的三栏布局：左侧文件树 + 搜索、顶部空间名与新建
+  菜单、笔记正文（读/编辑/源模式单标签页切换）+ 右侧大纲/反链/
+  属性/局部图（SSR 确定性，固定 prop 传入，不再依赖 hydration
+  context 信号）；
+- 可配置主页仪表盘由 `~/.config/notez/web.toml` 控制（见
+  `ui-refactoring-v2.org` 第 3/8 节）；
+- watch start/stop / scan / 命令面板等仍存在，但归属在"配置"
+  详情面板内。
 
-这些元素覆盖了开发和诊断需求，但还没有形成面向日常知识工作的主流程。
+v2 已聚焦到"日常笔记 + 日志 + 反链图谱"主流程，下一阶段继续往
+wikilink 与块级引用演进。
 
 ### 4.3 已知交互问题
 

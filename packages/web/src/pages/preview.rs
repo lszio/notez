@@ -13,7 +13,7 @@
 use dioxus::prelude::*;
 
 use crate::pages::use_space_layout;
-use crate::router::route_for_space_list;
+use crate::router::route_for_space_files;
 use crate::server::render_preview;
 use crate::space_ctx::{SpaceState, SpaceStatus};
 
@@ -49,7 +49,7 @@ pub fn PreviewPage(encoded: String, encoded_locator: String) -> Element {
 
     let space_snapshot = space().clone();
     let space_path = active_path.clone().unwrap_or_default();
-    let list_href = route_for_space_list(&space_path);
+    let list_href = route_for_space_files(&space_path);
 
     rsx! {
         div { class: "page",

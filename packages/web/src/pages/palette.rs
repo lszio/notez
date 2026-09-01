@@ -24,7 +24,7 @@
 use dioxus::prelude::*;
 
 
-use crate::router::{route_for_space_preview, route_for_space_resource};
+use crate::router::{route_for_space_preview, route_for_space_note};
 use crate::server::search_palette;
 use crate::space_ctx::{SpaceState, SpaceStatus};
 use crate::tree::SearchHit;
@@ -281,7 +281,7 @@ fn hit_href(encoded_space: &str, hit: &SearchHit) -> String {
     if hit.kind == "attachment" {
         route_for_space_preview(encoded_space, &hit.locator)
     } else {
-        route_for_space_resource(encoded_space, &hit.ref_str)
+        route_for_space_note(encoded_space, &hit.ref_str)
     }
 }
 
