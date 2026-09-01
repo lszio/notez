@@ -25,7 +25,16 @@ pub mod router;
 pub mod routes;
 pub mod server;
 pub mod space_ctx;
+// The `tree` module defines types used by the SSR server-side
+// aggregation helpers; the wasm client has no reason to depend on
+// them. Gating also keeps the workspace clean of any platform-only
+// references the client doesn't need.
+#[cfg(not(target_arch = "wasm32"))]
 pub mod tree;
+// UI configuration is a server-only concern: the wasm client never
+// reads `web.toml` (its server fn bodies run server-side anyway).
+// Gating the module keeps `toml` out of the client dependency graph.
+#[cfg(not(target_arch = "wasm32"))]
 pub mod ui_config;
 
 #[component]

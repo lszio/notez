@@ -31,20 +31,42 @@ use notez_core::source::{SourceCapabilities, SourceConfig as AdapterSourceConfig
 use crate::body::render_body;
 use crate::model::ResourceRow;
 use crate::router::Route;
+#[cfg(not(target_arch = "wasm32"))]
 use crate::tree::{
     self, IndexEntryDto, KindCounts, SearchHit, SourceFileRow, TreeNode,
 };
 use notez_core::application::Graph;
 #[cfg(not(target_arch = "wasm32"))]
-use notez_core::application::Engine;
-#[cfg(not(target_arch = "wasm32"))]
 use notez_core::application::dispatcher::{ApplicationDispatcher, Response};
+use notez_core::application::Engine;
 use notez_core::domain::change::ChangeOp;
-use notez_core::domain::{Resource, ResourceRef, ResourceKind, Selector};
+#[cfg(not(target_arch = "wasm32"))]
+use notez_core::domain::{Resource, ResourceKind, ResourceRef, Selector};
 #[cfg(not(target_arch = "wasm32"))]
 use notez_core::storage::SqliteProjection;
 #[cfg(not(target_arch = "wasm32"))]
-use notez_protocol::request::{Request, QueryResourcesRequest, ReadResourceRequest, UpdateDocumentRequest, ExecuteJanetRequest};
+use notez_protocol::request::{
+    ExecuteJanetRequest, QueryResourcesRequest, ReadResourceRequest, Request, UpdateDocumentRequest,
+};
+/// Server-only: kick the global watch service if running.
+#[cfg(not(target_arch = "wasm32"))]
+fn auto_start_watch(source_root: &std::path::Path) {
+    crate::routes::auto_start_watch(source_root);
+}
+#[cfg(target_arch = "wasm32")]
+#[inline]
+fn auto_start_watch(_source_root: &std::path::Path) {}
+/// Server-only: returns the cached `WebState` (wasm builds never
+/// instantiate one — the stub returns `()` and the call site is cfg-guard).
+#[cfg(not(target_arch = "wasm32"))]
+#[allow(dead_code)]
+fn web_state() -> crate::routes::WebState {
+    crate::routes::state_snapshot()
+}
+#[cfg(target_arch = "wasm32")]
+#[allow(dead_code)]
+fn web_state() -> () { () }
+#[cfg(not(target_arch = "wasm32"))]
 
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -299,7 +321,7 @@ pub async fn resolve_space_path(path: String) -> Result<SelectedSpaceDto, Server
     let sel = core_resolve_space(Path::new(&path))
         .map_err(WebServerError::from)
         .map_err(|e| ServerFnError::new(e.to_string()))?;
-    crate::routes::auto_start_watch(&sel.root);
+    auto_start_watch(&sel.root);
     Ok(SelectedSpaceDto::from(sel))
 }
 
@@ -311,7 +333,7 @@ pub async fn selected_space(source_root: String) -> Result<SelectedSpaceDto, Ser
     let sel = core_resolve_space(Path::new(&source_root))
         .map_err(WebServerError::from)
         .map_err(|e| ServerFnError::new(e.to_string()))?;
-    crate::routes::auto_start_watch(&sel.root);
+    auto_start_watch(&sel.root);
     Ok(SelectedSpaceDto::from(sel))
 }
 
@@ -357,7 +379,7 @@ pub async fn list_space_tree(source_root: String) -> Result<TreeNode, ServerFnEr
     let sel = core_resolve_space(Path::new(&source_root))
         .map_err(WebServerError::from)
         .map_err(|e| ServerFnError::new(e.to_string()))?;
-    crate::routes::auto_start_watch(&sel.root);
+    auto_start_watch(&sel.root);
     let facade = open_engine(&sel.root).map_err(|e| ServerFnError::new(e.to_string()))?;
     let facade = facade.lock().map_err(|e| ServerFnError::new(format!("facade lock: {e}")))?;
     tree::build_tree_with_disk(&facade, &sel.root).map_err(|e| ServerFnError::new(e.to_string()))
@@ -369,7 +391,7 @@ pub async fn list_source_files(source_root: String) -> Result<Vec<SourceFileRow>
     let sel = core_resolve_space(Path::new(&source_root))
         .map_err(WebServerError::from)
         .map_err(|e| ServerFnError::new(e.to_string()))?;
-    crate::routes::auto_start_watch(&sel.root);
+    auto_start_watch(&sel.root);
     let facade = open_engine(&sel.root).map_err(|e| ServerFnError::new(e.to_string()))?;
     let facade = facade.lock().map_err(|e| ServerFnError::new(format!("facade lock: {e}")))?;
     tree::build_source_files(&facade, &sel.root)
@@ -382,7 +404,7 @@ pub async fn list_kind_counts(source_root: String) -> Result<KindCounts, ServerF
     let sel = core_resolve_space(Path::new(&source_root))
         .map_err(WebServerError::from)
         .map_err(|e| ServerFnError::new(e.to_string()))?;
-    crate::routes::auto_start_watch(&sel.root);
+    auto_start_watch(&sel.root);
     let facade = open_engine(&sel.root).map_err(|e| ServerFnError::new(e.to_string()))?;
     let facade = facade.lock().map_err(|e| ServerFnError::new(format!("facade lock: {e}")))?;
     tree::build_kind_counts(&facade).map_err(|e| ServerFnError::new(e.to_string()))
@@ -433,6 +455,7 @@ pub struct ActivityEntryDto {
 
 /// Map a journal `ChangeOp` to the human action label shown in the
 /// activity stream.
+#[cfg(not(target_arch = "wasm32"))]
 pub fn activity_action_label(op: &ChangeOp) -> String {
     match op {
         ChangeOp::UpsertResource => "upsert resource".to_string(),
@@ -591,7 +614,7 @@ pub async fn load_index_document(source_root: String) -> Result<IndexDocumentDto
     let sel = core_resolve_space(Path::new(&source_root))
         .map_err(WebServerError::from)
         .map_err(|e| ServerFnError::new(e.to_string()))?;
-    crate::routes::auto_start_watch(&sel.root);
+    auto_start_watch(&sel.root);
     let facade = open_engine(&sel.root).map_err(|e| ServerFnError::new(e.to_string()))?;
     let mut facade = facade.lock().map_err(|e| ServerFnError::new(format!("facade lock: {e}")))?;
     let entry = tree::build_index_entry(&facade).map_err(|e| ServerFnError::new(e.to_string()))?;
@@ -619,7 +642,7 @@ pub async fn resolve_index(source_root: String) -> Result<Option<IndexEntryDto>,
     let sel = core_resolve_space(Path::new(&source_root))
         .map_err(WebServerError::from)
         .map_err(|e| ServerFnError::new(e.to_string()))?;
-    crate::routes::auto_start_watch(&sel.root);
+    auto_start_watch(&sel.root);
     let facade = open_engine(&sel.root).map_err(|e| ServerFnError::new(e.to_string()))?;
     let facade = facade.lock().map_err(|e| ServerFnError::new(format!("facade lock: {e}")))?;
     tree::build_index_entry(&facade).map_err(|e| ServerFnError::new(e.to_string()))
@@ -645,7 +668,7 @@ pub async fn render_preview(
     let sel = core_resolve_space(Path::new(&source_root))
         .map_err(WebServerError::from)
         .map_err(|e| ServerFnError::new(e.to_string()))?;
-    crate::routes::auto_start_watch(&sel.root);
+    auto_start_watch(&sel.root);
     let facade = open_engine(&sel.root).map_err(|e| ServerFnError::new(e.to_string()))?;
     let row_opt = {
         let facade = facade.lock().map_err(|e| ServerFnError::new(format!("facade lock: {e}")))?;
@@ -697,7 +720,7 @@ pub async fn search_palette(
     let sel = core_resolve_space(Path::new(&source_root))
         .map_err(WebServerError::from)
         .map_err(|e| ServerFnError::new(e.to_string()))?;
-    crate::routes::auto_start_watch(&sel.root);
+    auto_start_watch(&sel.root);
     let facade = open_engine(&sel.root).map_err(|e| ServerFnError::new(e.to_string()))?;
     let facade = facade.lock().map_err(|e| ServerFnError::new(format!("facade lock: {e}")))?;
     tree::build_search(&facade, &sel.root, &q)
@@ -1201,7 +1224,7 @@ pub async fn list_journal(source_root: String) -> Result<Vec<JournalEntryDto>, S
     let sel = core_resolve_space(Path::new(&source_root))
         .map_err(WebServerError::from)
         .map_err(|e| ServerFnError::new(e.to_string()))?;
-    crate::routes::auto_start_watch(&sel.root);
+    auto_start_watch(&sel.root);
     list_journal_impl(&sel.root).map_err(|e| ServerFnError::new(e))
 }
 

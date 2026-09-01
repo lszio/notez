@@ -104,10 +104,12 @@ cli-build:
 # `just web` launches the browser target. The Dioxus CLI owns watching,
 # rebuilding, and serving the Web bundle.
 
+# Default web recipe: launch the SSR server. The SSR binary is the
+# only path the user actually runs (hydration is explicitly disabled
+# upstream — see main.rs); the wasm client build is preserved only
+# for tooling that needs it (`just web-dx`).
 web:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    exec dx serve --platform web --package {{web_pkg}} --bin {{web_pkg}} --addr "{{host}}" --port "{{port}}"
+    just web-prod
 
 # Production-like SSR launch with the custom public shell.
 web-prod:
