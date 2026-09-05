@@ -1,0 +1,27 @@
+[package]
+name = "notez-api"
+version = "0.1.0"
+edition = "2024"
+description = "notez HTTP protocol API: transport, auth middleware (static token / OIDC), remote client"
+
+[lib]
+name = "notez_api"
+path = "src/lib.rs"
+
+[dependencies]
+notez-core = { path = "../core" }
+notez-protocol = { path = "../protocol" }
+composition = { path = "../composition" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+axum = { version = "0.8", features = ["json"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
+jsonwebtoken = "9"
+
+[dev-dependencies]
+tempfile = "3"
+tower = { version = "0.5", features = ["util"] }
+rsa = { version = "0.9", features = ["pem"] }
+rand_core = { version = "0.6", features = ["getrandom"] }

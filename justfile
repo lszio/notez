@@ -99,6 +99,13 @@ cli-web *args:
 cli-build:
     cargo {{_cargo_profile}} build -p {{cli_pkg}} --bin notez
 
+
+# Serve the HTTP protocol API (`/api/v1/dispatch`). Auth via env:
+# NOTEZ_API_TOKEN (shared secret) or NOTEZ_API_OIDC_ISSUER +
+# NOTEZ_API_OIDC_AUDIENCE (authentik/OIDC). Public binds require auth.
+api *args:
+    cargo {{_cargo_profile}} run -p {{cli_pkg}} --bin notez -- serve {{args}}
+
 # ---- Web development --------------------------------------------------------
 #
 # `just web` launches the browser target. The Dioxus CLI owns watching,
