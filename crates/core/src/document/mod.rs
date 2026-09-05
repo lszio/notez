@@ -15,6 +15,12 @@ pub mod org;
 pub use org::{DocumentError as OrgDocumentError, OrgEditField, OrgPatchError, OrgScanner, OrgTextEdit, restricted_org_patch, restricted_org_patches};
 
 pub mod markdown;
+
+pub mod notez_block;
+pub use notez_block::{
+    CardOutput, CardOutputError, NotezBlock, NotezBlockFormat, NotezBlockKind,
+    parse_markdown_notez_blocks, parse_org_notez_blocks,
+};
 pub use markdown::{DocumentError as MarkdownDocumentError, MarkdownScanner};
 
 pub mod security;
