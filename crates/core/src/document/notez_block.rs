@@ -39,11 +39,12 @@
 //! {:type "json"   :value ...}
 //! {:type "list"   :items [...]}
 //! {:type "object" :ref "notez://object/..."}
+//! {:type "html"   :value "<p>...</p>"}   ; sanitized at boundary
 //! ```
 //!
-//! `html` is intentionally rejected in this iteration until the
-//! sanitizer boundary exists. The engine validates the envelope —
-//! the renderer never guesses.
+//! The HTML variant goes through [`sanitize_html`] before reaching
+//! any renderer; callers never construct [`CardOutput::Html`]
+//! directly.
 
 use crate::document::content_hash_of_bytes;
 use std::collections::BTreeMap;
@@ -320,6 +321,57 @@ pub enum CardOutput {
     /// `{:type "object" :ref "notez://…"}` — a reference the client
     /// resolves through the protocol; never a fabricated identity.
     Object { reference: String },
+    /// `{:type "html" :value "<p>...</p>"}` — sanitized through the
+    /// [`sanitize_html`] boundary before reaching any renderer.
+    /// Constructed from validated envelopes only; callers never
+    /// construct an `Html` directly.
+    Html(SanitizedHtml),
+}
+
+/// HTML output produced by a notez card, after the sanitizer
+/// boundary. The inner string is the only safe form for embedding
+/// in a document; this type prevents accidental use of an
+/// unsanitized payload.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SanitizedHtml(String);
+
+impl SanitizedHtml {
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+    /// Wrap a pre-sanitized payload. Trust only callers that have
+    /// already run the value through [`sanitize_html`].
+    pub fn from_trusted(value: String) -> Self {
+        Self(value)
+    }
+}
+
+impl std::fmt::Display for SanitizedHtml {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+/// Sanitize raw card HTML against the notez boundary policy. Returns
+/// [`CardOutputError::HtmlSanitization`] when the policy rejects the
+/// input outright (e.g. the markup itself is empty after stripping).
+pub fn sanitize_html(value: &str) -> Result<SanitizedHtml, CardOutputError> {
+    let mut schemes = std::collections::HashSet::new();
+    schemes.insert("http");
+    schemes.insert("https");
+    schemes.insert("mailto");
+    let cleaned = ammonia::Builder::default()
+        .add_tags(["section", "article", "nav", "aside", "figure", "figcaption"])
+        .url_schemes(schemes)
+        .clean(value)
+        .to_string();
+    if !cleaned.trim().is_empty() {
+        Ok(SanitizedHtml(cleaned))
+    } else {
+        Err(CardOutputError::HtmlSanitization {
+            detail: "html card output was empty after sanitization".to_string(),
+        })
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -330,8 +382,8 @@ pub enum CardOutputError {
     UnknownType(String),
     /// Known type but malformed payload.
     Malformed { detail: String },
-    /// `html` output requires the sanitizer boundary; rejected for now.
-    HtmlDisabled,
+    /// `html` envelope was rejected by the sanitizer boundary.
+    HtmlSanitization { detail: String },
 }
 
 impl std::fmt::Display for CardOutputError {
@@ -342,10 +394,9 @@ impl std::fmt::Display for CardOutputError {
             }
             CardOutputError::UnknownType(t) => write!(f, "unknown card output type `{t}`"),
             CardOutputError::Malformed { detail } => write!(f, "malformed card output: {detail}"),
-            CardOutputError::HtmlDisabled => write!(
-                f,
-                "html card output is disabled (sanitizer boundary not available)"
-            ),
+            CardOutputError::HtmlSanitization { detail } => {
+                write!(f, "html card output rejected: {detail}")
+            }
         }
     }
 }
@@ -387,7 +438,15 @@ impl CardOutput {
                     })?;
                 Ok(CardOutput::Object { reference: reference.to_string() })
             }
-            "html" => Err(CardOutputError::HtmlDisabled),
+            "html" => {
+                let raw = obj
+                    .get("value")
+                    .and_then(serde_json::Value::as_str)
+                    .ok_or_else(|| CardOutputError::Malformed {
+                        detail: "`html` envelope requires a `value` string".into(),
+                    })?;
+                sanitize_html(raw).map(CardOutput::Html)
+            }
             other => Err(CardOutputError::UnknownType(other.to_string())),
         }
     }
@@ -398,6 +457,7 @@ impl CardOutput {
             CardOutput::Json(_) => "json",
             CardOutput::List(_) => "list",
             CardOutput::Object { .. } => "object",
+            CardOutput::Html(_) => "html",
         }
     }
 }
@@ -501,7 +561,7 @@ mod tests {
     }
 
     #[test]
-    fn envelope_rejects_missing_unknown_and_html() {
+    fn envelope_rejects_missing_unknown_and_malformed() {
         assert!(matches!(
             CardOutput::from_value(&json!("plain string")),
             Err(CardOutputError::MissingEnvelope)
@@ -514,9 +574,46 @@ mod tests {
             CardOutput::from_value(&json!({"type":"list"})),
             Err(CardOutputError::Malformed { .. })
         ));
-        assert_eq!(
-            CardOutput::from_value(&json!({"type":"html","value":"<p>x</p>"})),
-            Err(CardOutputError::HtmlDisabled)
-        );
+    }
+
+    #[test]
+    fn html_envelope_passes_through_sanitizer() {
+        // Empty input must error.
+        assert!(matches!(
+            CardOutput::from_value(&json!({"type":"html","value":""})),
+            Err(CardOutputError::HtmlSanitization { .. })
+        ));
+        // Pure dangerous content collapses to empty after sanitizer.
+        assert!(matches!(
+            CardOutput::from_value(&json!({
+                "type": "html",
+                "value": "<script>alert(1)</script>"
+            })),
+            Err(CardOutputError::HtmlSanitization { .. })
+        ));
+        // Script element is dropped; clean body survives.
+        let cleaned = match CardOutput::from_value(&json!({
+            "type": "html",
+            "value": "<p>hi</p><script>alert(1)</script>"
+        }))
+        .unwrap()
+        {
+            CardOutput::Html(html) => html.as_str().to_string(),
+            other => panic!("expected sanitized html, got {other:?}"),
+        };
+        assert!(cleaned.contains("<p>hi</p>"));
+        assert!(!cleaned.contains("<script"), "script element must be stripped");
+        // javascript: href is silently stripped (the sanitizer policy
+        // is "no dangerous url schemes", not "no dangerous link").
+        let cleaned = match CardOutput::from_value(&json!({
+            "type": "html",
+            "value": "<a href=\"javascript:alert(1)\">x</a>"
+        }))
+        .unwrap()
+        {
+            CardOutput::Html(html) => html.as_str().to_string(),
+            other => panic!("expected sanitized html, got {other:?}"),
+        };
+        assert!(!cleaned.contains("javascript:"));
     }
 }

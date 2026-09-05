@@ -157,6 +157,57 @@ pub struct ExecuteJanetRequest {
     pub result_limit: usize,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ListCardsRequest {
+    /// Source selector (`name` from the global config or absolute path).
+    #[serde(default)]
+    pub source: Option<String>,
+    /// Page size; bounded by the dispatcher (default 32).
+    #[serde(default)]
+    pub limit: Option<usize>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ReadCardRequest {
+    pub card_id: String,
+    /// Source selector (`name` or path). Required so the dispatcher
+    /// knows where to find the card definition.
+    pub source: String,
+    /// Document locator inside the source (file path relative to
+    /// the source root).
+    pub locator: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ExecuteCardRequest {
+    pub card_id: String,
+    /// Source selector (`name` or path).
+    pub source: String,
+    /// Document locator inside the source.
+    pub locator: String,
+    /// Optional wall-clock budget override (ms).
+    #[serde(default)]
+    pub timeout_ms: Option<u64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ListDashboardRequest {}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct UpdateDashboardRequest {
+    /// Ordered card ids, optionally including hidden ids so the
+    /// ordering survives hide/show cycles.
+    pub ordered_card_ids: Vec<String>,
+    /// Hidden card ids; surfaces.
+    #[serde(default)]
+    pub hidden_card_ids: Vec<String>,
+}
+
 fn default_janet_timeout_ms() -> u64 { 2_000 }
 fn default_janet_result_limit() -> usize { 256 * 1024 }
 
@@ -340,4 +391,9 @@ pub enum Request {
     WritebackResource(WritebackResourceRequest),
     UpdateDocument(UpdateDocumentRequest),
     ExecuteJanet(ExecuteJanetRequest),
+    ListCards(ListCardsRequest),
+    ReadCard(ReadCardRequest),
+    ExecuteCard(ExecuteCardRequest),
+    ListDashboard(ListDashboardRequest),
+    UpdateDashboard(UpdateDashboardRequest),
 }

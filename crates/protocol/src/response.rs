@@ -80,6 +80,20 @@ pub struct ScanReport {
     pub scanned_files: usize,
     pub scanned_resources: usize,
     pub scanned_relations: usize,
+    /// Files rejected by the source scan policy, by reason. Zero
+    /// total means no rejection, not that no file exists.
+    #[serde(default)]
+    pub ignored: u32,
+    #[serde(default)]
+    pub ignored_hidden: u32,
+    #[serde(default)]
+    pub ignored_excluded: u32,
+    #[serde(default)]
+    pub ignored_not_included: u32,
+    #[serde(default)]
+    pub ignored_too_large: u32,
+    #[serde(default)]
+    pub ignored_symlink: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -387,6 +401,14 @@ pub struct RelaySyncReport {
     pub synced_via_relay: bool,
 }
 
+/// Combined push+pull snapshot used by the `sync_reports` response
+/// variant. Defined here because the variant lives in [`Response`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct SyncReportPair {
+    pub push: PushReport,
+    pub pull: PullReport,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct WritebackReport {
     pub target_ref: String,
@@ -406,6 +428,40 @@ pub struct DocumentUpdateReport {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct JanetResult {
     pub value: serde_json::Value,
+}
+
+/// One notez card projection — the stable wire shape every surface
+/// consumes (Web SSR, CLI, future remote clients). Mirrors the engine
+/// projection so renderers never need to peek at engine internals.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct CardProjection {
+    pub id: String,
+    pub title: String,
+    pub language: String,
+    pub locator: String,
+    pub ordinal: usize,
+    /// `ready` | `failed` | `timeout` | `stale` | `denied`.
+    pub state: String,
+    /// `json` | `list` | `object` | `html`; empty for failed states.
+    pub output_type: String,
+    /// Json/List bodies (typed). `None` for object/html/failed.
+    pub output: Option<serde_json::Value>,
+    /// Remote/local object reference (`object` output only).
+    pub object_ref: Option<String>,
+    /// Sanitized HTML (`html` output only).
+    pub html: Option<String>,
+    /// Failure detail (non-ready states only).
+    pub error: Option<String>,
+    pub error_kind: Option<String>,
+}
+
+/// Ordered + visible card layout persisted per dashboard.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Default)]
+pub struct DashboardLayout {
+    /// All known card ids in display order (visible + hidden).
+    pub ordered_card_ids: Vec<String>,
+    /// Card ids currently hidden from the dashboard.
+    pub hidden_card_ids: Vec<String>,
 }
 
 // ---- resolution ---------------------------------------------------------------
@@ -457,6 +513,14 @@ pub enum Response {
     Writeback(WritebackReport),
     /// `update_document`: saved, rescanned, revision refreshed.
     DocumentUpdated(DocumentUpdateReport),
+    /// One card projection (per the engine's stable wire shape).
+    Card(CardProjection),
+    /// Result of executing one card live: id, state, and typed body.
+    CardExecution(CardProjection),
+    /// List of card projections for the current dashboard layout.
+    Dashboard { cards: Vec<CardProjection> },
+    /// Updated dashboard layout (echoed after `update_dashboard`).
+    DashboardUpdate(DashboardLayout),
     Janet(JanetResult),
     InboxCaptured { r_ref: String, revision: String },
     Done,

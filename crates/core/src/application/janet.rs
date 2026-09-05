@@ -58,6 +58,43 @@ impl crate::application::ports::ExtensionRuntime for NativeJanetExecutor {
     }
 }
 
+
+/// Native, sandboxed Janet card executor: bridges [`super::card_executor`]
+/// to the same `eval_janet_with_context` path used by the generic
+/// query executor. The card envelope (`{:type "json" :value ...}`)
+/// is validated by the engine's core parser, so this executor only
+/// has to produce the raw JSON value.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct JanetCardExecutor;
+
+impl super::card_executor::CardExecutor for JanetCardExecutor {
+    fn language(&self) -> &str {
+        "janet"
+    }
+
+    fn execute(
+        &self,
+        block: &crate::document::notez_block::NotezBlock,
+        _context: &super::card_executor::CardExecutionContext,
+    ) -> Result<crate::document::notez_block::CardOutput, super::card_executor::CardExecutionError> {
+        use super::card_executor::CardExecutionError;
+        let budget = std::cmp::min(
+            Duration::from_millis(DEFAULT_TIMEOUT_MS),
+            Duration::from_millis(2_000),
+        );
+        let value = match eval_janet_with_context(&block.program, budget, None, DEFAULT_RESULT_LIMIT) {
+            Ok(value) => value,
+            Err(JanetScriptError::Timeout) => return Err(CardExecutionError::Timeout),
+            Err(other) => return Err(CardExecutionError::Executor(other.to_string())),
+        };
+        crate::document::notez_block::CardOutput::from_value(&value)
+            .map_err(|e| CardExecutionError::Envelope(e.to_string()))
+    }
+
+    fn default_timeout(&self) -> Duration {
+        Duration::from_millis(DEFAULT_TIMEOUT_MS)
+    }
+}
 pub fn eval_janet_checked(script: &str) -> Result<serde_json::Value, JanetScriptError> { eval_janet_with_context(script, Duration::from_millis(DEFAULT_TIMEOUT_MS), None, DEFAULT_RESULT_LIMIT) }
 pub fn eval_janet_with_context(script: &str, budget: Duration, context: Option<&JanetQuerySnapshot>, result_limit: usize) -> Result<serde_json::Value, JanetScriptError> {
     if let Some(sym) = scan_forbidden_symbol(script) { return Err(JanetScriptError::ForbiddenApi(format!("script uses forbidden symbol `{sym}`"))); }
@@ -97,7 +134,7 @@ fn forbidden_token(tok: &str) -> Option<&'static str> { if tok.starts_with(|c:ch
 fn janet_error_message(value: &Janet) -> String { if let Ok(s)=value.clone().try_unwrap::<JanetString>() {String::from_utf8_lossy(s.as_bytes()).into_owned()} else {janet_value_to_json(value.clone()).to_string()} }
 fn janet_value_to_json(value: Janet) -> serde_json::Value {
     use janetrs::{JanetArray, JanetBuffer, JanetKeyword, JanetString, JanetStruct, JanetSymbol, JanetTable, JanetTuple};
-    fn number(f:f64)->serde_json::Value{if f.is_finite()&&f.fract()==0.0{serde_json::json!(f as i64)}else{serde_json::json!(f)}} fn bytes(b:&[u8])->serde_json::Value{serde_json::json!(String::from_utf8_lossy(b))} fn key(v:&Janet)->String{janet_value_to_json(v.clone()).to_string().trim_matches('"').to_string()}
+    fn number(f:f64)->serde_json::Value{if f.is_finite()&&f.fract()==0.0{serde_json::json!(f as i64)}else{serde_json::json!(f)}} fn bytes(b:&[u8])->serde_json::Value{serde_json::json!(String::from_utf8_lossy(b))} fn key(v:&Janet)->String{let raw=janet_value_to_json(v.clone()).to_string().trim_matches('"').to_string();raw.strip_prefix(':').map(str::to_string).unwrap_or(raw)}
     if value.is_nil(){return serde_json::Value::Null} if let Ok(f)=value.clone().try_unwrap::<f64>(){return number(f)} if let Ok(v)=value.clone().try_unwrap::<bool>(){return serde_json::json!(v)} if let Ok(v)=value.clone().try_unwrap::<JanetString>(){return bytes(v.as_bytes())} if let Ok(v)=value.clone().try_unwrap::<JanetBuffer>(){return bytes(v.as_bytes())} if let Ok(v)=value.clone().try_unwrap::<JanetSymbol>(){return bytes(v.as_bytes())} if let Ok(v)=value.clone().try_unwrap::<JanetKeyword>(){return serde_json::json!(format!(":{}",String::from_utf8_lossy(v.as_bytes())))} if let Ok(v)=value.clone().try_unwrap::<JanetTuple>(){return serde_json::Value::Array(v.iter().map(|x|janet_value_to_json(x.clone())).collect())} if let Ok(v)=value.clone().try_unwrap::<JanetArray>(){return serde_json::Value::Array(v.iter().map(|x|janet_value_to_json(x.clone())).collect())} if let Ok(v)=value.clone().try_unwrap::<JanetStruct>(){return serde_json::Value::Object(v.iter().map(|(k,x)|(key(&k),janet_value_to_json(x.clone()))).collect())} if let Ok(v)=value.try_unwrap::<JanetTable>(){return serde_json::Value::Object(v.iter().map(|(k,x)|(key(&k),janet_value_to_json(x.clone()))).collect())} serde_json::json!(format!("{value:?}"))
 }
 

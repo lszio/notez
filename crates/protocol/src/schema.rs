@@ -51,6 +51,11 @@ pub fn tool_name(req: &Request) -> &'static str {
         Request::WritebackResource(_) => "source_writeback",
         Request::UpdateDocument(_) => "update_document",
         Request::ExecuteJanet(_) => "execute_janet",
+        Request::ListCards(_) => "list_cards",
+        Request::ReadCard(_) => "read_card",
+        Request::ExecuteCard(_) => "execute_card",
+        Request::ListDashboard(_) => "list_dashboard",
+        Request::UpdateDashboard(_) => "update_dashboard",
     }
 }
 
@@ -98,6 +103,11 @@ pub fn request_schemas() -> BTreeMap<String, Schema> {
         request::WritebackResourceRequest,
         request::UpdateDocumentRequest,
         request::ExecuteJanetRequest,
+        request::ListCardsRequest,
+        request::ReadCardRequest,
+        request::ExecuteCardRequest,
+        request::ListDashboardRequest,
+        request::UpdateDashboardRequest,
         request::SyncPushRequest,
         request::SyncPullRequest,
         request::RelaySyncRequest,
@@ -136,7 +146,7 @@ mod tests {
     #[test]
     fn schemas_cover_every_operation() {
         let map = request_schemas();
-        assert_eq!(map.len(), 37); // 36 ops + the request enum
+        assert_eq!(map.len(), 42); // 41 ops + the request enum
         assert!(map.contains_key("query_resources_request"));
         assert!(map.contains_key("transition_task_request"));
         assert!(map.contains_key("request"));
