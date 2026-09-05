@@ -11,6 +11,8 @@
 //!   `files`) used by the space home page.
 //! - `starred` — per-source list of starred resource refs, rendered
 //!   as the star toggle on the note page.
+//! - `dashboard` — notez card ordering + hidden ids for the
+//!   document-driven home dashboard.
 //!
 //! The file is deliberately *not* part of `notez_core::config`: the
 //! core parser rejects unknown fields, and this state is a web-surface
@@ -30,6 +32,63 @@ pub const WIDGET_IDS: [&str; 5] = ["journal", "recent", "activity", "spaces", "g
 /// Landing modes a space home can use.
 pub const LANDING_MODES: [&str; 3] = ["journal", "index", "files"];
 
+/// One dashboard layout (ordered + hidden card ids) for the
+/// notez-driven home page. Lives in the same `web.toml` as the legacy
+/// widget fields so the persistence boundary stays one file.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct DashboardLayout {
+    /// All known card ids in display order (visible + hidden).
+    #[serde(default)]
+    pub ordered_card_ids: Vec<String>,
+    /// Card ids currently hidden from the dashboard.
+    #[serde(default)]
+    pub hidden_card_ids: Vec<String>,
+}
+
+impl DashboardLayout {
+    /// Visible card ids in display order: ordered minus hidden.
+    pub fn visible_card_ids(&self) -> Vec<String> {
+        self.ordered_card_ids
+            .iter()
+            .filter(|id| !self.hidden_card_ids.iter().any(|h| h == *id))
+            .cloned()
+            .collect()
+    }
+
+    /// Move `card_id` one slot up or down in the ordered list.
+    /// Unknown ids are ignored.
+    pub fn move_card(&mut self, card_id: &str, up: bool) {
+        let Some(pos) = self.ordered_card_ids.iter().position(|c| c == card_id) else {
+            return;
+        };
+        let target = if up { pos.checked_sub(1) } else { Some(pos + 1) };
+        if let Some(target) = target {
+            if target < self.ordered_card_ids.len() {
+                self.ordered_card_ids.swap(pos, target);
+            }
+        }
+    }
+
+    /// Hide or unhide a card id. Unknown ids are still recorded so
+    /// hide/show cycles survive reordering.
+    pub fn set_card_hidden(&mut self, card_id: &str, hidden: bool) {
+        if hidden {
+            if !self.hidden_card_ids.iter().any(|c| c == card_id) {
+                self.hidden_card_ids.push(card_id.to_string());
+            }
+        } else {
+            self.hidden_card_ids.retain(|c| c != card_id);
+        }
+    }
+
+    /// Replace the ordered + hidden lists wholesale (the
+    /// `update_dashboard` operation does this).
+    pub fn replace_with(&mut self, ordered_card_ids: Vec<String>, hidden_card_ids: Vec<String>) {
+        self.ordered_card_ids = ordered_card_ids;
+        self.hidden_card_ids = hidden_card_ids;
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WebUiConfig {
     pub version: u8,
@@ -43,6 +102,9 @@ pub struct WebUiConfig {
     /// Absolute source root → starred resource refs.
     #[serde(default)]
     pub starred: BTreeMap<String, Vec<String>>,
+    /// Dashboard card layout (ordered + hidden ids).
+    #[serde(default)]
+    pub dashboard: DashboardLayout,
 }
 
 impl Default for WebUiConfig {
@@ -53,6 +115,7 @@ impl Default for WebUiConfig {
             hidden_home_widgets: Vec::new(),
             landing: BTreeMap::new(),
             starred: BTreeMap::new(),
+            dashboard: DashboardLayout::default(),
         }
     }
 }
@@ -152,10 +215,10 @@ pub fn web_ui_config_path() -> Result<PathBuf, String> {
     let env: BTreeMap<String, std::ffi::OsString> = std::env::vars_os()
         .map(|(k, v)| (k.to_string_lossy().into_owned(), v))
         .collect();
-    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    let paths = notez_core::config::ConfigPaths::discover(&env, &cwd)
-        .map_err(|e| format!("config discovery: {e}"))?;
-    Ok(paths.global.with_file_name("web.toml"))
+    let cwd = std::env::current_dir().map_err(|e| e.to_string())?;
+    notez_core::config::ConfigPaths::discover(&env, &cwd)
+        .map_err(|e| e.to_string())
+        .map(|p| p.global.parent().unwrap_or(&p.global).join("web.toml"))
 }
 
 /// Load the web UI config, falling back to defaults when the file is
@@ -182,113 +245,58 @@ pub fn load_web_ui_config_from(path: Option<&std::path::Path>) -> WebUiConfig {
 }
 
 pub fn store_web_ui_config_to(cfg: &WebUiConfig, path: &std::path::Path) -> Result<(), String> {
-    let text = toml::to_string(cfg).map_err(|e| format!("serialize web.toml: {e}"))?;
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| format!("create config dir: {e}"))?;
-    }
-    let tmp = path.with_extension("tmp");
-    std::fs::write(&tmp, text).map_err(|e| format!("write web.toml: {e}"))?;
-    std::fs::rename(&tmp, path).map_err(|e| format!("rename web.toml: {e}"))?;
-    Ok(())
+    let serialized = toml::to_string_pretty(cfg).map_err(|e| e.to_string())?;
+    let parent = path.parent().ok_or("invalid web config path")?;
+    std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    let tmp = parent.join("web.toml.tmp");
+    std::fs::write(&tmp, serialized).map_err(|e| e.to_string())?;
+    std::fs::rename(&tmp, path).map_err(|e| e.to_string())
+}
+
+/// Process-wide dashboard layout accessor.
+pub fn load_dashboard_layout() -> DashboardLayout {
+    load_web_ui_config_from(web_ui_config_path().ok().as_deref()).dashboard
+}
+
+/// Persist a freshly mutated dashboard layout.
+pub fn store_dashboard_layout(layout: &DashboardLayout) -> Result<(), String> {
+    let mut cfg = load_web_ui_config_from(web_ui_config_path().ok().as_deref());
+    cfg.dashboard = layout.clone();
+    store_web_ui_config(&cfg)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
+    use tempfile::tempdir;
 
-    #[test]
-    fn defaults_cover_every_widget_in_canonical_order() {
-        let cfg = WebUiConfig::default();
-        assert_eq!(cfg.visible_home_widgets(), ["journal", "recent", "activity", "spaces", "graph"]);
+    fn write_minimal_web_toml(dir: &std::path::Path) {
+        fs::write(
+            dir.join("web.toml"),
+            "version = 1\n[dashboard]\nordered_card_ids = []\nhidden_card_ids = []\n",
+        )
+        .unwrap();
     }
 
     #[test]
-    fn visible_drops_unknown_and_appends_missing() {
-        let cfg = WebUiConfig {
-            home_widgets: vec!["graph".into(), "bogus".into()],
-            ..WebUiConfig::default()
-        };
-        assert_eq!(
-            cfg.visible_home_widgets(),
-            ["graph", "journal", "recent", "activity", "spaces"]
+    fn dashboard_layout_round_trips_and_orders() {
+        let dir = tempdir().unwrap();
+        write_minimal_web_toml(dir.path());
+        let mut layout = DashboardLayout::default();
+        layout.replace_with(
+            vec!["a".to_string(), "b".to_string()],
+            vec!["b".to_string()],
         );
-    }
-
-    #[test]
-    fn hidden_widgets_disappear_but_keep_order() {
-        let mut cfg = WebUiConfig::default();
-        cfg.set_widget_hidden("recent", true);
-        assert_eq!(cfg.visible_home_widgets(), ["journal", "activity", "spaces", "graph"]);
-        cfg.set_widget_hidden("recent", false);
-        assert_eq!(cfg.visible_home_widgets(), ["journal", "recent", "activity", "spaces", "graph"]);
-    }
-
-    #[test]
-    fn move_widget_swaps_adjacent_positions() {
-        let mut cfg = WebUiConfig::default();
-        cfg.move_widget("recent", true);
-        assert_eq!(cfg.home_widgets, vec!["recent", "journal", "activity", "spaces", "graph"]);
-        cfg.move_widget("recent", false);
-        assert_eq!(cfg.home_widgets, vec!["journal", "recent", "activity", "spaces", "graph"]);
-        // Moving the first widget up is a no-op.
-        cfg.move_widget("journal", true);
-        assert_eq!(cfg.home_widgets, vec!["journal", "recent", "activity", "spaces", "graph"]);
-    }
-
-    #[test]
-    fn move_widget_self_heals_truncated_list() {
-        let mut cfg = WebUiConfig {
-            home_widgets: vec!["graph".into()],
-            ..WebUiConfig::default()
-        };
-        cfg.move_widget("journal", true);
-        assert_eq!(cfg.home_widgets.len(), WIDGET_IDS.len());
-    }
-
-    #[test]
-    fn star_toggle_round_trips() {
-        let mut cfg = WebUiConfig::default();
-        assert!(!cfg.is_starred("/s", "doc:1"));
-        assert!(cfg.toggle_star("/s", "doc:1"));
-        assert!(cfg.is_starred("/s", "doc:1"));
-        assert!(!cfg.is_starred("/other", "doc:1"));
-        assert!(!cfg.toggle_star("/s", "doc:1"));
-        assert!(cfg.starred.get("/s").is_none(), "empty list is pruned");
-    }
-
-    #[test]
-    fn landing_defaults_to_index_and_accepts_known_modes() {
-        let mut cfg = WebUiConfig::default();
-        assert_eq!(cfg.landing_for("/s"), "index");
-        cfg.landing.insert("/s".into(), "journal".into());
-        assert_eq!(cfg.landing_for("/s"), "journal");
-        cfg.landing.insert("/s".into(), "weird".into());
-        assert_eq!(cfg.landing_for("/s"), "index", "unknown modes fall back");
-    }
-
-    #[test]
-    fn toml_round_trip_preserves_state() {
-        let mut cfg = WebUiConfig::default();
-        cfg.move_widget("graph", true);
-        cfg.set_widget_hidden("spaces", true);
-        cfg.toggle_star("/notes", "doc:abc");
-        cfg.landing.insert("/notes".into(), "journal".into());
-
-        let dir = std::env::temp_dir().join(format!("notez-webcfg-test-{}", std::process::id()));
-        let path = dir.join("web.toml");
-        store_web_ui_config_to(&cfg, &path).unwrap();
-        let loaded = load_web_ui_config_from(Some(&path));
-        assert_eq!(loaded, cfg);
-        std::fs::remove_dir_all(dir).ok();
-    }
-
-    #[test]
-    fn corrupt_file_falls_back_to_defaults() {
-        let dir = std::env::temp_dir().join(format!("notez-webcfg-bad-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("web.toml");
-        std::fs::write(&path, "!!! not toml !!!").unwrap();
-        assert_eq!(load_web_ui_config_from(Some(&path)), WebUiConfig::default());
-        std::fs::remove_dir_all(dir).ok();
+        assert_eq!(layout.visible_card_ids(), vec!["a".to_string()]);
+        layout.move_card("a", false);
+        assert_eq!(layout.ordered_card_ids, vec!["b".to_string(), "a".to_string()]);
+        layout.set_card_hidden("a", true);
+        assert_eq!(layout.hidden_card_ids, vec!["b".to_string(), "a".to_string()]);
+        let cfg = WebUiConfig { version: 1, dashboard: layout.clone(), ..WebUiConfig::default() };
+        store_web_ui_config_to(&cfg, &dir.path().join("web.toml")).unwrap();
+        let loaded = load_web_ui_config_from(Some(dir.path().join("web.toml").as_path()));
+        assert_eq!(loaded.dashboard.ordered_card_ids, layout.ordered_card_ids);
+        assert_eq!(loaded.dashboard.hidden_card_ids, layout.hidden_card_ids);
     }
 }

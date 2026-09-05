@@ -1261,7 +1261,7 @@ pub struct NotezCardView {
     pub id: String,
     pub title: String,
     pub state: String,
-    /// `json` | `list` | `object`
+    /// `json` | `list` | `object` | `html`
     pub output_type: String,
     pub locator: String,
     pub ordinal: usize,
@@ -1271,6 +1271,8 @@ pub struct NotezCardView {
     pub items: Vec<serde_json::Value>,
     /// Reference for `output_type = object`; ignored otherwise.
     pub object_ref: Option<String>,
+    /// Sanitized HTML for `output_type = html`; ignored otherwise.
+    pub html: Option<String>,
     /// Failure message for `state = failed`; ignored otherwise.
     pub error: Option<String>,
     pub error_kind: Option<String>,
@@ -1289,11 +1291,12 @@ pub struct NotezDefinitionView {
 }
 
 impl NotezCardView {
-    fn ready(block: &notez_core::document::NotezBlock, output: &notez_core::document::CardOutput, locator: String) -> Self {
-        let (output_type, value, items, object_ref) = match output {
-            notez_core::document::CardOutput::Json(value) => ("json".to_string(), Some(value.clone()), Vec::new(), None),
-            notez_core::document::CardOutput::List(items) => ("list".to_string(), None, items.clone(), None),
-            notez_core::document::CardOutput::Object { reference } => ("object".to_string(), None, Vec::new(), Some(reference.clone())),
+        fn ready(block: &notez_core::document::NotezBlock, output: &notez_core::document::CardOutput, locator: String) -> Self {
+        let (output_type, value, items, object_ref, html) = match output {
+            notez_core::document::CardOutput::Json(value) => ("json".to_string(), Some(value.clone()), Vec::new(), None, None),
+            notez_core::document::CardOutput::List(items) => ("list".to_string(), None, items.clone(), None, None),
+            notez_core::document::CardOutput::Object { reference } => ("object".to_string(), None, Vec::new(), Some(reference.clone()), None),
+            notez_core::document::CardOutput::Html(html) => ("html".to_string(), None, Vec::new(), None, Some(html.as_str().to_string())),
         };
         Self {
             id: block.id.clone(),
@@ -1305,6 +1308,7 @@ impl NotezCardView {
             value,
             items,
             object_ref,
+            html,
             error: None,
             error_kind: None,
         }
@@ -1321,6 +1325,7 @@ impl NotezCardView {
             value: None,
             items: Vec::new(),
             object_ref: None,
+            html: None,
             error: Some(error.to_string()),
             error_kind: Some(error.kind().to_string()),
         }

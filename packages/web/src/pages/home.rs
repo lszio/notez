@@ -156,6 +156,12 @@ fn NotezCardView(card: crate::server::NotezCardView) -> Element {
                     }
                 } else if card.output_type == "object" {
                     code { class: "notez-card-ref", "{card.object_ref.clone().unwrap_or_default()}" }
+                } else if card.output_type == "html" {
+                    // Sanitized through the core boundary — render the
+                    // trusted payload verbatim, never as raw input.
+                    div { class: "notez-card-html",
+                        {card.html.clone().unwrap_or_default()}
+                    }
                 }
             }
         }

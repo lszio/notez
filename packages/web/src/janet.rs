@@ -300,13 +300,17 @@ mod imp {
         fn bytes(b: &[u8]) -> serde_json::Value {
             serde_json::json!(String::from_utf8_lossy(b))
         }
-        fn key_string(key: &janetrs::Janet) -> String {
-            match janet_value_to_json(key.clone()) {
-                serde_json::Value::String(s) => s,
-                serde_json::Value::Number(n) => n.to_string(),
-                other => other.to_string(),
-            }
-        }
+    fn key_string(key: &janetrs::Janet) -> String {
+        let raw = match janet_value_to_json(key.clone()) {
+            serde_json::Value::String(s) => s,
+            serde_json::Value::Number(n) => n.to_string(),
+            other => other.to_string(),
+        };
+        // Janet keyword-as-key (":type", ":items") is JSON-serialized
+        // with the leading colon; strip it so envelope lookups see
+        // plain names like `type` and `items`.
+        raw.strip_prefix(':').map(str::to_string).unwrap_or(raw)
+    }
 
         if value.is_nil() {
             return serde_json::Value::Null;
@@ -405,24 +409,37 @@ pub use imp::{eval_janet_with_context, JanetQueryContext};
 /// Execute one notez card block: run the program in the sandboxed
 /// Janet VM, then validate the result against the output envelope.
 /// The executor never renders; the renderer never executes.
+/// Execute one notez card block. Routes through the core
+/// [`notez_core::application::CardExecutionService` so so] so every
+/// surface shares one executor, one cache, and one envelope
+/// contract. Janet errors are mapped back to the legacy error
+/// type so existing handlers keep their semantics.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn execute_card(
     block: &notez_core::document::NotezBlock,
 ) -> Result<notez_core::document::CardOutput, JanetScriptError> {
-    let budget = std::time::Duration::from_millis(
-        block
-            .declared_timeout_ms()
-            .unwrap_or(EVAL_TIMEOUT_MS)
-            .min(EVAL_TIMEOUT_MS),
-    );
-    let value = eval_janet_with_context(
-        &block.program,
-        budget,
-        None,
-        MAX_RESULT_BYTES,
-    )?;
-    notez_core::document::CardOutput::from_value(&value)
-        .map_err(|e| JanetScriptError::Runtime(e.to_string()))
+    use notez_core::application::{CardExecutionContext, CardExecutionService};
+    let service = CardExecutionService::new(
+        notez_core::application::CardCache::default(),
+    )
+    .with_executor(std::sync::Arc::new(
+        notez_core::application::janet::JanetCardExecutor,
+    ));
+    let context = CardExecutionContext::for_locator("");
+    let state = service.run(block, &context);
+    match state {
+        notez_core::application::CardState::Ready(out) => Ok(out),
+        notez_core::application::CardState::Failed(detail) => {
+            Err(JanetScriptError::Runtime(detail))
+        }
+        notez_core::application::CardState::Timeout => Err(JanetScriptError::Timeout),
+        notez_core::application::CardState::Stale => {
+            Err(JanetScriptError::Runtime("card source revision moved".to_string()))
+        }
+        notez_core::application::CardState::Denied(detail) => {
+            Err(JanetScriptError::Runtime(format!("denied: {detail}")))
+        }
+    }
 }
 
 /// One executed card: the block plus its outcome. Rendering turns
@@ -473,6 +490,12 @@ pub fn render_card_html(card: &ExecutedCard) -> String {
             html_escape::encode_text(&card.block.id),
             title,
             html_escape::encode_text(reference)
+        ),
+        Ok(notez_core::document::CardOutput::Html(html)) => format!(
+            "<section class=\"notez-card notez-card--html\" data-card-id=\"{}\" data-state=\"ready\" data-output=\"html\"><h3 class=\"notez-card-title\">{}</h3><div class=\"notez-card-html\">{}</div></section>",
+            html_escape::encode_text(&card.block.id),
+            title,
+            html.as_str()
         ),
         Err(err) => format!(
             "<section class=\"notez-card\" data-card-id=\"{}\" data-state=\"failed\"><h3 class=\"notez-card-title\">{}</h3><pre class=\"notez-card-error\" data-kind=\"{}\">{}</pre></section>",
