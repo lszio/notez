@@ -125,6 +125,10 @@ pub struct SourceConfig {
     pub include_paths: Vec<PathBuf>,
     #[serde(default)]
     pub exclude_paths: Vec<PathBuf>,
+    /// File-inclusion policy for this source (defaults for configs
+    /// that predate the `[scan]` section).
+    #[serde(default)]
+    pub scan: crate::config::model::ScanConfig,
 }
 impl SourceConfig {
     pub fn new(
@@ -141,6 +145,7 @@ impl SourceConfig {
             url: None,
             include_paths: Vec::new(),
             exclude_paths: Vec::new(),
+            scan: crate::config::model::ScanConfig::default(),
         }
     }
 }
@@ -150,6 +155,9 @@ pub struct ScannedSource {
     pub resources: Vec<Resource>,
     pub relations: Vec<ResourceRelation>,
     pub link_occurrences: Vec<LinkOccurrence>,
+    /// Why files were skipped, by reason. Zero total means the scan
+    /// saw no rejection, not that no file exists.
+    pub ignored: crate::source::policy::IgnoreCounts,
 }
 
 pub trait SourceAdapter {
@@ -283,6 +291,7 @@ impl SourceAdapter for ComposedSourceAdapter {
             resources,
             relations,
             link_occurrences,
+            ignored: self.transport.ignored(),
         })
     }
 

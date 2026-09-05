@@ -24,9 +24,11 @@ fn two_spaces_scanning_same_file_produce_same_object_id() {
 
     let cfg_a = SourceConfig {
         id: "src_a".to_string(), kind: SourceKind::Native, path: dir.path().to_path_buf(), read_only: true, url: None, include_paths: vec![], exclude_paths: vec![],
+        scan: Default::default(),
     };
     let cfg_b = SourceConfig {
         id: "src_b".to_string(), kind: SourceKind::Native, path: dir.path().to_path_buf(), read_only: true, url: None, include_paths: vec![], exclude_paths: vec![],
+        scan: Default::default(),
     };
 
     // Compute the expected object_id with the public helper.

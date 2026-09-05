@@ -461,6 +461,7 @@ fn source_context_is_explicit_and_service_exposes_bound_or_unbound_state() {
         workflow: Default::default(),
         sources: Vec::new(),
         link_overrides: serde_json::Value::Null,
+        scan: Default::default(),
     };
     let context = SourceContext::new("source-1", PathBuf::from("/tmp/source"), cfg);
     let service = Engine::with_source(SqliteProjection::in_memory().unwrap(), context);
@@ -489,6 +490,7 @@ fn application_scan_query_read_and_resolve_cover_success_and_not_found() {
         workflow: Default::default(),
         sources: vec![],
         link_overrides: serde_json::Value::Null,
+        scan: Default::default(),
     };
     let ctx = SourceContext::new("test", dir.path().to_path_buf(), config);
     let mut service = Engine::with_source(SqliteProjection::in_memory().unwrap(), ctx);
@@ -549,6 +551,7 @@ fn application_scan_rejects_missing_registry_and_storage_errors_are_preserved() 
         workflow: Default::default(),
         sources: vec![],
         link_overrides: serde_json::Value::Null,
+        scan: Default::default(),
     };
     let ctx = SourceContext::new("test", dir.path().to_path_buf(), config);
     let mut unregistered =
@@ -686,6 +689,7 @@ fn application_error_variants_expose_not_found_and_unsupported_content() {
         workflow: Default::default(),
         sources: vec![],
         link_overrides: serde_json::Value::Null,
+        scan: Default::default(),
     };
     let ctx = SourceContext::new("test", PathBuf::from("/tmp/space"), config);
     let mut service = Engine::with_source(SqliteProjection::in_memory().unwrap(), ctx);

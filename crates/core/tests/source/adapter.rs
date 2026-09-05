@@ -42,6 +42,7 @@ fn source_adapter_interface() {
         read_only: true,
         include_paths: vec![],
         exclude_paths: vec![],
+        scan: Default::default(),
     };
 
     let adapter = MockAdapter { config };

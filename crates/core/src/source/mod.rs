@@ -1,11 +1,13 @@
 pub mod adapter;
 pub mod writer;
 pub mod protocol;
-pub mod registry;
+pub mod policy;
+pub use policy::{Decision, IgnoreCounts, IgnoreReason, SourcePolicy};
 pub use protocol::{
     ChangeObserver, FormatParser, ParsedEntity, ParserError, RawEntity, SourceReader,
     SourceTransport, SourceWriter, TransportError,
 };
+pub mod registry;
 pub mod apple_calendar;
 pub mod apple_notes;
 pub use apple_calendar::AppleCalendarSourceAdapter;

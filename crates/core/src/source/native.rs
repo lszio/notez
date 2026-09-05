@@ -15,12 +15,29 @@ pub struct NativeSourceAdapter {
 
 pub struct NativeTransport {
     include_paths: Vec<PathBuf>,
-    exclude_paths: Vec<PathBuf>,
     base_path: PathBuf,
+    policy: crate::source::policy::SourcePolicy,
+    /// Rejections recorded during the most recent `fetch_raw`. The
+    /// transport is `Send + Sync` (shared across threads), so the
+    /// counters live behind a mutex.
+    ignored: std::sync::Mutex<crate::source::policy::IgnoreCounts>,
 }
 
-impl SourceTransport for NativeTransport {
+pub struct OrgParser;
+pub struct MarkdownParser;
+
+impl FormatParser for OrgParser {
+    fn supports(&self, mime_type: &str) -> bool { mime_type == "text/org" }
+    fn parse(&self, entity: &RawEntity, source_id: &str) -> Result<ParsedEntity, ParserError> {
+        let doc = OrgScanner::parse_bytes(&entity.payload, source_id, &entity.locator)
+            .map_err(|e| ParserError::Other(e.to_string()))?;
+        Ok(ParsedEntity { resources: doc.resources, relations: doc.links, link_occurrences: doc.link_occurrences })
+    }
+}
+impl crate::source::protocol::SourceTransport for NativeTransport {
     fn fetch_raw(&self) -> Result<Vec<RawEntity>, TransportError> {
+        use crate::source::policy::Decision;
+
         let include_roots: Vec<PathBuf> = if self.include_paths.is_empty() {
             vec![self.base_path.clone()]
         } else {
@@ -29,47 +46,65 @@ impl SourceTransport for NativeTransport {
 
         let mut entities = Vec::new();
         for include_root in &include_roots {
-            for entry in WalkDir::new(include_root)
+            let walker = WalkDir::new(include_root)
+                .follow_links(self.policy.follow_symlinks())
                 .into_iter()
-                .filter_map(Result::ok)
-            {
+                // Prune whole rejected subtrees (hidden/excluded/symlink
+                // directories) instead of walking into them.
+                .filter_entry(|entry| {
+                    let path = entry.path();
+                    if path == include_root.as_path() {
+                        return true;
+                    }
+                    if entry.file_type().is_dir() {
+                        let rel = path.strip_prefix(include_root).unwrap_or(path);
+                        let is_symlink = entry.path_is_symlink();
+                        !self.policy.hides_dir(rel, is_symlink)
+                    } else {
+                        true
+                    }
+                });
+            for entry in walker.filter_map(Result::ok) {
                 let path = entry.path();
-                if self.exclude_paths.iter().any(|ex| path.starts_with(ex)) {
+                if !entry.file_type().is_file() {
                     continue;
                 }
                 let rel_path = path.strip_prefix(include_root).unwrap_or(path);
-                if rel_path
-                    .components()
-                    .any(|c| c.as_os_str().to_string_lossy().starts_with('.'))
-                {
+                let rel_lossy = rel_path.to_string_lossy().replace('\\', "/");
+
+                let is_symlink = entry.path_is_symlink();
+                let size = entry.metadata().map(|m| m.len()).unwrap_or(0);
+                if let Decision::Ignore(reason) = self.policy.decide(rel_path, is_symlink, size) {
+                    self.ignored
+                        .lock()
+                        .expect("native transport ignore counts")
+                        .record(reason);
                     continue;
                 }
-                if path.is_file() {
-                    let ext = path
-                        .extension()
-                        .and_then(|e| e.to_str())
-                        .unwrap_or_default();
-                    let mime_type = if ext == "org" {
-                        "text/org"
-                    } else if ext == "md" {
-                        "text/markdown"
-                    } else {
-                        continue;
-                    };
+                let ext = path
+                    .extension()
+                    .and_then(|e| e.to_str())
+                    .unwrap_or_default();
+                let mime_type = if ext == "org" {
+                    "text/org"
+                } else if ext == "md" {
+                    "text/markdown"
+                } else {
+                    continue;
+                };
 
-                    let payload = fs::read(path).map_err(TransportError::Io)?;
-                    entities.push(RawEntity {
-                        // Use the path relative to the include_root so the
-                        // locator stays stable across sources (spec §3.1):
-                        // two Spaces pointing at the same physical
-                        // directory must agree on a per-file locator
-                        // regardless of where the include_root lives on
-                        // disk.
-                        locator: rel_path.to_string_lossy().to_string(),
-                        mime_type: mime_type.to_string(),
-                        payload,
-                    });
-                }
+                let payload = fs::read(path).map_err(TransportError::Io)?;
+                entities.push(RawEntity {
+                    // Use the path relative to the include_root so the
+                    // locator stays stable across sources (spec §3.1):
+                    // two Spaces pointing at the same physical
+                    // directory must agree on a per-file locator
+                    // regardless of where the include_root lives on
+                    // disk.
+                    locator: rel_lossy,
+                    mime_type: mime_type.to_string(),
+                    payload,
+                });
             }
         }
 
@@ -77,36 +112,35 @@ impl SourceTransport for NativeTransport {
         entities.sort_by(|a, b| a.locator.cmp(&b.locator));
         Ok(entities)
     }
+
+    fn ignored(&self) -> crate::source::policy::IgnoreCounts {
+        *self.ignored.lock().expect("native transport ignore counts")
+    }
     fn mutate(&self, _locator: &str, _payload: &str) -> Result<(), TransportError> {
         Err(TransportError::Other("native transport mutation requires SourceWriter".into()))
     }
 }
 
 
+
 impl NativeSourceAdapter {
     pub fn new(config: SourceConfig) -> Self {
         let base_path = config.path.clone();
+        let policy = crate::source::policy::SourcePolicy::from_parts(
+            &config.scan,
+            config.exclude_paths.clone(),
+        );
         let transport = NativeTransport {
             include_paths: config.include_paths.clone(),
-            exclude_paths: config.exclude_paths.clone(),
             base_path: config.path.clone(),
+            policy,
+            ignored: std::sync::Mutex::default(),
         };
 
         let parsers: Vec<Box<dyn FormatParser>> =
             vec![Box::new(OrgParser), Box::new(MarkdownParser)];
         let inner = ComposedSourceAdapter::new(config, Box::new(transport), parsers);
         Self { inner, base_path }
-    }
-}
-
-pub struct OrgParser;
-pub struct MarkdownParser;
-impl FormatParser for OrgParser {
-    fn supports(&self, mime_type: &str) -> bool { mime_type == "text/org" }
-    fn parse(&self, entity: &RawEntity, source_id: &str) -> Result<ParsedEntity, ParserError> {
-        let doc = OrgScanner::parse_bytes(&entity.payload, source_id, &entity.locator)
-            .map_err(|e| ParserError::Other(e.to_string()))?;
-        Ok(ParsedEntity { resources: doc.resources, relations: doc.links, link_occurrences: doc.link_occurrences })
     }
 }
 

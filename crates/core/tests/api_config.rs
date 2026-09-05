@@ -37,6 +37,7 @@ fn minimal_source(name: &str) -> SourceConfig {
         workflow: WorkflowConfig::default(),
         sources: Vec::new(),
         link_overrides: serde_json::Value::Null,
+        scan: Default::default(),
     }
 }
 
@@ -285,8 +286,10 @@ fn runtime_merge_resolves_paths_and_applies_global_env_cli_precedence() {
             url: None,
             include_paths: vec![PathBuf::from("notes/include")],
             exclude_paths: vec![PathBuf::from("notes/exclude")],
+            scan: Default::default(),
         }],
         link_overrides: serde_json::Value::Null,
+        scan: Default::default(),
     };
     let paths = ConfigPaths {
         global: dir.path().join("config.toml"),
@@ -397,6 +400,7 @@ fn migration_apply_writes_new_sources_noops_empty_plan_and_reports_io_errors() {
             url: None,
             include_paths: vec![],
             exclude_paths: vec![],
+            scan: Default::default(),
         }],
         communities_to_extract: vec![Community {
             id: "c1".into(),
@@ -415,6 +419,7 @@ fn migration_apply_writes_new_sources_noops_empty_plan_and_reports_io_errors() {
         url: None,
         include_paths: vec![],
         exclude_paths: vec![],
+        scan: Default::default(),
     });
     let on_disk = std::fs::read_to_string(dir.path().join("notez.toml")).unwrap();
     let parsed = SourceConfig::parse(&on_disk).unwrap();

@@ -26,6 +26,7 @@ fn cross_space_scan_then_aggregate_by_object_id() {
         url: None,
         include_paths: vec![],
         exclude_paths: vec![],
+        scan: Default::default(),
     };
     let cfg_b = SourceConfig {
         id: "src_b".to_string(),
@@ -35,6 +36,7 @@ fn cross_space_scan_then_aggregate_by_object_id() {
         url: None,
         include_paths: vec![],
         exclude_paths: vec![],
+        scan: Default::default(),
     };
 
     let registry = SourceRegistry::with_builtins();
@@ -131,6 +133,7 @@ fn cross_space_each_scan_marks_itself_as_primary_and_exposes_primary_source() {
         url: None,
         include_paths: vec![],
         exclude_paths: vec![],
+        scan: Default::default(),
     };
     let cfg_b = SourceConfig {
         id: "src_b".to_string(),
@@ -140,6 +143,7 @@ fn cross_space_each_scan_marks_itself_as_primary_and_exposes_primary_source() {
         url: None,
         include_paths: vec![],
         exclude_paths: vec![],
+        scan: Default::default(),
     };
     let registry = SourceRegistry::with_builtins();
     let scanned_a = registry.build(cfg_a).unwrap().scan().unwrap();

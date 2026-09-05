@@ -37,8 +37,10 @@ fn space_config_with_stub_source(root: &Path) -> SpaceConfig {
             url: None,
             include_paths: vec![],
             exclude_paths: vec![],
+            scan: Default::default(),
         }],
         link_overrides: serde_json::Value::Null,
+        scan: Default::default(),
     }
 }
 

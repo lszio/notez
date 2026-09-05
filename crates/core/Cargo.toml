@@ -15,6 +15,7 @@ thiserror      = { workspace = true }
 ulid           = { workspace = true }
 sha2           = "0.10"
 toml           = "0.8"
+globset       = "0.4"
 pulldown-cmark = "0.10"
 lopdf          = "0"
 calamine       = "0"

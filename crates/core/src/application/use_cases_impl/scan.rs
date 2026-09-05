@@ -32,6 +32,15 @@ where
             });
         }
 
+        // The composition root binds the parsed `notez.toml`; the
+        // scan policy ([scan] section) must come from there —
+        // re-deriving a default config here would silently drop the
+        // user's include/exclude rules.
+        let scan_config = self
+            .source
+            .as_ref()
+            .map(|s| s.config.scan.clone())
+            .unwrap_or_default();
         let config = crate::source::SourceConfig {
             id: "native".to_string(),
             kind: crate::source::SourceKind::Native,
@@ -40,6 +49,7 @@ where
             url: None,
             include_paths: vec![],
             exclude_paths: vec![],
+            scan: scan_config,
         };
         let adapter = NativeSourceAdapter::new(config);
         // `NativeSourceAdapter` already wires the Org/Markdown parsers it
@@ -51,15 +61,6 @@ where
             kind: StorageErrorKind::InvalidState,
             message: e.to_string(),
         })?;
-        for parser in &self.format_parsers {
-            if parser.supports("text/org") || parser.supports("text/markdown") {
-                continue;
-            }
-            // Additional MIME support: not used by the built-in transports.
-            // Reserved for future extension.
-            let _ = parser;
-        }
-
         let scanned_files = scanned
             .resources
             .iter()
@@ -68,6 +69,7 @@ where
             .len();
         let scanned_resources = scanned.resources.len();
         let link_occurrences = scanned.link_occurrences.clone();
+        let ignored = scanned.ignored;
 
         // Phase 1: swap the source slice, journaling a Scan Change.
         {
@@ -137,6 +139,12 @@ where
             scanned_files,
             scanned_resources,
             scanned_relations: resolved_count,
+            ignored: ignored.total(),
+            ignored_hidden: ignored.hidden,
+            ignored_excluded: ignored.excluded,
+            ignored_not_included: ignored.not_included,
+            ignored_too_large: ignored.too_large,
+            ignored_symlink: ignored.symlink,
         })
     }
 
@@ -154,6 +162,11 @@ where
         let exclude_paths: Vec<std::path::PathBuf> =
             sources_cfg.sources.iter().map(|s| s.path.clone()).collect();
 
+        let scan_config = self
+            .source
+            .as_ref()
+            .map(|s| s.config.scan.clone())
+            .unwrap_or_default();
         let native_config = crate::source::SourceConfig {
             id: "native".to_string(),
             kind: crate::source::SourceKind::Native,
@@ -162,6 +175,7 @@ where
             url: None,
             include_paths: vec![],
             exclude_paths,
+            scan: scan_config,
         };
         let native_adapter = crate::source::NativeSourceAdapter::new(native_config);
         let native_scanned = native_adapter
@@ -220,6 +234,12 @@ where
             scanned_files: total_resources, // Note: not fully accurate, but historically used
             scanned_resources: total_resources,
             scanned_relations: resolved_count,
+            ignored: 0,
+            ignored_hidden: 0,
+            ignored_excluded: 0,
+            ignored_not_included: 0,
+            ignored_too_large: 0,
+            ignored_symlink: 0,
         })
     }
 }

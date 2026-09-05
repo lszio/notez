@@ -54,6 +54,11 @@ impl std::error::Error for ParserError {}
 /// Resolves where source data comes from and how it is mutated.
 pub trait SourceTransport: Send + Sync {
     fn fetch_raw(&self) -> Result<Vec<RawEntity>, TransportError>;
+    /// Rejection counts from the most recent `fetch_raw`. Transports
+    /// that do not filter (remote APIs) report the zero default.
+    fn ignored(&self) -> crate::source::policy::IgnoreCounts {
+        crate::source::policy::IgnoreCounts::default()
+    }
     fn mutate(&self, _locator: &str, _payload: &str) -> Result<(), TransportError> {
         Err(TransportError::Other("source transport mutation not supported".into()))
     }

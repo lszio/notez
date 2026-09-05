@@ -56,6 +56,12 @@ pub fn scan_report(r: &ScanReport) -> proto::ScanReport {
         scanned_files: r.scanned_files,
         scanned_resources: r.scanned_resources,
         scanned_relations: r.scanned_relations,
+        ignored: r.ignored,
+        ignored_hidden: r.ignored_hidden,
+        ignored_excluded: r.ignored_excluded,
+        ignored_not_included: r.ignored_not_included,
+        ignored_too_large: r.ignored_too_large,
+        ignored_symlink: r.ignored_symlink,
     }
 }
 pub fn resources(v: &[crate::domain::Resource]) -> Vec<proto::Resource> {

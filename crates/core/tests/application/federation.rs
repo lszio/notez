@@ -38,6 +38,7 @@ fn multi_source_federation_scanning() {
         read_only: true,
         include_paths: vec![],
         exclude_paths: vec![],
+        scan: Default::default(),
     };
     service.add_source(source_root, vault_config).unwrap();
 

@@ -54,6 +54,7 @@ fn writeback_resource_fails_when_source_is_not_registered() {
         workflow: Default::default(),
         sources: vec![],
         link_overrides: serde_json::Value::Null,
+        scan: Default::default(),
     };
     let ctx = notez_core::application::context::SourceContext::new(
         "test",

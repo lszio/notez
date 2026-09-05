@@ -110,6 +110,7 @@ fn build_service(root: &Path, db_path: &Path, journal: MemJournal) -> Engine<Sql
         workflow: Default::default(),
         sources: vec![],
         link_overrides: serde_json::Value::Null,
+        scan: Default::default(),
     };
     let ctx = notez_core::application::context::SourceContext::new("test", root.to_path_buf(), config);
     let mut service = Engine::with_source(store, ctx);

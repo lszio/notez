@@ -149,6 +149,7 @@ fn config(id: &str) -> SourceConfig {
         url: None,
         include_paths: vec![],
         exclude_paths: vec![],
+        scan: Default::default(),
     }
 }
 

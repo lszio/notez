@@ -21,6 +21,7 @@ fn make_facade(space: &std::path::Path) -> Engine<SqliteProjection> {
         workflow: Default::default(),
         sources: vec![],
         link_overrides: serde_json::Value::Null,
+        scan: Default::default(),
     };
     let ctx =
         notez_core::application::context::SourceContext::new("test", space.to_path_buf(), config);
@@ -66,6 +67,7 @@ fn scan_native_without_parsers_returns_error() {
         workflow: Default::default(),
         sources: vec![],
         link_overrides: serde_json::Value::Null,
+        scan: Default::default(),
     };
     let ctx =
         notez_core::application::context::SourceContext::new("test", space.to_path_buf(), config);
@@ -93,6 +95,7 @@ fn scan_federation_runs_without_crashing_on_empty_space() {
         workflow: Default::default(),
         sources: vec![],
         link_overrides: serde_json::Value::Null,
+        scan: Default::default(),
     };
     let ctx =
         notez_core::application::context::SourceContext::new("test", space.to_path_buf(), config);

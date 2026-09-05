@@ -124,6 +124,7 @@ pub fn select_source(
                     workflow: Default::default(),
                     sources: Vec::new(),
                     link_overrides: serde_json::Value::Null,
+                    scan: crate::config::model::ScanConfig::default(),
                 }
             };
             Ok(SelectedSource {
@@ -173,6 +174,7 @@ pub fn select_source(
                     workflow: Default::default(),
                     sources: Vec::new(),
                     link_overrides: serde_json::Value::Null,
+                    scan: crate::config::model::ScanConfig::default(),
                 }
             };
             let root_dir = space_toml.parent().unwrap().to_path_buf();

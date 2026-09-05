@@ -97,6 +97,8 @@ pub struct SourceConfig {
     pub source: SourceIdentity,
     #[serde(default)]
     pub workflow: WorkflowConfig,
+    #[serde(default)]
+    pub scan: ScanConfig,
     /// Sub-sources this `Source` aggregates (e.g. local `docs/` plus a
     /// remote Notion workspace). An empty list is allowed: the Source
     /// itself acts as a single "root" source.
@@ -151,6 +153,7 @@ impl SourceConfig {
                     },
                     workflow: WorkflowConfig::default(),
                     sources: Vec::new(),
+                    scan: ScanConfig::default(),
                     link_overrides: JsonValue::Null,
                 };
                 if cfg.source.name.is_empty() {
@@ -227,16 +230,91 @@ pub struct SourceInstanceConfig {
     pub include_paths: Vec<PathBuf>,
     #[serde(default)]
     pub exclude_paths: Vec<PathBuf>,
+    #[serde(default)]
+    pub scan: ScanConfig,
 }
 
 impl From<crate::source::SourceConfig> for SourceInstanceConfig {
     fn from(s: crate::source::SourceConfig) -> Self {
-        Self { id: s.id, kind: s.kind, path: s.path, read_only: s.read_only, url: s.url, include_paths: s.include_paths, exclude_paths: s.exclude_paths }
+        Self { id: s.id, kind: s.kind, path: s.path, read_only: s.read_only, url: s.url, include_paths: s.include_paths, exclude_paths: s.exclude_paths, scan: s.scan }
     }
 }
 
 impl SourceInstanceConfig {
     pub fn into_source_config(self) -> crate::source::SourceConfig {
-        crate::source::SourceConfig { id: self.id, kind: self.kind, path: self.path, read_only: self.read_only, url: self.url, include_paths: self.include_paths, exclude_paths: self.exclude_paths }
+        crate::source::SourceConfig { id: self.id, kind: self.kind, path: self.path, read_only: self.read_only, url: self.url, include_paths: self.include_paths, exclude_paths: self.exclude_paths, scan: self.scan }
     }
 }
+
+/// Source-level scan policy (schema v2 `[scan]` section).
+///
+/// One decision surface for "which files belong to this Source": the
+/// native scanner, the web files panel, and dynamic-block context
+/// building all consult the same
+/// [`crate::source::policy::SourcePolicy`] built from this config.
+/// Defaults exclude VCS/build/dependency directories and common
+/// source-code extensions so a notes vault living inside a
+/// repository does not swallow the repository.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ScanConfig {
+    /// Source-relative glob patterns a file must match to be a
+    /// document candidate.
+    #[serde(default = "default_scan_include")]
+    pub include: Vec<String>,
+    /// Source-relative glob patterns always skipped before reading.
+    #[serde(default = "default_scan_exclude")]
+    pub exclude: Vec<String>,
+    /// Follow symlinked files/directories. Off by default: symlink
+    /// loops must never wedge a scan.
+    #[serde(default)]
+    pub follow_symlinks: bool,
+    /// Files above this size are never read or indexed.
+    #[serde(default = "default_scan_max_file_size")]
+    pub max_file_size: u64,
+}
+
+impl Default for ScanConfig {
+    fn default() -> Self {
+        Self {
+            include: default_scan_include(),
+            exclude: default_scan_exclude(),
+            follow_symlinks: false,
+            max_file_size: default_scan_max_file_size(),
+        }
+    }
+}
+
+fn default_scan_include() -> Vec<String> {
+    vec![
+        "**/*.md".to_string(),
+        "**/*.markdown".to_string(),
+        "**/*.org".to_string(),
+    ]
+}
+
+fn default_scan_exclude() -> Vec<String> {
+    vec![
+        ".git/**".to_string(),
+        ".notez/**".to_string(),
+        "target/**".to_string(),
+        "node_modules/**".to_string(),
+        "vendor/**".to_string(),
+        "dist/**".to_string(),
+        "build/**".to_string(),
+        ".cache/**".to_string(),
+        ".tmp/**".to_string(),
+        "**/*.rs".to_string(),
+        "**/*.ts".to_string(),
+        "**/*.tsx".to_string(),
+        "**/*.js".to_string(),
+        "**/*.jsx".to_string(),
+        "**/notez.toml".to_string(),
+    ]
+}
+
+fn default_scan_max_file_size() -> u64 {
+    1024 * 1024
+}
+
+

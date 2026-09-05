@@ -341,6 +341,13 @@ pub struct ScanReport {
     pub scanned_files: usize,
     pub scanned_resources: usize,
     pub scanned_relations: usize,
+    /// Total files rejected by the source scan policy.
+    pub ignored: u32,
+    pub ignored_hidden: u32,
+    pub ignored_excluded: u32,
+    pub ignored_not_included: u32,
+    pub ignored_too_large: u32,
+    pub ignored_symlink: u32,
 }
 
 /// Result of a successful engine-level document update.

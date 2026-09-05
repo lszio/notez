@@ -74,6 +74,7 @@ impl SourceAdapter for GitSourceAdapter {
             resources,
             relations,
             link_occurrences,
+            ignored: Default::default(),
         })
     }
 }

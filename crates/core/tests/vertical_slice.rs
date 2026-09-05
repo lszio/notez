@@ -18,6 +18,7 @@ fn build_service(
         workflow: Default::default(),
         sources: vec![],
         link_overrides: serde_json::Value::Null,
+        scan: Default::default(),
     };
     let ctx =
         notez_core::application::context::SourceContext::new("test", root.to_path_buf(), config);

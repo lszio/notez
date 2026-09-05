@@ -38,7 +38,7 @@ impl FormatParser for PlainParser {
 }
 
 fn build_config() -> SourceConfig {
-    SourceConfig { id: "native".to_string(), kind: SourceKind::Native, path: PathBuf::from("/space"), read_only: false, url: None, include_paths: vec![], exclude_paths: vec![] }
+    SourceConfig { id: "native".to_string(), kind: SourceKind::Native, path: PathBuf::from("/space"), read_only: false, url: None, include_paths: vec![], exclude_paths: vec![], scan: Default::default() }
 }
 
 /// A projection that allows writes but tracks every call. Used to assert
@@ -267,6 +267,7 @@ fn composed_source_adapter_does_not_silently_succeed_without_write_capability() 
                 resources: vec![],
                 relations: vec![],
                 link_occurrences: vec![],
+                    ignored: Default::default(),
             })
         }
         fn capabilities(&self) -> SourceCapabilities {
@@ -310,7 +311,7 @@ fn composed_source_adapter_rejects_write_when_read_only() {
     // This test documents the *current* behaviour and asserts that the
     // adapter surfaces a SourceError when transport.mutate fails — it does
     // not paper over the failure.
-    let cfg = SourceConfig { id: "native".to_string(), kind: SourceKind::Native, path: PathBuf::from("/space"), read_only: true, url: None, include_paths: vec![], exclude_paths: vec![] };
+    let cfg = SourceConfig { id: "native".to_string(), kind: SourceKind::Native, path: PathBuf::from("/space"), read_only: true, url: None, include_paths: vec![], exclude_paths: vec![], scan: Default::default() };
     let transport =
         ComposedSourceAdapter::new(cfg, Box::new(FailingTransport), vec![Box::new(PlainParser)]);
     let err = transport

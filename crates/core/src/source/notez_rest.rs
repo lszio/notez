@@ -60,7 +60,7 @@ impl NotezRestSourceAdapter {
 impl SourceAdapter for NotezRestSourceAdapter {
     fn config(&self) -> &SourceConfig { &self.config }
     fn scan(&self) -> Result<ScannedSource, SourceError> {
-        Ok(ScannedSource { source_id: self.config.id.clone(), resources: self.list_resources()?, relations: vec![], link_occurrences: vec![] })
+        Ok(ScannedSource { source_id: self.config.id.clone(), resources: self.list_resources()?, relations: vec![], link_occurrences: vec![], ignored: Default::default() })
     }
     fn capabilities(&self) -> SourceCapabilities {
         self.discover_capabilities().unwrap_or(SourceCapabilities { can_read: false, can_write: false, can_import: false, can_watch: false })

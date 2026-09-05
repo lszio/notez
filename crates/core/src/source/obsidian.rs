@@ -65,6 +65,7 @@ impl SourceAdapter for ObsidianSourceAdapter {
             resources,
             relations,
             link_occurrences,
+            ignored: Default::default(),
         })
     }
 }

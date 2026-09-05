@@ -36,6 +36,7 @@ fn fixture() -> Fixture {
         workflow: Default::default(),
         sources: vec![],
         link_overrides: serde_json::Value::Null,
+        scan: Default::default(),
     };
     let context = notez_core::application::context::SourceContext::new(
         "test",

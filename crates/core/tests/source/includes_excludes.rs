@@ -39,6 +39,7 @@ fn include_paths_restrict_scan_to_listed_subtrees() {
         read_only: true,
         include_paths: vec![root.join("notes")],
         exclude_paths: vec![],
+        scan: Default::default(),
     };
     let scanned = NativeSourceAdapter::new(config).scan().unwrap();
 
