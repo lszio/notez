@@ -33,6 +33,7 @@ pub fn run_source(json: bool, service: &mut Service, sub: SourceSubcommand) {
                 read_only,
                 include_paths: include,
                 exclude_paths: exclude,
+                scan: notez_core::config::model::ScanConfig::default(),
             };
             match service.add_source(config) {
                 Ok(_) => {

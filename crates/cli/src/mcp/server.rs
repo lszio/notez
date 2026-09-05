@@ -579,6 +579,7 @@ impl NotezMcpServer {
             read_only: args.read_only.unwrap_or(false),
             include_paths,
             exclude_paths,
+            scan: notez_core::config::model::ScanConfig::default(),
         };
         self.with_service_mut(|svc| match svc.add_source(config) {
             Ok(_) => text_ok(json!({ "added": true })),

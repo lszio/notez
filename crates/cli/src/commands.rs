@@ -104,9 +104,87 @@ pub enum Commands {
         #[arg(long = "result-limit", alias = "limit", default_value_t = 256 * 1024)]
         result_limit: usize,
     },
-
     /// Watch the active space for filesystem changes.
     Watch(WatchArgs),
+
+    /// Serve the HTTP protocol API at the configured bind address. Auth
+    /// and policy come from `NOTEZ_API_*` env vars (`NOTEZ_API_TOKEN`
+    /// or `NOTEZ_API_OIDC_ISSUER + NOTEZ_API_OIDC_AUDIENCE`). The
+    /// default source comes from `--source` (or the global default).
+    Serve {
+        #[arg(long)]
+        bind: Option<String>,
+        #[arg(long)]
+        source: Option<String>,
+    },
+
+    /// Talk to a remote notez HTTP API server.
+    Remote {
+        #[arg(long, env = "NOTEZ_API_URL")]
+        url: String,
+        #[arg(long, env = "NOTEZ_API_TOKEN")]
+        token: Option<String>,
+        #[arg(long, requires = "client_id")]
+        token_url: Option<String>,
+        #[arg(long, requires = "client_secret")]
+        client_id: Option<String>,
+        #[arg(long)]
+        client_secret: Option<String>,
+        #[arg(long)]
+        source: Option<String>,
+        #[arg(long)]
+        timeout_ms: Option<u64>,
+        #[command(subcommand)]
+        command: RemoteCommands,
+    },
+}
+
+/// Sub-operations a remote notez server can perform. Each maps to one
+/// typed [`notez_protocol::Request`] variant and prints the
+/// corresponding [`notez_protocol::Response`] as JSON.
+#[derive(Subcommand, Debug, Clone)]
+pub enum RemoteCommands {
+    /// Send one raw protocol Request JSON. Useful when a higher-level
+    /// subcommand is not yet wired.
+    Raw { request_json: String },
+    /// List cards discoverable in the bound source(s).
+    ListCards {
+        #[arg(long)]
+        source: Option<String>,
+        #[arg(long, default_value_t = 32)]
+        limit: usize,
+    },
+    /// Read one card's definition + projection.
+    ReadCard {
+        #[arg(long)]
+        source: Option<String>,
+        #[arg(long)]
+        locator: String,
+        #[arg(long)]
+        card_id: String,
+    },
+    /// Execute one card live and return its current projection.
+    Card {
+        #[arg(long)]
+        source: Option<String>,
+        #[arg(long)]
+        locator: String,
+        #[arg(long)]
+        card_id: String,
+    },
+    /// List the dashboard projection (the cards the home page renders).
+    ListDashboard {
+        #[arg(long)]
+        source: Option<String>,
+    },
+    /// Persist a new dashboard layout.
+    UpdateDashboard {
+        /// Ordered card ids (visible + hidden) in display order.
+        ordered_card_ids: Vec<String>,
+        /// Card ids currently hidden from the dashboard.
+        #[arg(long)]
+        hidden_card_ids: Vec<String>,
+    },
 }
 #[derive(Args, Debug)]
 pub struct QueryArgs {

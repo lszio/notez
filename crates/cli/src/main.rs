@@ -81,6 +81,27 @@ fn main() {
     let source_root = handle.ctx.root.clone();
     let r_config = handle.ctx.config.clone();
     let selected = handle.selected;
+
+    // `notez serve` and `notez remote` bypass the local space wiring
+    // entirely (serve opens its own engine from the chosen source on
+    // demand; remote talks HTTP to an existing server). Run them
+    // before the engine-consuming match.
+    if let Commands::Serve { bind, source } = &cli.command {
+        let bind = bind.clone();
+        let source = source.clone();
+        run_serve(bind, source);
+        return;
+    }
+    let remote_args = match &cli.command {
+        Commands::Remote { url, token, token_url, client_id, client_secret, source, timeout_ms, command } => {
+            Some((url.clone(), token.clone(), token_url.clone(), client_id.clone(), client_secret.clone(), source.clone(), *timeout_ms, command.clone()))
+        }
+        _ => None,
+    };
+    if let Some((url, token, token_url, client_id, client_secret, source, timeout_ms, command)) = remote_args {
+        run_remote(url, token, token_url, client_id, client_secret, source, timeout_ms, command, cli.json);
+        return;
+    }
     let mut engine = handle.engine;
     match cli.command {
         Commands::Scan => handlers::scan::run_scan(cli.json, &mut engine),
@@ -153,5 +174,166 @@ fn main() {
             std::process::exit(1);
         }
         Commands::Watch(args) => handlers::watch::run_watch(args, &source_root),
+        // Reached only if the early-return transports above were skipped
+        // (currently impossible because Serve/Remote branch first). Kept
+        // here defensively so the inner match stays exhaustive.
+        Commands::Serve { .. } | Commands::Remote { .. } => {
+            eprintln!("serve/remote were consumed before this point");
+            std::process::exit(1);
+        }
+    }
+}
+
+fn run_serve(bind: Option<String>, source: Option<String>) {
+    let runtime = std::sync::Arc::new(
+        tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .unwrap_or_else(|e| {
+                eprintln!("cannot start tokio runtime: {e}");
+                std::process::exit(5);
+            }),
+    );
+    let result = runtime.block_on(async move {
+        let config = notez_api::ServerConfig::from_env(bind, source)
+            .map_err(|e| format!("server config: {e}"))?;
+        notez_api::serve(config).await.map_err(|e| format!("api server error: {e}"))
+    });
+    if let Err(e) = result {
+        eprintln!("{e}");
+        std::process::exit(5);
+    }
+}
+
+fn run_remote(
+    url: String,
+    token: Option<String>,
+    token_url: Option<String>,
+    client_id: Option<String>,
+    client_secret: Option<String>,
+    source: Option<String>,
+    timeout_ms: Option<u64>,
+    command: commands::RemoteCommands,
+    pretty: bool,
+) {
+    use commands::RemoteCommands;
+    let mut client = match notez_api::NotezClient::new(&url) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("invalid remote url: {e}");
+            std::process::exit(2);
+        }
+    };
+    client = match (token_url, client_id, client_secret) {
+        (Some(token_url), Some(client_id), Some(client_secret)) => {
+            client.with_client_credentials(token_url, client_id, client_secret, None)
+        }
+        (None, None, None) => match token {
+            Some(token) => client.with_token(token),
+            None => client,
+        },
+        _ => {
+            eprintln!(
+                "client-credentials flow requires --token-url, --client-id, --client-secret together"
+            );
+            std::process::exit(2);
+        }
+    };
+    if let Some(src) = source {
+        client = client.with_default_source(src);
+    }
+
+    let runtime = std::sync::Arc::new(
+        tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .unwrap_or_else(|e| {
+                eprintln!("cannot start tokio runtime: {e}");
+                std::process::exit(5);
+            }),
+    );
+    let result = runtime.block_on(async move {
+        let request: notez_protocol::Request = match command {
+            RemoteCommands::Raw { request_json } => {
+                serde_json::from_str(&request_json).map_err(|e| format!("request json: {e}"))?
+            }
+            RemoteCommands::ListCards { source, limit } => {
+                notez_protocol::Request::ListCards(
+                    notez_protocol::request::ListCardsRequest { source, limit: Some(limit) },
+                )
+            }
+            RemoteCommands::ReadCard { source, locator, card_id } => {
+                notez_protocol::Request::ReadCard(
+                    notez_protocol::request::ReadCardRequest {
+                        card_id,
+                        source: source.unwrap_or_default(),
+                        locator,
+                    },
+                )
+            }
+            RemoteCommands::Card { source, locator, card_id } => {
+                notez_protocol::Request::ExecuteCard(
+                    notez_protocol::request::ExecuteCardRequest {
+                        card_id,
+                        source: source.unwrap_or_default(),
+                        locator,
+                        timeout_ms,
+                    },
+                )
+            }
+            RemoteCommands::ListDashboard { source } => {
+                notez_protocol::Request::ListCards(
+                    notez_protocol::request::ListCardsRequest { source, limit: Some(32) },
+                )
+            }
+            RemoteCommands::UpdateDashboard { ordered_card_ids, hidden_card_ids } => {
+                notez_protocol::Request::UpdateDashboard(
+                    notez_protocol::request::UpdateDashboardRequest {
+                        ordered_card_ids,
+                        hidden_card_ids,
+                    },
+                )
+            }
+        };
+        let response = client.dispatch(&request).await;
+        Ok::<_, String>((request, response))
+    });
+    let (_req, response) = match result {
+        Ok(pair) => pair,
+        Err(e) => {
+            eprintln!("{e}");
+            std::process::exit(5);
+        }
+    };
+    match response {
+        Ok(value) => {
+            let text = if pretty {
+                serde_json::to_string_pretty(&value).unwrap_or_default()
+            } else {
+                serde_json::to_string(&value).unwrap_or_default()
+            };
+            println!("{text}");
+        }
+        Err(notez_api::ClientError::Protocol { status, error }) => {
+            let text = serde_json::to_string(&error).unwrap_or_default();
+            eprintln!("remote error (HTTP {status}): {text}");
+            std::process::exit(remote_exit_code(&error));
+        }
+        Err(e) => {
+            eprintln!("remote call failed: {e}");
+            std::process::exit(5);
+        }
+    }
+}
+
+fn remote_exit_code(error: &notez_protocol::Error) -> i32 {
+    use notez_protocol::Error as E;
+    match error {
+        E::NotFound { .. } => 3,
+        E::InvalidRequest { .. } => 2,
+        E::Unauthorized { .. } => 7,
+        E::StaleRevision { .. } => 9,
+        E::Conflict { .. } => 10,
+        _ => 5,
     }
 }
