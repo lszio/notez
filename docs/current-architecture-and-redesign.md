@@ -682,6 +682,146 @@ User event
 
 ---
 
+### 7.8 文档驱动的自定义卡片
+
+当前首页的 `WIDGET_IDS`、`web.toml` 和 `HomePage` 分支只能配置固定组件，不能表达用户自己的查询、参数、远程对象或输出格式。因此“卡片”不应继续作为 Web 组件集合扩展，而应成为一种文档声明和 View projection。
+
+#### 稳定模型
+
+```text
+CardDefinition
+├── id                  文档内稳定 ID
+├── title               展示标题
+├── placement           dashboard / note / query
+├── source_scope        当前 Source 或显式 SourceRef
+├── input_schema        参数名、类型、默认值、是否必填
+├── program             Janet 代码和代码 hash
+├── output_schema       json / html / object / list
+├── layout              order / size / visibility
+└── policy              required capability、cache、refresh
+
+CardExecution
+├── principal           OIDC subject / local principal
+├── source_revision     输入数据版本
+├── params              用户或页面参数
+├── objects             Engine 预取的结构化对象
+└── trace_id
+
+CardResult
+├── card_id
+├── state               ready / empty / denied / failed / stale
+├── output_type         json / sanitized_html / object / list
+├── value               typed JSON payload
+├── object_refs         可继续交给 Protocol 的远程或本地对象引用
+├── generated_at
+└── cache_key
+```
+
+卡片的事实来源应是 Source 中的 Markdown/Org 文档，首页只是选择并布局这些定义的投影。首页可以保留一个 dashboard 配置文件，但它只能保存卡片顺序、布局和可见性，不能保存查询逻辑或第二套 widget 类型。旧的固定卡片作为内置 `CardDefinition` 迁移，最终删除 `WIDGET_IDS` 分支。
+
+#### Janet code block wire contract
+
+Markdown 使用 fenced block，Org 使用 `src` block；语言名必须是 `janet`，属性位于 fence/header 中：
+
+````markdown
+```janet card="inbox" output="list" refresh="60s"
+{:input {:limit {:type "integer" :default 20}}
+ :run (fn [ctx]
+        {:type "list"
+         :items (notez/query ctx {:kind "document" :limit (:limit (:params ctx)))})}
+ :output {:type "list"}}
+```
+````
+
+实现上不依赖 Janet 返回任意宿主对象，而要求执行结果符合明确的 envelope：
+
+```janet
+{:type "json" :value ...}
+{:type "html" :value "<p>..."}
+{:type "object" :ref "notez://object/..."}
+{:type "list" :items [...]}
+```
+
+约束如下：
+
+1. `input_schema` 和 `output_schema` 在执行前校验；缺失字段、未知输出类型和超限结果直接产生结构化错误。
+2. `ctx` 只包含经过权限检查的 `params`、结构化 `objects`、Source 元数据和只读 Protocol 查询函数。Janet 不访问文件系统、网络、数据库、进程或 SourceWriter。
+3. `html` 必须经过 HTML sanitizer；默认推荐 `json`/`list`，不能把 Janet 字符串自动当作 HTML。
+4. `object` 只能引用已经由 Source Adapter/Engine 解析的对象；远程对象仍使用 `ResourceRef`/`ObjectIdentity`，不能在 Janet 中伪造身份。
+5. 执行缓存必须至少绑定 `card_id + code_hash + source_revision + params + principal/policy`。含权限数据的卡片不能共享未经 principal 隔离的缓存。
+6. 执行失败不会破坏正文渲染，`CardResult.state` 必须区分 `denied`、`stale`、`failed` 和 `empty`，供所有客户端统一呈现。
+
+这会把当前 `render_janet_blocks()` 的职责拆成三个端口：`BlockParser` 只解析声明，`CardExecutor` 只执行受限程序，`CardRenderer` 只渲染经过验证的 `CardResult`。正文预览和首页卡片共享前两个端口，但使用不同的布局 projection。
+
+### 7.9 Source 级忽略与文件事实边界
+
+当前 native scanner 只按 `.md`/`.org` 过滤，并在部分路径上跳过隐藏目录；这不足以处理源码仓库、构建产物、依赖目录和用户明确不希望进入 Notez 的文件。忽略规则必须属于 Source policy，而不是散落在 scanner、tree、preview 和 UI 中。
+
+建议的 v2 配置：
+
+```toml
+[scan]
+include = ["**/*.md", "**/*.markdown", "**/*.org"]
+exclude = [
+  ".git/**",
+  ".notez/**",
+  "target/**",
+  "node_modules/**",
+  "vendor/**",
+  "dist/**",
+  "build/**",
+  "**/*.rs",
+  "**/*.ts",
+  "**/*.tsx",
+  "**/*.js",
+]
+follow_symlinks = false
+max_file_size = 1048576
+```
+
+规则语义：
+
+- `include` 决定哪些文件有资格成为可索引文档；
+- `exclude` 在 include 之后、读取文件之前应用，使用 source-relative glob；
+- `.notez`、`.git`、隐藏路径、符号链接循环和超出大小限制的文件默认拒绝；
+- include/exclude 只影响该 Source，不影响其它 Source，也不改变用户原始文件；
+- 文件浏览、搜索候选、主页 index 候选、附件预览和 Janet 上下文必须调用同一个 `SourcePolicy::allows(locator, metadata)`；
+- 明确的 include 优先级高于默认 exclude，但不得绕过安全目录、符号链接和大小限制；
+- 每次扫描报告忽略原因计数，方便用户判断“文件没有出现”是规则结果还是解析失败。
+
+配置模型应扩展 `SourceConfig`，并由 composition root 传入 `Engine`/`NativeSourceAdapter`。不能继续在 `scan_native()` 中重新构造一个丢失 `include_paths`/`exclude_paths` 的临时配置；否则配置存在但不会影响扫描。未来 Source Adapter 都实现同一个 policy 端口，远程 Source 则把远程能力声明为 policy/capability，不伪装成本地文件。
+
+### 7.10 远程对象、API 与中间件边界
+
+远程 Notez server 是一个 Protocol endpoint，不是 Web 页面接口。调用链固定为：
+
+```text
+HTTP request
+  -> transport middleware
+  -> principal + trace + source policy
+  -> deserialize Request
+  -> authorization by operation/capability
+  -> Engine / Dispatcher
+  -> typed Response or typed Error
+```
+
+中间件顺序建议固定为：request-id/access log、认证、授权、Source policy、限流/超时、dispatcher。Authentik 只负责 OIDC 身份认证和 claims；Notez 自己根据 `sub`、group/scope、Source capability 和操作类型做授权。不能把“JWT 有效”直接等同于“可以读写所有 Source”。
+
+远程对象只通过 `ResourceRef`、`ObjectIdentity` 和 typed `Response` 穿越边界。Card/Janet 可以请求远程对象，但必须由 Engine 先完成 Source Adapter、认证和授权；Janet 永远不能直接向远程 URL 发请求。远程对象不可用时返回 `Unavailable`/`stale`，不能伪造空列表掩盖上游故障。
+
+### 7.11 迁移验收
+
+自定义卡片完成的判断不是“页面能显示一张卡”，而是以下性质同时成立：
+
+1. 同一个 `CardDefinition` 可由首页、笔记正文和远程客户端请求；
+2. CLI/Web/MCP/HTTP 对同一 Card/Query 产生相同的 typed `CardResult`；
+3. 卡片输入、输出、权限、缓存和失败状态可被 `/schema` 与 Inspector 查询；
+4. 修改 Source ignore policy 后，扫描、搜索、文件树和 Janet 输入的结果一致；
+5. 删除或移动文档后，卡片显示 `stale`/`empty`，而不是旧缓存或伪造结果；
+6. 未认证、无 Source capability、危险 Janet API 和未 sanitizer 的 HTML 都在执行前被拒绝。
+
+---
+
 ## 8. 迁移顺序
 
 ### 阶段 A：冻结事实与协议
