@@ -694,6 +694,64 @@
     .widget-body { padding: 0.7rem 0.95rem 0.9rem; }
     .widget-body-graph { padding: 0.4rem; }
 
+    .widget-notez-cards .widget-sub {
+      color: var(--fg-2);
+      font-size: 0.74rem;
+      margin-left: 0.5rem;
+    }
+    .notez-card-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 0.6rem;
+    }
+    .notez-card {
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      background: var(--surface-2);
+      padding: 0.55rem 0.7rem;
+      display: flex;
+      flex-direction: column;
+      gap: 0.35rem;
+      min-width: 0;
+    }
+    .notez-card--failed { border-color: var(--error, #b00); }
+    .notez-card--ready { border-color: var(--accent); }
+    .notez-card-head {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 0.4rem;
+    }
+    .notez-card-title { margin: 0; font-size: 0.95rem; }
+    .notez-card-source {
+      color: var(--fg-2);
+      font-size: 0.7rem;
+      font-family: var(--mono);
+      max-width: 60%;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .notez-card-body {
+      font-size: 0.83rem;
+      color: var(--fg-1);
+      min-width: 0;
+    }
+    .notez-card-body pre {
+      margin: 0;
+      white-space: pre-wrap;
+      word-break: break-word;
+      font-family: var(--mono);
+      font-size: 0.78rem;
+    }
+    .notez-card-list {
+      margin: 0;
+      padding-left: 1.1rem;
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+
     .recent-list { display: grid; gap: 2px; }
     .recent-row {
       display: flex;

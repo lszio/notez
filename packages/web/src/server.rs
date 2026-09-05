@@ -1254,6 +1254,181 @@ pub async fn get_home_widgets() -> Result<Vec<String>, ServerFnError> {
     Ok(crate::ui_config::load_web_ui_config().visible_home_widgets())
 }
 
+/// One projected notez card on the dashboard. Pure data; renderers
+/// consume this from every surface (Web, CLI, future remote client).
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct NotezCardView {
+    pub id: String,
+    pub title: String,
+    pub state: String,
+    /// `json` | `list` | `object`
+    pub output_type: String,
+    pub locator: String,
+    pub ordinal: usize,
+    /// JSON body for `output_type = json`; ignored otherwise.
+    pub value: Option<serde_json::Value>,
+    /// List body for `output_type = list`; ignored otherwise.
+    pub items: Vec<serde_json::Value>,
+    /// Reference for `output_type = object`; ignored otherwise.
+    pub object_ref: Option<String>,
+    /// Failure message for `state = failed`; ignored otherwise.
+    pub error: Option<String>,
+    pub error_kind: Option<String>,
+}
+
+/// One disk-scanned notez block: ready to project or filter.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct NotezDefinitionView {
+    pub id: String,
+    pub title: String,
+    pub language: String,
+    pub format: String,
+    pub declared_output: Option<String>,
+    pub locator: String,
+    pub ordinal: usize,
+}
+
+impl NotezCardView {
+    fn ready(block: &notez_core::document::NotezBlock, output: &notez_core::document::CardOutput, locator: String) -> Self {
+        let (output_type, value, items, object_ref) = match output {
+            notez_core::document::CardOutput::Json(value) => ("json".to_string(), Some(value.clone()), Vec::new(), None),
+            notez_core::document::CardOutput::List(items) => ("list".to_string(), None, items.clone(), None),
+            notez_core::document::CardOutput::Object { reference } => ("object".to_string(), None, Vec::new(), Some(reference.clone())),
+        };
+        Self {
+            id: block.id.clone(),
+            title: block.attrs.get("title").cloned().unwrap_or_else(|| block.id.clone()),
+            state: "ready".to_string(),
+            output_type,
+            locator,
+            ordinal: block.ordinal,
+            value,
+            items,
+            object_ref,
+            error: None,
+            error_kind: None,
+        }
+    }
+
+    fn failed(block: &notez_core::document::NotezBlock, error: &crate::janet::JanetScriptError, locator: String) -> Self {
+        Self {
+            id: block.id.clone(),
+            title: block.attrs.get("title").cloned().unwrap_or_else(|| block.id.clone()),
+            state: "failed".to_string(),
+            output_type: String::new(),
+            locator,
+            ordinal: block.ordinal,
+            value: None,
+            items: Vec::new(),
+            object_ref: None,
+            error: Some(error.to_string()),
+            error_kind: Some(error.kind().to_string()),
+        }
+    }
+}
+
+/// Project the primary space's notez cards. Bounded scan: at most
+/// 50 candidate files and at most 8 executed cards per dashboard
+/// render, so a misconfigured vault cannot wedge the home page.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn collect_dashboard_cards(root: &Path) -> Vec<NotezCardView> {
+    use std::collections::BTreeMap;
+    const MAX_CARDS: usize = 8;
+    let policy = notez_core::source::policy::SourcePolicy::load_for_root(root);
+    let mut files: Vec<std::path::PathBuf> = Vec::new();
+    walk_for_cards(root, root, &policy, &mut files);
+    files.truncate(50);
+    let mut by_id: BTreeMap<String, NotezCardView> = BTreeMap::new();
+    for path in files {
+        let text = match std::fs::read_to_string(&path) {
+            Ok(t) => t,
+            Err(_) => continue,
+        };
+        let locator = path
+            .strip_prefix(root)
+            .map(|r| r.to_string_lossy().replace('\\', "/"))
+            .unwrap_or_else(|_| path.to_string_lossy().into_owned());
+        let blocks = match path.extension().and_then(|e| e.to_str()) {
+            Some("org") => notez_core::document::parse_org_notez_blocks(&text),
+            _ => notez_core::document::parse_markdown_notez_blocks(&text),
+        };
+        for block in blocks {
+            // First card wins: same id from a second file becomes a
+            // visible duplicate in the dashboard layout and would also
+            // collide on cache keys.
+            if by_id.contains_key(&block.id) {
+                continue;
+            }
+            if by_id.len() >= MAX_CARDS {
+                return by_id.into_values().collect();
+            }
+            let view = match crate::janet::execute_card(&block) {
+                Ok(output) => NotezCardView::ready(&block, &output, locator.clone()),
+                Err(error) => NotezCardView::failed(&block, &error, locator.clone()),
+            };
+            by_id.insert(block.id.clone(), view);
+        }
+    }
+    by_id.into_values().collect()
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn walk_for_cards(
+    root: &Path,
+    dir: &Path,
+    policy: &notez_core::source::policy::SourcePolicy,
+    out: &mut Vec<std::path::PathBuf>,
+) {
+    let entries = match std::fs::read_dir(dir) {
+        Ok(e) => e,
+        Err(_) => return,
+    };
+    let mut candidates: Vec<std::path::PathBuf> = Vec::new();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let rel = path.strip_prefix(root).unwrap_or(&path).to_path_buf();
+        let file_type = match entry.file_type() {
+            Ok(t) => t,
+            Err(_) => continue,
+        };
+        let is_symlink = file_type.is_symlink()
+            || std::fs::symlink_metadata(&path).map(|m| m.file_type().is_symlink()).unwrap_or(false);
+        if file_type.is_dir() {
+            if policy.hides_dir(&rel, is_symlink) {
+                continue;
+            }
+            walk_for_cards(root, &path, policy, out);
+            continue;
+        }
+        if !file_type.is_file() {
+            continue;
+        }
+        let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+        if matches!(ext, "md" | "markdown" | "org") {
+            let size = entry.metadata().map(|m| m.len()).unwrap_or(0);
+            if let notez_core::source::policy::Decision::Allow = policy.decide(&rel, is_symlink, size) {
+                candidates.push(path);
+            }
+        }
+    }
+    out.extend(candidates);
+}
+
+/// Dashboard server function: project notez cards for the first
+/// registered source's home.
+#[cfg(not(target_arch = "wasm32"))]
+#[server]
+pub async fn list_dashboard_cards() -> Result<Vec<NotezCardView>, ServerFnError> {
+    let spaces = list_registered_spaces().await.unwrap_or_default();
+    let Some(primary) = spaces.into_iter().next() else {
+        return Ok(Vec::new());
+    };
+    let root = std::path::PathBuf::from(&primary.path);
+    Ok(collect_dashboard_cards(&root))
+}
+
+
+
 // ---- tests -----------------------------------------------------------------
 
 #[cfg(test)]

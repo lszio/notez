@@ -71,10 +71,11 @@ pub fn render_body(row: &ResourceRow, source_root: &Path) -> String {
     let mut extra = row.properties.clone();
     if !extra.contains_key("body") && matches!(ext.as_str(), "md" | "markdown" | "org") {
         if let Ok(text) = std::str::from_utf8(&bytes) {
-            // Evaluate in-document `janet` fenced blocks before the
-            // previewer renders, so queries/renderers become part of
-            // the document body (docs/refactoring-v1.org §7).
-            extra.insert("body".to_string(), crate::janet::render_janet_blocks(text));
+            // Dynamic blocks (```notez cards + legacy ```janet) are
+            // evaluated before the previewer renders, so queries and
+            // renderers become part of the document body
+            // (docs/refactoring-v1.org §7, architecture doc §7.8).
+            extra.insert("body".to_string(), crate::janet::render_dynamic_blocks(text));
         }
     }
     render_dispatch(

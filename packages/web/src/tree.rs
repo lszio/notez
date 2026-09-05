@@ -180,7 +180,11 @@ where
 pub fn build_filesystem_listing(source_root: &Path) -> Vec<SourceFileRow> {
     const MAX_FILES: usize = 2000;
     let mut out: Vec<SourceFileRow> = Vec::new();
-    walk_dir(source_root, source_root, &mut out);
+    // Same policy the scanner uses: the files panel, search candidates
+    // and dynamic-block contexts must agree with the index on which
+    // files belong to the Source.
+    let policy = notez_core::source::policy::SourcePolicy::load_for_root(source_root);
+    walk_dir(source_root, source_root, &policy, &mut out);
     // Sort by mtime desc when available; fall back to alphabetical
     // when the filesystem doesn't report timestamps. The UI panel
     // is most useful as a "what changed" view.
@@ -195,7 +199,7 @@ pub fn build_filesystem_listing(source_root: &Path) -> Vec<SourceFileRow> {
     out
 }
 
-fn walk_dir(root: &Path, dir: &Path, out: &mut Vec<SourceFileRow>) {
+fn walk_dir(root: &Path, dir: &Path, policy: &notez_core::source::policy::SourcePolicy, out: &mut Vec<SourceFileRow>) {
     let entries = match std::fs::read_dir(dir) {
         Ok(e) => e,
         Err(_) => return,
@@ -203,31 +207,38 @@ fn walk_dir(root: &Path, dir: &Path, out: &mut Vec<SourceFileRow>) {
     for entry in entries.flatten() {
         let name = entry.file_name();
         let name_str = name.to_string_lossy();
-        if name_str.starts_with('.') {
-            continue;
-        }
         let path = entry.path();
         let file_type = match entry.file_type() {
             Ok(t) => t,
             Err(_) => continue,
         };
+        let rel = match path.strip_prefix(root) {
+            Ok(r) => r.to_path_buf(),
+            Err(_) => continue,
+        };
+        let is_symlink = file_type.is_symlink()
+            || std::fs::symlink_metadata(&path).map(|m| m.file_type().is_symlink()).unwrap_or(false);
         if file_type.is_dir() {
-            walk_dir(root, &path, out);
+            if policy.hides_dir(&rel, is_symlink) {
+                continue;
+            }
+            walk_dir(root, &path, policy, out);
             continue;
         }
         if !file_type.is_file() {
             continue;
         }
-        let rel = match path.strip_prefix(root) {
-            Ok(r) => r.to_string_lossy().replace('\\', "/"),
-            Err(_) => continue,
-        };
+        let size = entry.metadata().map(|m| m.len()).unwrap_or(0);
+        if let notez_core::source::policy::Decision::Ignore(_) =
+            policy.decide(&rel, is_symlink, size)
+        {
+            continue;
+        }
         let ext = path
             .extension()
             .and_then(|e| e.to_str())
             .unwrap_or("")
             .to_ascii_lowercase();
-        let size = entry.metadata().map(|m| m.len()).unwrap_or(0);
         let mtime_ms = entry
             .metadata()
             .and_then(|m| m.modified())
@@ -239,7 +250,7 @@ fn walk_dir(root: &Path, dir: &Path, out: &mut Vec<SourceFileRow>) {
             ref_str: String::new(),
             kind: "attachment".to_string(),
             title: name_str.into_owned(),
-            display_path: rel,
+            display_path: rel.to_string_lossy().replace('\\', "/"),
             ext,
             size,
             mtime_ms,
@@ -247,6 +258,7 @@ fn walk_dir(root: &Path, dir: &Path, out: &mut Vec<SourceFileRow>) {
     }
 }
 // ---- pure projections from Resource slices ----
+
 
 
 /// Same as `build_tree_from` but also adds the loose files on

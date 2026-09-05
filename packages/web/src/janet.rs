@@ -397,9 +397,124 @@ const FORBIDDEN_EXACT: &[&str] = &[
 #[cfg(not(target_arch = "wasm32"))]
 const FORBIDDEN_PREFIXES: &[&str] =
     &["os/", "io/", "file/", "net/", "ffi", "ev/", "debug/", "module/", "thread/", "bundle/"];
-
 #[cfg(not(target_arch = "wasm32"))]
 pub use imp::{eval_janet_with_context, JanetQueryContext};
+
+// ---- notez card executor / renderer ----------------------------------------
+
+/// Execute one notez card block: run the program in the sandboxed
+/// Janet VM, then validate the result against the output envelope.
+/// The executor never renders; the renderer never executes.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn execute_card(
+    block: &notez_core::document::NotezBlock,
+) -> Result<notez_core::document::CardOutput, JanetScriptError> {
+    let budget = std::time::Duration::from_millis(
+        block
+            .declared_timeout_ms()
+            .unwrap_or(EVAL_TIMEOUT_MS)
+            .min(EVAL_TIMEOUT_MS),
+    );
+    let value = eval_janet_with_context(
+        &block.program,
+        budget,
+        None,
+        MAX_RESULT_BYTES,
+    )?;
+    notez_core::document::CardOutput::from_value(&value)
+        .map_err(|e| JanetScriptError::Runtime(e.to_string()))
+}
+
+/// One executed card: the block plus its outcome. Rendering turns
+/// this into markup; failures render as localized error cards and
+/// never fail the surrounding page.
+#[cfg(not(target_arch = "wasm32"))]
+pub struct ExecutedCard {
+    pub block: notez_core::document::NotezBlock,
+    pub outcome: Result<notez_core::document::CardOutput, JanetScriptError>,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn card_title(block: &notez_core::document::NotezBlock) -> String {
+    html_escape::encode_text(block.attrs.get("title").unwrap_or(&block.id)).into_owned()
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn json_compact(value: &serde_json::Value) -> String {
+    html_escape::encode_text(&value.to_string()).into_owned()
+}
+
+/// Render an executed card as a self-contained `<section>`.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn render_card_html(card: &ExecutedCard) -> String {
+    let title = card_title(&card.block);
+    match &card.outcome {
+        Ok(notez_core::document::CardOutput::Json(value)) => format!(
+            "<section class=\"notez-card\" data-card-id=\"{}\" data-state=\"ready\" data-output=\"json\"><h3 class=\"notez-card-title\">{}</h3><pre class=\"notez-card-body\">{}</pre></section>",
+            html_escape::encode_text(&card.block.id),
+            title,
+            json_compact(value)
+        ),
+        Ok(notez_core::document::CardOutput::List(items)) => {
+            let rows = items
+                .iter()
+                .map(|item| format!("<li>{}</li>", json_compact(item)))
+                .collect::<Vec<_>>()
+                .join("");
+            format!(
+                "<section class=\"notez-card\" data-card-id=\"{}\" data-state=\"ready\" data-output=\"list\"><h3 class=\"notez-card-title\">{}</h3><ul class=\"notez-card-list\">{}</ul></section>",
+                html_escape::encode_text(&card.block.id),
+                title,
+                rows
+            )
+        }
+        Ok(notez_core::document::CardOutput::Object { reference }) => format!(
+            "<section class=\"notez-card\" data-card-id=\"{}\" data-state=\"ready\" data-output=\"object\"><h3 class=\"notez-card-title\">{}</h3><code class=\"notez-card-ref\">{}</code></section>",
+            html_escape::encode_text(&card.block.id),
+            title,
+            html_escape::encode_text(reference)
+        ),
+        Err(err) => format!(
+            "<section class=\"notez-card\" data-card-id=\"{}\" data-state=\"failed\"><h3 class=\"notez-card-title\">{}</h3><pre class=\"notez-card-error\" data-kind=\"{}\">{}</pre></section>",
+            html_escape::encode_text(&card.block.id),
+            title,
+            err.kind(),
+            html_escape::encode_text(&err.to_string())
+        ),
+    }
+}
+
+/// Render a Markdown body containing both notez card blocks and
+/// legacy `janet` fences.
+///
+/// Two passes, deliberately:
+/// 1. notez blocks (parsed by the shared core parser, executed by
+///    [`execute_card`], rendered by [`render_card_html`]) are
+///    replaced by their card markup;
+/// 2. the remaining plain `janet` fences keep the legacy inline
+///    evaluation behavior.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn render_dynamic_blocks(text: &str) -> String {
+    let blocks = notez_core::document::parse_markdown_notez_blocks(text);
+    if blocks.is_empty() {
+        return render_janet_blocks(text);
+    }
+    let mut out = text.to_string();
+    // Replace from the end so earlier spans stay valid.
+    for block in blocks.iter().rev() {
+        let outcome = execute_card(block);
+        let card = ExecutedCard { block: block.clone(), outcome };
+        let (start, end) = block.span;
+        out.replace_range(start..end, &render_card_html(&card));
+    }
+    render_janet_blocks(&out)
+}
+
+#[cfg(target_arch = "wasm32")]
+pub fn render_dynamic_blocks(text: &str) -> String {
+    render_janet_blocks(text)
+}
+
 /// Evaluate `janet` fenced code blocks in a document body and replace
 /// each with its JSON result (or a structured local error widget) as a
 /// `<pre>`. This gives documents an in-body dynamic block: ```` ```janet

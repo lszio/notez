@@ -82,6 +82,82 @@ pub fn HomePage() -> Element {
                     }
                 }
             }
+            NotezCardsSection { spaces: spaces.clone() }
+        }
+    }
+}
+
+/// Document-driven cards: project every `notez` card defined in the
+/// primary space's files, executed through the same executor the
+/// body renderer uses. Bounded and source-policy-filtered upstream.
+#[component]
+fn NotezCardsSection(spaces: Vec<RegisteredSpaceDto>) -> Element {
+    let cards_resource = use_server_future(|| async {
+        crate::server::list_dashboard_cards().await.unwrap_or_default()
+    })?;
+    let cards: Vec<crate::server::NotezCardView> = cards_resource.cloned().unwrap_or_default();
+    let primary = primary_space(&spaces);
+    if cards.is_empty() {
+        return rsx! {
+            section { class: "widget widget-notez-cards",
+                div { class: "widget-head",
+                    h2 { class: "widget-title", "Cards" }
+                }
+                div { class: "widget-body",
+                    if primary.is_some() {
+                        p { class: "empty-hint",
+                            "No `notez` cards in the primary space yet. Add one as a fenced Markdown block: "
+                        }
+                        pre { class: "card-hint", "`notez kind=card id=inbox output=list`\\n(notez/query ctx ...) `\"" }
+                    } else {
+                        p { class: "empty-hint", "Register a source to enable notez cards." }
+                    }
+                }
+            }
+        };
+    }
+    rsx! {
+        section { class: "widget widget-notez-cards",
+            div { class: "widget-head",
+                h2 { class: "widget-title", "Cards" }
+                span { class: "widget-sub", "{cards.len()} from this source" }
+            }
+            div { class: "notez-card-grid",
+                for card in cards.iter() {
+                    NotezCardView { card: card.clone() }
+                }
+            }
+        }
+    }
+}
+
+#[component]
+fn NotezCardView(card: crate::server::NotezCardView) -> Element {
+    let state_class = format!("notez-card notez-card--{}", card.state);
+    let kind_class = format!("notez-card-error--{}", card.error_kind.clone().unwrap_or_default());
+    let tip = format!("card-id={}; state={}; output={}", card.id, card.state, card.output_type);
+    rsx! {
+        article { class: "{state_class}", aria_label: "{tip}",
+            header { class: "notez-card-head",
+                h3 { class: "notez-card-title", "{card.title}" }
+                small { class: "notez-card-source", "{card.locator}" }
+            }
+            div { class: "notez-card-body",
+                if card.state == "failed" {
+                    pre { class: "{kind_class}",
+                        "{card.error.clone().unwrap_or_default()}" }
+                } else if card.output_type == "json" {
+                    pre { class: "notez-card-json", "{card.value.clone().map(|v|v.to_string()).unwrap_or_default()}" }
+                } else if card.output_type == "list" {
+                    ul { class: "notez-card-list",
+                        for item in card.items.iter() {
+                            li { "{item.to_string()}" }
+                        }
+                    }
+                } else if card.output_type == "object" {
+                    code { class: "notez-card-ref", "{card.object_ref.clone().unwrap_or_default()}" }
+                }
+            }
         }
     }
 }
