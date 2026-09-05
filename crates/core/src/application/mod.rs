@@ -23,6 +23,12 @@ pub mod projector;
 pub use community_app::SpaceCommunitiesConfig;
 pub use federation::SourceInstancesCache;
 pub mod service;
+
+pub mod card_executor;
+pub use card_executor::{
+    CardCache, CardExecutionContext, CardExecutionError, CardExecutionService, CardExecutor,
+    CardProjection, CardState,
+};
 #[cfg(not(target_arch = "wasm32"))]
 pub mod janet;
 #[cfg(not(target_arch = "wasm32"))]

@@ -360,7 +360,6 @@ pub struct DocumentUpdateReport {
     /// Revision of the freshly rescanned row (content hash).
     pub revision: String,
 }
-
 pub struct Engine<S: ProjectionStore> {
     pub(crate) store: S,
     pub(crate) rule_engine: crate::domain::RuleEngine,
@@ -368,6 +367,10 @@ pub struct Engine<S: ProjectionStore> {
     pub(crate) source: Option<SourceContext>,
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) janet_executor: Option<Box<dyn JanetExecutor>>,
+    /// Card execution service: registry of language executors plus a
+    /// memo cache. Default-constructed with the built-in Janet
+    /// executor wired up so surfaces never need to bootstrap one.
+    pub(crate) card_service: super::card_executor::CardExecutionService,
     pub(crate) capability_catalog: crate::capability::CapabilityCatalog,
     pub(crate) source_registry: crate::source::SourceRegistry,
     pub(crate) journal: Box<dyn crate::domain::journal::EventJournal>,
@@ -411,6 +414,8 @@ where
             source: None,
             #[cfg(not(target_arch = "wasm32"))]
             janet_executor: None,
+            card_service: super::card_executor::CardExecutionService::new(super::card_executor::CardCache::default())
+                .with_executor(std::sync::Arc::new(super::janet::JanetCardExecutor) as std::sync::Arc<dyn super::card_executor::CardExecutor>),
             capability_catalog: crate::capability::CapabilityCatalog::with_builtins(),
             source_registry: crate::source::SourceRegistry::with_builtins(),
             journal: Box::new(crate::domain::journal::NullJournal::default()),
@@ -421,18 +426,38 @@ where
     /// Construct an `Engine` bound to an explicit `SourceContext`.
     pub fn with_source(store: S, source: SourceContext) -> Self {
         Self {
+            source: Some(source),
             store,
             rule_engine: crate::domain::RuleEngine::default_rules(),
             format_parsers: Vec::new(),
-            source: Some(source),
-            #[cfg(not(target_arch = "wasm32"))]
             janet_executor: None,
+            card_service: super::card_executor::CardExecutionService::new(super::card_executor::CardCache::default())
+                .with_executor(std::sync::Arc::new(super::janet::JanetCardExecutor) as std::sync::Arc<dyn super::card_executor::CardExecutor>),
             capability_catalog: crate::capability::CapabilityCatalog::with_builtins(),
             source_registry: crate::source::SourceRegistry::with_builtins(),
             journal: Box::new(crate::domain::journal::NullJournal::default()),
             audit: Box::new(crate::domain::audit::NullAuditLog::default()),
             clock: Box::new(crate::application::ports::SystemClock),
         }
+    }
+
+    /// Borrow the card execution service for callers that need to
+    /// project documents into typed [`crate::application::card_executor::CardProjection`]s.
+    pub fn card_service(&self) -> &super::card_executor::CardExecutionService {
+        &self.card_service
+    }
+
+    /// Attach an additional [`super::card_executor::CardExecutor`]
+    /// for a non-Janet language (e.g. SQL).
+    pub fn attach_card_executor(
+        &mut self,
+        executor: std::sync::Arc<dyn super::card_executor::CardExecutor>,
+    ) {
+        self.card_service
+            .executors
+            .lock()
+            .expect("card executor registry lock")
+            .insert(executor.language().to_string(), executor);
     }
     #[cfg(not(target_arch = "wasm32"))]
     pub fn attach_janet_executor(&mut self, executor: impl JanetExecutor + 'static) {
@@ -445,12 +470,13 @@ where
     /// registry or one with custom factories pre-registered.
     pub fn with_registry(store: S, registry: crate::source::SourceRegistry) -> Self {
         Self {
+            source: None,
             store,
             rule_engine: crate::domain::RuleEngine::default_rules(),
             format_parsers: Vec::new(),
-            source: None,
-            #[cfg(not(target_arch = "wasm32"))]
             janet_executor: None,
+            card_service: super::card_executor::CardExecutionService::new(super::card_executor::CardCache::default())
+                .with_executor(std::sync::Arc::new(super::janet::JanetCardExecutor) as std::sync::Arc<dyn super::card_executor::CardExecutor>),
             capability_catalog: crate::capability::CapabilityCatalog::with_builtins(),
             source_registry: registry,
             journal: Box::new(crate::domain::journal::NullJournal::default()),

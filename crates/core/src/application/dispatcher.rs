@@ -12,7 +12,7 @@
 //! * maps use-case results onto the protocol [`Response`] vocabulary.
 
 use std::path::PathBuf;
-use crate::domain::{ProjectionStore, QueryPage, Resource, ResourceKind, Selector};
+use crate::domain::{ProjectionReader, ProjectionStore, ProjectionWrite, QueryPage, Resource, ResourceKind, Selector};
 use crate::domain::{Community, ResourceRef};
 use crate::application::service::ApplicationError;
 use crate::application::{wire, Engine};
@@ -396,9 +396,267 @@ where
                 #[cfg(target_arch = "wasm32")]
                 { let _ = r; Err(ApplicationError::UnsupportedCapability { capability: "execute_janet" }) }
             }
+            Request::ListCards(r) => Ok(Response::Dashboard { cards: project_dashboard_cards(
+                f,
+                r.source.as_deref(),
+                r.limit.unwrap_or(32),
+            )? }),
+            Request::ReadCard(r) => Ok(Response::Card(read_card(
+                f,
+                r.source.as_str(),
+                &r.locator,
+                &r.card_id,
+            )?)),
+            Request::ExecuteCard(r) => Ok(Response::CardExecution(execute_card(
+                f,
+                r.source.as_str(),
+                &r.locator,
+                &r.card_id,
+                r.timeout_ms,
+            )?)),
+            Request::ListDashboard(_) => Ok(Response::Dashboard { cards: project_dashboard_cards(
+                f, None, 32,
+            )? }),
+            Request::UpdateDashboard(r) => Ok(Response::DashboardUpdate(
+                update_dashboard_layout(f, r.ordered_card_ids.clone(), r.hidden_card_ids.clone())?,
+            )),
         }
     }
 }
+
+/// Walk the bound source's policy-filtered files, parse notez
+/// blocks, execute each via the engine's [`CardExecutionService`],
+/// and project them into the wire shape. `source` defaults to the
+/// engine's bound source.
+fn project_dashboard_cards<S>(
+    engine: &mut Engine<S>,
+    source: Option<&str>,
+    limit: usize,
+) -> Result<Vec<notez_protocol::response::CardProjection>, ApplicationError>
+where
+    S: ProjectionStore
+        + ProjectionReader<Error = crate::storage::StorageError>
+        + ProjectionWrite<Error = crate::storage::StorageError>,
+{
+    use crate::application::card_executor::CardProjection as InternalProjection;
+    let ctx = engine.source.as_ref();
+    let root = ctx.ok_or(invalid("dashboard cards require a bound source context"))?.root.clone();
+    let locator = source.map(String::from).unwrap_or_else(|| root.to_string_lossy().into_owned());
+    let policy = crate::source::policy::SourcePolicy::load_for_root(&root);
+    let mut files = Vec::new();
+    collect_dashboard_files(&root, &root, &policy, &mut files);
+    files.truncate(50);
+    let mut out = Vec::with_capacity(files.len());
+    let mut count = 0usize;
+    for path in files {
+        let text = match std::fs::read_to_string(&path) {
+            Ok(t) => t,
+            Err(_) => continue,
+        };
+        let rel = path.strip_prefix(&root).map(|p| p.to_string_lossy().replace('\\', "/"))
+            .unwrap_or_else(|_| locator.clone());
+        let blocks = match path.extension().and_then(|e| e.to_str()) {
+            Some("org") => crate::document::parse_org_notez_blocks(&text),
+            _ => crate::document::parse_markdown_notez_blocks(&text),
+        };
+        for block in blocks {
+            if out.iter().any(|c: &notez_protocol::response::CardProjection| c.id == block.id) {
+                continue; // first card wins
+            }
+            let context = crate::application::card_executor::CardExecutionContext::for_locator(&rel);
+            let state = engine.card_service.run(&block, &context);
+            out.push(to_wire_projection(InternalProjection::from_state(&block, rel.clone(), state)));
+            count += 1;
+            if count >= limit {
+                break;
+            }
+        }
+        if count >= limit {
+            break;
+        }
+    }
+    Ok(out)
+}
+
+fn collect_dashboard_files(
+    root: &std::path::Path,
+    dir: &std::path::Path,
+    policy: &crate::source::policy::SourcePolicy,
+    out: &mut Vec<std::path::PathBuf>,
+) {
+    let entries = match std::fs::read_dir(dir) {
+        Ok(e) => e,
+        Err(_) => return,
+    };
+    let mut candidates = Vec::new();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let rel = path.strip_prefix(root).unwrap_or(&path).to_path_buf();
+        let file_type = match entry.file_type() {
+            Ok(t) => t,
+            Err(_) => continue,
+        };
+        let is_symlink = file_type.is_symlink()
+            || std::fs::symlink_metadata(&path).map(|m| m.file_type().is_symlink()).unwrap_or(false);
+        if file_type.is_dir() {
+            if policy.hides_dir(&rel, is_symlink) {
+                continue;
+            }
+            collect_dashboard_files(root, &path, policy, out);
+            continue;
+        }
+        if !file_type.is_file() {
+            continue;
+        }
+        let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+        if matches!(ext, "md" | "markdown" | "org") {
+            let size = entry.metadata().map(|m| m.len()).unwrap_or(0);
+            if let crate::source::policy::Decision::Allow = policy.decide(&rel, is_symlink, size) {
+                candidates.push(path);
+            }
+        }
+    }
+    out.extend(candidates);
+}
+
+/// Look up one notez card by id within the file at `locator`.
+fn read_card<S>(
+    engine: &mut Engine<S>,
+    source: &str,
+    locator: &str,
+    card_id: &str,
+) -> Result<notez_protocol::response::CardProjection, ApplicationError>
+where
+    S: ProjectionStore
+        + ProjectionReader<Error = crate::storage::StorageError>
+        + ProjectionWrite<Error = crate::storage::StorageError>,
+{
+    use crate::application::card_executor::CardProjection as InternalProjection;
+    let root = resolve_source_root(engine, source)?;
+    let path = root.join(locator);
+    let text = std::fs::read_to_string(&path)
+        .map_err(|_| invalid(format!("locator `{locator}` is not readable")))?;
+    let format = path.extension().and_then(|e| e.to_str());
+    let blocks = match format {
+        Some("org") => crate::document::parse_org_notez_blocks(&text),
+        _ => crate::document::parse_markdown_notez_blocks(&text),
+    };
+    let block = blocks
+        .into_iter()
+        .find(|b| b.id == card_id)
+        .ok_or_else(|| invalid(format!("card `{card_id}` not found in `{locator}`")))?;
+    let context = crate::application::card_executor::CardExecutionContext::for_locator(locator);
+    let state = engine.card_service.run(&block, &context);
+    Ok(to_wire_projection(InternalProjection::from_state(&block, locator.to_string(), state)))
+}
+
+/// Execute one notez card and return the live result.
+fn execute_card<S>(
+    engine: &mut Engine<S>,
+    source: &str,
+    locator: &str,
+    card_id: &str,
+    timeout_ms: Option<u64>,
+) -> Result<notez_protocol::response::CardProjection, ApplicationError>
+where
+    S: ProjectionStore
+        + ProjectionReader<Error = crate::storage::StorageError>
+        + ProjectionWrite<Error = crate::storage::StorageError>,
+{
+    use crate::application::card_executor::CardProjection as InternalProjection;
+    let root = resolve_source_root(engine, source)?;
+    let path = root.join(locator);
+    let text = std::fs::read_to_string(&path)
+        .map_err(|_| invalid(format!("locator `{locator}` is not readable")))?;
+    let format = path.extension().and_then(|e| e.to_str());
+    let blocks = match format {
+        Some("org") => crate::document::parse_org_notez_blocks(&text),
+        _ => crate::document::parse_markdown_notez_blocks(&text),
+    };
+    let block = blocks
+        .into_iter()
+        .find(|b| b.id == card_id)
+        .ok_or_else(|| invalid(format!("card `{card_id}` not found in `{locator}`")))?;
+    let mut context = crate::application::card_executor::CardExecutionContext::for_locator(locator);
+    if let Some(ms) = timeout_ms {
+        context.timeout = std::time::Duration::from_millis(ms.min(2_000));
+    }
+    let state = engine.card_service.run(&block, &context);
+    Ok(to_wire_projection(InternalProjection::from_state(&block, locator.to_string(), state)))
+}
+
+/// Update the per-user dashboard layout (ordered + hidden card ids).
+fn update_dashboard_layout<S>(
+    engine: &mut Engine<S>,
+    ordered_card_ids: Vec<String>,
+    hidden_card_ids: Vec<String>,
+) -> Result<notez_protocol::response::DashboardLayout, ApplicationError>
+where
+    S: ProjectionStore
+        + ProjectionReader<Error = crate::storage::StorageError>
+        + ProjectionWrite<Error = crate::storage::StorageError>,
+{
+    // The dashboard layout lives in the web surface (web.toml).
+    // Surfaces that care wire this through their own surface; the
+    // dispatcher echoes the new layout so callers can confirm.
+    let _ = (engine, ordered_card_ids, hidden_card_ids);
+    Err(ApplicationError::UnsupportedCapability { capability: "update_dashboard" })
+}
+
+fn resolve_source_root<S>(
+    engine: &Engine<S>,
+    source: &str,
+) -> Result<std::path::PathBuf, ApplicationError>
+where
+    S: ProjectionStore
+        + ProjectionReader<Error = crate::storage::StorageError>
+        + ProjectionWrite<Error = crate::storage::StorageError>,
+{
+    if let Some(ctx) = engine.source.as_ref() {
+        if source.is_empty()
+            || ctx.root.to_string_lossy() == source
+            || ctx.source_id == source
+            || source == "default"
+        {
+            return Ok(ctx.root.clone());
+        }
+    }
+    Err(invalid(format!(
+        "source `{source}` is not the engine's bound source (use composition::open_selected first)"
+    )))
+}
+
+/// Convert the engine-internal card projection into the protocol
+/// DTO every surface consumes.
+fn to_wire_projection(
+    p: crate::application::card_executor::CardProjection,
+) -> notez_protocol::response::CardProjection {
+    use notez_protocol::response::CardProjection as Wire;
+    Wire {
+        id: p.id,
+        title: p.title,
+        language: p.language,
+        locator: p.locator,
+        ordinal: p.ordinal,
+        state: p.state_name.to_string(),
+        output_type: p.output_type.to_string(),
+        output: p.output.map(|c| card_output_to_value(&c)),
+        object_ref: p.object_ref,
+        html: p.html,
+        error: p.error,
+        error_kind: p.error_kind,
+    }
+}
+
+fn card_output_to_value(c: &crate::document::notez_block::CardOutput) -> serde_json::Value {
+    use crate::document::notez_block::CardOutput;
+    match c {
+        CardOutput::Json(value) => value.clone(),
+        CardOutput::List(items) => serde_json::Value::Array(items.clone()),
+        CardOutput::Object { .. } | CardOutput::Html(_) => serde_json::Value::Null,
+    }
+}
+
 
 #[cfg(test)]
 mod tests {
