@@ -24,7 +24,7 @@ if [[ "${NOTEZ_WASM_GATE:-0}" == "1" ]]; then
         echo "dx not on PATH; install dioxus-cli to enable wasm gate"
         exit 1
     fi
-    echo
+    dx build --platform web --package web --bin web
     echo "== dx build --platform web =="
     dx build --platform web --package web --bin web
 fi
