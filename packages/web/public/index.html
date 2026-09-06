@@ -4,6 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Notez</title>
+  <link rel="stylesheet" href="/assets/tokens.css" />
   <script>
     (function () {
       // Restore the persisted theme BEFORE first paint so a dark-mode
@@ -70,96 +71,6 @@
                  "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
       --font-mono: ui-monospace, SFMono-Regular, "JetBrains Mono", Menlo, Consolas,
                    "Liberation Mono", monospace;
-
-      --radius: 8px;
-      --radius-sm: 5px;
-      --shadow-pop: 0 12px 32px rgba(0, 0, 0, 0.35);
-      --shadow-drawer: 0 0 48px rgba(0, 0, 0, 0.45);
-
-      --topbar-h: 3rem;
-      --sidebar-w: 18.5rem;
-
-      --content-measure: 46rem;
-
-      /* Legacy token aliases — the `ui` crate components (NzBadge /
-       * NzCard / NzInput) still reference the v1 token names. The
-       * var() indirection resolves against the active theme. */
-      --ink: var(--fg);
-      --ink-2: var(--fg-2);
-      --ink-rule: var(--line);
-      --info: var(--accent);
-      --paper-2: var(--bg-2);
-      --r-sm: var(--radius-sm);
-      --r-md: var(--radius);
-      --shadow-1: none;
-      --sp-1: 0.25rem;
-      --sp-2: 0.5rem;
-      --sp-4: 1rem;
-    }
-
-    /* dark (default) */
-    html[data-theme="dark"], html[data-theme="system"] {
-      --bg: #161619;
-      --bg-1: #1c1c20;      /* sidebar */
-      --bg-2: #232327;      /* cards, panes */
-      --bg-3: #2b2b31;      /* raised: inputs, hover */
-      --line: #2e2e34;
-      --line-soft: #26262c;
-      --fg: #dededf;
-      --fg-2: #a6a6ad;
-      --fg-3: #73737b;
-      --accent: #9d7bff;
-      --accent-strong: #b39bff;
-      --accent-soft: rgba(157, 123, 255, 0.16);
-      --accent-fg: #16131f;
-      --ok: #4cc38a;
-      --warn: #e0b25b;
-      --err: #e2695c;
-      --code-bg: #232329;
-      --shadow-pop: 0 12px 32px rgba(0, 0, 0, 0.5);
-    }
-    html[data-theme="light"] {
-      --bg: #ffffff;
-      --bg-1: #f9f9fb;
-      --bg-2: #f2f2f5;
-      --bg-3: #e9e9ee;
-      --line: #e4e4e9;
-      --line-soft: #ececf0;
-      --fg: #202024;
-      --fg-2: #5a5a64;
-      --fg-3: #8f8f99;
-      --accent: #6d4fd6;
-      --accent-strong: #5b3fc4;
-      --accent-soft: rgba(109, 79, 214, 0.12);
-      --accent-fg: #ffffff;
-      --ok: #1f9d63;
-      --warn: #a97414;
-      --err: #c74a3d;
-      --code-bg: #f0f0f3;
-      --shadow-pop: 0 12px 32px rgba(30, 30, 40, 0.18);
-    }
-    @media (prefers-color-scheme: light) {
-      html[data-theme="system"] {
-        --bg: #ffffff;
-        --bg-1: #f9f9fb;
-        --bg-2: #f2f2f5;
-        --bg-3: #e9e9ee;
-        --line: #e4e4e9;
-        --line-soft: #ececf0;
-        --fg: #202024;
-        --fg-2: #5a5a64;
-        --fg-3: #8f8f99;
-        --accent: #6d4fd6;
-        --accent-strong: #5b3fc4;
-        --accent-soft: rgba(109, 79, 214, 0.12);
-        --accent-fg: #ffffff;
-        --ok: #1f9d63;
-        --warn: #a97414;
-        --err: #c74a3d;
-        --code-bg: #f0f0f3;
-        --shadow-pop: 0 12px 32px rgba(30, 30, 40, 0.18);
-      }
-    }
 
     /* ----- base --------------------------------------------------------- */
     * { box-sizing: border-box; }

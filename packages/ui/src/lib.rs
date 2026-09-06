@@ -8,3 +8,6 @@ pub use notez::{NzBadge, NzButton, NzButtonGhost, NzCard, NzInput};
 
 pub mod store;
 pub use store::AppStore;
+
+pub mod backend;
+pub use backend::{Backend, ResourceRow, SpaceRow};

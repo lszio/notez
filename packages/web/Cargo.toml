@@ -4,13 +4,11 @@ version = "0.1.0"
 edition = "2024"
 description = "notez dioxus fullstack web client"
 
+build = "build.rs"
 [lib]
 name = "notez_web"
 path = "src/lib.rs"
 
-[[bin]]
-name = "web"
-path = "src/main.rs"
 
 [dependencies]
 notez-core = { path = "../../crates/core" }
