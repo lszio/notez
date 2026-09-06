@@ -105,37 +105,48 @@ cli-build:
 # NOTEZ_API_OIDC_AUDIENCE (authentik/OIDC). Public binds require auth.
 api *args:
     cargo {{_cargo_profile}} run -p {{cli_pkg}} --bin notez -- serve {{args}}
-
 # ---- Web development --------------------------------------------------------
 #
-# `just web` launches the browser target. The Dioxus CLI owns watching,
-# rebuilding, and serving the Web bundle.
-
-# Default web recipe: launch the SSR server. The SSR binary is the
-# only path the user actually runs (hydration is explicitly disabled
-# upstream — see main.rs); the wasm client build is preserved only
-# for tooling that needs it (`just web-dx`).
+# `just web` — the default — runs the Dioxus CLI (`dx serve`), which
+# owns file watching, incremental rebuilds and asset bundling. Use
+# this when iterating on UI code.
+#
+# `just web-shell` runs the cargo SSR binary directly so the custom
+# `packages/web/public/index.html` shell (the 2200-line inline CSS +
+# progressive enhancement script) is served verbatim. This is the
+# path that reflects current web runtime behaviour (hydration is
+# explicitly disabled — see `packages/web/src/main.rs`).
+#
+# `just web-dx` is an alias for the default `just web` kept for
+# recipe-name stability.
 web:
-    just web-prod
+    just web-dx
 
-# Production-like SSR launch with the custom public shell.
-web-prod:
+# Dioxus-CLI web serve (hot reload, incremental rebuild). This is the
+# default web recipe above; only call directly when you want to make
+# the `dx serve` invocation explicit.
+web-dx:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    export IP="{{host}}"
+    export PORT="{{port}}"
+    exec dx serve --platform web --package {{web_pkg}} --bin {{web_pkg}} --addr "{{host}}" --port "{{port}}"
+
+# Cargo SSR launch with the custom public shell. Use this when you
+# need the full inline CSS + progressive-enhancement script from
+# `packages/web/public/index.html` to be served verbatim instead of
+# the Dioxus default shell.
+web-shell:
     #!/usr/bin/env bash
     set -euo pipefail
     if [ -n "{{space}}" ]; then export NOTEZ_SPACE_ROOT="{{space}}"; fi
     export IP="{{host}}"
     export PORT="{{port}}"
     exec cargo {{_cargo_profile}} run -p {{web_pkg}} --bin {{web_pkg}}
-
-# Explicit Web development alias.
-web-dx:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    exec dx serve --platform web --package {{web_pkg}} --bin {{web_pkg}} --addr "{{host}}" --port "{{port}}"
-
 #
 
 # Build the web client only (no run).
+
 web-build:
     cargo {{_cargo_profile}} build -p {{web_pkg}} --bin {{web_pkg}}
 
