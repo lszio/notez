@@ -418,18 +418,40 @@ fn cmd_stop() {
 }
 
 /// Foreground supervisor loop: open a watch + run a 1s tick that drains
-/// watch events and dispatches a sync push per batch. The HTTP API +
-/// MCP server are not run in this binary yet (they live in the `web`
-/// binary); the host focuses on watch + sync, the only responsibilities
-/// the CLI has been doing manually via `notez watch` + `notez sync push`.
+/// watch events and dispatches a sync push per batch. When `api_bind`
+/// (or `mcp_bind`) is supplied, a background thread runs a dedicated
+/// tokio runtime hosting `notez_api::build_router` and the
+/// `notez_mcp::http::router` so a headless host can also serve the
+/// protocol API and streamable-HTTP MCP without the Dioxus shell.
 fn run_supervisor_loop(
     source_root: PathBuf,
     actor: Option<String>,
     folder: Option<PathBuf>,
-    _api_bind: Option<String>,
-    _mcp_bind: Option<String>,
+    api_bind: Option<String>,
+    mcp_bind: Option<String>,
     pid: i32,
 ) {
+    // Mount the optional HTTP API + MCP servers on a dedicated tokio
+    // runtime in a background thread. The supervisor loop itself stays
+    // synchronous (std::thread::sleep), so this is the only place the
+    // async stack is needed.
+    if api_bind.is_some() || mcp_bind.is_some() {
+        let api_bind = api_bind.clone();
+        let mcp_bind = mcp_bind.clone();
+        let source_root_for_api = source_root.clone();
+        let pid_for_api = pid;
+        std::thread::Builder::new()
+            .name("notez-host-services".into())
+            .spawn(move || {
+                if let Err(e) = run_api_mcp_servers(
+                    &source_root_for_api, api_bind.as_deref(), mcp_bind.as_deref(), pid_for_api,
+                ) {
+                    eprintln!("notez host: api/mcp servers exited with error: {e}");
+                }
+            })
+            .expect("spawn api/mcp thread");
+    }
+
     // Set up a watch service. Reuse the CLI's WatchService so a
     // process restart picks up without dropping buffered events.
     let watch = WatchService::new();
@@ -521,6 +543,120 @@ fn run_supervisor_loop(
     clear_pid_file_if_ours();
 }
 
+/// Mount the HTTP protocol API (`/api/v1/*`) and/or the MCP
+/// streamable-HTTP endpoint (`/mcp`) on one tokio runtime. Each bind
+/// address gets its own listener; if both point at the same port the
+/// routers merge onto a single listener instead.
+fn run_api_mcp_servers(
+    source_root: &Path,
+    api_bind: Option<&str>,
+    mcp_bind: Option<&str>,
+    pid: i32,
+) -> Result<(), String> {
+    use notez_api::ServerConfig;
+
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .map_err(|e| format!("tokio runtime: {e}"))?;
+
+    runtime.block_on(async move {
+        // The API router needs the auth config resolved from env; reuse
+        // ServerConfig::from_env so NOTEZ_API_TOKEN / OIDC work the same
+        // way as `notez serve`.
+        let server_config = ServerConfig::from_env(api_bind.map(|s| s.to_string()), None)
+            .map_err(|e| format!("server config: {e}"))?;
+        let api_state = notez_api::ApiState::with_runtime(
+            server_config.default_source.clone(),
+            server_config.auth.mode_label(),
+            notez_composition::native::Runtime::new(),
+        )
+        .map_err(|e| format!("api state: {e}"))?;
+        let api_router = notez_api::build_router(server_config.auth.clone(), api_state);
+
+        // MCP engine: open a dedicated engine on the default source.
+        let mcp_router = match notez_api::transport::resolve_selection(
+            server_config.default_source.as_deref(),
+        ) {
+            Ok(selected) => {
+                match notez_composition::native::open_space(
+                    notez_core::config::discovery::SourceSelector::Path(selected.root.as_path()),
+                    None,
+                ) {
+                    Ok(handle) => {
+                        let engine = Arc::new(std::sync::Mutex::new(handle.engine));
+                        let watch = WatchService::new();
+                        let router = notez_mcp::http::router(engine, watch.clone());
+                        let auth_layer =
+                            axum::middleware::from_fn_with_state(server_config.auth.clone(), notez_api::auth_middleware);
+                        Some(router.route_layer(auth_layer))
+                    }
+                    Err(e) => {
+                        eprintln!("notez host: skipping /mcp — open engine failed: {e}");
+                        None
+                    }
+                }
+            }
+            Err(err) => {
+                eprintln!("notez host: skipping /mcp — no default source resolved: {err}");
+                None
+            }
+        };
+
+        // Merge onto one listener when the addresses agree; otherwise
+        // two listeners, one per surface.
+        let api_addr: std::net::SocketAddr = server_config.bind;
+        let mcp_addr: Option<std::net::SocketAddr> = mcp_bind
+            .map(|s| s.parse::<std::net::SocketAddr>())
+            .transpose()
+            .map_err(|e| format!("invalid mcp bind: {e}"))?;
+
+        match mcp_addr {
+            Some(mcp_addr) if mcp_addr == api_addr => {
+                let router = api_router.merge(mcp_router.unwrap_or_default());
+                let listener = tokio::net::TcpListener::bind(api_addr)
+                    .await
+                    .map_err(|e| format!("cannot bind {api_addr}: {e}"))?;
+                let _ = append_log(
+                    &log_file(),
+                    &format!("api+mcp serving on {api_addr}"),
+                    pid,
+                );
+                axum::serve(listener, router)
+                    .await
+                    .map_err(|e| format!("server error: {e}"))
+            }
+            Some(mcp_addr) => {
+                let api_listener = tokio::net::TcpListener::bind(api_addr)
+                    .await
+                    .map_err(|e| format!("cannot bind {api_addr}: {e}"))?;
+                let mcp_listener = tokio::net::TcpListener::bind(mcp_addr)
+                    .await
+                    .map_err(|e| format!("cannot bind {mcp_addr}: {e}"))?;
+                let _ = append_log(
+                    &log_file(),
+                    &format!("api on {api_addr}, mcp on {mcp_addr}"),
+                    pid,
+                );
+                tokio::try_join!(
+                    async { axum::serve(api_listener, api_router).await.map_err(|e| anyhow::anyhow!("api server error: {e}")) },
+                    async { axum::serve(mcp_listener, mcp_router.unwrap_or_default()).await.map_err(|e| anyhow::anyhow!("mcp server error: {e}")) }
+                )
+                .map(|_| ())   // discard the ((), ()) tuple
+                .map_err(|e| e.to_string())
+            }
+            None => {
+                let listener = tokio::net::TcpListener::bind(api_addr)
+                    .await
+                    .map_err(|e| format!("cannot bind {api_addr}: {e}"))?;
+                let _ = append_log(&log_file(), &format!("api serving on {api_addr}"), pid);
+                axum::serve(listener, api_router)
+                    .await
+                    .map_err(|e| format!("server error: {e}"))
+            }
+        }
+    })
+}
 fn push_via_engine(
     source_root: &Path,
     folder: &Path,

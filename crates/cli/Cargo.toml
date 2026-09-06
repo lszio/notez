@@ -14,10 +14,11 @@ path = "src/main.rs"
 [dependencies]
 notez-core = { path = "../core" }
 notez-protocol = { path = "../protocol" }
-notez-mcp = { path = "../mcp" }
+notez-mcp = { path = "../mcp", features = ["http"] }
+axum      = { version = "0.8", features = ["json"] }
 markdown   = { path = "../adapters/markdown" }
 composition = { path = "../composition" }
-tokio      = { version = "1", features = ["rt-multi-thread", "macros", "io-util", "signal", "fs"] }
+tokio      = { version = "1", features = ["rt-multi-thread", "macros", "io-util", "signal", "fs", "net"] }
 notez-api  = { path = "../api" }
 clap       = { workspace = true }
 serde      = { workspace = true }
