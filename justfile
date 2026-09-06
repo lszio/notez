@@ -107,42 +107,37 @@ api *args:
     cargo {{_cargo_profile}} run -p {{cli_pkg}} --bin notez -- serve {{args}}
 # ---- Web development --------------------------------------------------------
 #
-# `just web` — the default — runs the Dioxus CLI (`dx serve`), which
-# owns file watching, incremental rebuilds and asset bundling. Use
-# this when iterating on UI code.
+# `just web` launches the SSR server via cargo. This is the only path
+# the current web runtime supports: the binary serves the custom
+# `packages/web/public/index.html` shell (the inline CSS + progressive
+# enhancement script) and hydration is explicitly disabled
+# (see `packages/web/src/main.rs`).
 #
-# `just web-shell` runs the cargo SSR binary directly so the custom
-# `packages/web/public/index.html` shell (the 2200-line inline CSS +
-# progressive enhancement script) is served verbatim. This is the
-# path that reflects current web runtime behaviour (hydration is
-# explicitly disabled — see `packages/web/src/main.rs`).
-#
-# `just web-dx` is an alias for the default `just web` kept for
-# recipe-name stability.
+# `just web-dx` exists for reference but does NOT work in this repo:
+# `dx serve --platform web` first builds the wasm32 client target,
+# which does not compile (web server modules + notez-core janet are
+# native-only by design). Do not use it for day-to-day UI iteration.
 web:
-    just web-dx
-
-# Dioxus-CLI web serve (hot reload, incremental rebuild). This is the
-# default web recipe above; only call directly when you want to make
-# the `dx serve` invocation explicit.
-web-dx:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    export IP="{{host}}"
-    export PORT="{{port}}"
-    exec dx serve --platform web --package {{web_pkg}} --bin {{web_pkg}} --addr "{{host}}" --port "{{port}}"
-
-# Cargo SSR launch with the custom public shell. Use this when you
-# need the full inline CSS + progressive-enhancement script from
-# `packages/web/public/index.html` to be served verbatim instead of
-# the Dioxus default shell.
-web-shell:
     #!/usr/bin/env bash
     set -euo pipefail
     if [ -n "{{space}}" ]; then export NOTEZ_SPACE_ROOT="{{space}}"; fi
     export IP="{{host}}"
     export PORT="{{port}}"
     exec cargo {{_cargo_profile}} run -p {{web_pkg}} --bin {{web_pkg}}
+
+# Alias: same as `just web` (cargo SSR with the custom public shell).
+web-shell:
+    just web
+
+# Referenced above: Dioxus-CLI web serve. Keep this recipe only as
+# documentation of what `just web` intentionally is not; wasm client
+# compilation is broken upstream for this crate layout.
+web-dx:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    export IP="{{host}}"
+    export PORT="{{port}}"
+    exec dx serve --platform web --package {{web_pkg}} --bin {{web_pkg}} --addr "{{host}}" --port "{{port}}"
 #
 
 # Build the web client only (no run).
