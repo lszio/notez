@@ -5,6 +5,10 @@ edition = "2021"
 
 [dependencies]
 dioxus = { workspace = true, features = ["router", "fullstack"] }
+notez-core = { path = "../../crates/core" }
+notez-protocol = { path = "../../crates/protocol" }
+notez-api = { path = "../../crates/api" }
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 ui = { workspace = true }
 
 [features]

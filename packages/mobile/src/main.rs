@@ -1,21 +1,27 @@
+//! Dioxus mobile shell for Notez.
+//!
+//! Talks to a remote notez server through [`HttpBackend`]. The user
+//! configures the host via `NOTEZ_REMOTE_URL` (defaults to
+//! `http://127.0.0.1:8700`) and optionally `NOTEZ_DEFAULT_SOURCE`;
+//! otherwise the workspace view asks the server for its default
+//! source and lists resources from there.
+
 use dioxus::prelude::*;
 
-use ui::Navbar;
-use views::Home;
-
+mod backend;
 mod views;
 
-#[derive(Debug, Clone, Routable, PartialEq)]
-#[rustfmt::skip]
-enum Route {
-    #[layout(MobileNavbar)]
-    #[route("/")]
-    Home {},
-}
+use views::Workspace;
+use backend::HttpBackend;
 
 const MAIN_CSS: Asset = asset!("/assets/main.css");
 
 fn main() {
+    let backend = HttpBackend::from_env()
+        .unwrap_or_else(|err| panic!("notez mobile: cannot build HttpBackend: {err}"));
+
+    use_context_provider(move || backend);
+
     dioxus::launch(App);
 }
 
@@ -27,13 +33,21 @@ fn App() -> Element {
     }
 }
 
+#[derive(Debug, Clone, Routable, PartialEq)]
+#[rustfmt::skip]
+enum Route {
+    #[layout(MobileNavbar)]
+    #[route("/")]
+    Workspace {},
+}
+
 #[component]
 fn MobileNavbar() -> Element {
     rsx! {
-        Navbar {
+        ui::Navbar {
             Link {
-                to: Route::Home {},
-                "Home"
+                to: Route::Workspace {},
+                "Workspace"
             }
         }
         Outlet::<Route> {}
