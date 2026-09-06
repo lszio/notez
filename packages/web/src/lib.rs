@@ -24,6 +24,8 @@ pub mod router;
 #[cfg(feature = "server")]
 pub mod routes;
 pub mod server;
+#[cfg(feature = "server")]
+pub mod host;
 pub mod space_ctx;
 // The `tree` module defines types used by the SSR server-side
 // aggregation helpers; the wasm client has no reason to depend on

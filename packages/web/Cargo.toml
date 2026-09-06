@@ -15,6 +15,8 @@ path = "src/main.rs"
 [dependencies]
 notez-core = { path = "../../crates/core" }
 notez-protocol = { path = "../../crates/protocol" }
+notez-api = { path = "../../crates/api", optional = true }
+notez-mcp = { path = "../../crates/mcp", optional = true, features = ["http"] }
 notez-preview = { path = "../../crates/preview" }
 composition = { path = "../../crates/composition" }
 orgmode     = { path = "../../crates/adapters/orgmode" }
@@ -50,8 +52,8 @@ getrandom_04 = { package = "getrandom", version = "0.4", features = ["wasm_js"] 
 
 [features]
 default = ["server"]
-# Client build: dx passes --no-default-features --features web.
-server = ["dioxus/server", "dep:axum", "dep:tokio", "dep:anyhow", "dep:toml"]
+server = ["dioxus/server", "dep:axum", "dep:tokio", "dep:anyhow", "dep:toml", "dep:notez-api", "dep:notez-mcp"]
+
 web    = ["dioxus/web", "dep:dioxus-web"]
 
 [dev-dependencies]

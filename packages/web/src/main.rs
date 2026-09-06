@@ -1,37 +1,80 @@
-//! M6 hydration: adopt the supported dioxus 0.7 dual-entry pattern.
+//! Web host binary: Dioxus fullstack SSR plus the HTTP protocol API
+//! (`/api/v1/*`) and the MCP streamable-HTTP endpoint (`/mcp`), all
+//! sharing one composition `Runtime` per process.
 //!
-//! * server build (`--features server`, default): `dioxus::server::router`
-//!   installs SSR, static-asset serving, hydration serialization and
-//!   server functions together; our `/api/sources/*` routes merge into
-//!   that router instead of wrapping/replacing it.
-//! * client build (`--features web`, no server): `launch(app)` hydrates
-//!   the SSR output so signal-driven interactions come alive.
+//! Two modes selected by `NOTEZ_MODE`:
+//!
+//! * default (`web`) — full SSR app + protocol API + MCP over one
+//!   axum router, served by `dioxus::serve`.
+//! * `server` — headless: only the protocol API + MCP, served by
+//!   `axum::serve` directly. Same binary, same auth contract, no UI.
+//!
+//! Auth and bind policy follow `notez_api::ServerConfig::from_env`:
+//! the host reads `NOTEZ_API_BIND` (or `IP`/`PORT` as defaults) and
+//! refuses to serve a public bind without `NOTEZ_API_TOKEN` or
+//! `NOTEZ_API_OIDC_*`.
 
 #[cfg(feature = "server")]
-use notez_web::routes::{self, WebState};
 use notez_web::app;
-
-/// Unified router: our /api/sources/* routes merged ahead of the
-/// dioxus app fallback (SSR + assets + hydration + server fns).
 #[cfg(feature = "server")]
-fn build_router() -> Result<axum::Router, anyhow::Error> {
-    let state = WebState::new();
-    let custom = routes::build_router(state);
-    Ok(dioxus::server::router(app).merge(custom))
+use notez_web::host::{self, Mode};
+
+/// Default dev bind. Production must override via `IP`/`PORT` (web)
+/// or `NOTEZ_API_BIND` (server), and pair public binds with auth.
+fn ensure_default_bind() {
+    if std::env::var_os("IP").is_none() && std::env::var_os("NOTEZ_API_BIND").is_none() {
+        unsafe { std::env::set_var("IP", "127.0.0.1"); }
+    }
+    if std::env::var_os("PORT").is_none() {
+        unsafe { std::env::set_var("PORT", "8765"); }
+    }
+}
+
+/// Web mode (default): dioxus SSR app + API + MCP merged together.
+#[cfg(feature = "server")]
+fn run_web_mode() -> Result<(), anyhow::Error> {
+    let services = host::build_services().map_err(anyhow::Error::msg)?;
+    let protocol = host::protocol_router(&services);
+
+    dioxus::serve(move || {
+        let custom = notez_web::routes::build_router(notez_web::routes::state_snapshot());
+        let merged = dioxus::server::router(app).merge(custom).merge(protocol.clone());
+        async move { Ok::<_, anyhow::Error>(merged) }
+    });
+    Ok(())
+}
+
+/// Headless mode (`NOTEZ_MODE=server`): no UI, only API + MCP.
+#[cfg(feature = "server")]
+fn run_server_mode() -> Result<(), anyhow::Error> {
+    let addr = host::resolve_addr().map_err(anyhow::Error::msg)?;
+    let services = host::build_services().map_err(anyhow::Error::msg)?;
+    let router = host::protocol_router(&services);
+
+    let runtime = std::sync::Arc::new(
+        tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .map_err(|e| anyhow::anyhow!("tokio runtime: {e}"))?,
+    );
+    runtime.block_on(async move {
+        let listener = tokio::net::TcpListener::bind(addr)
+            .await
+            .map_err(|e| anyhow::anyhow!("cannot bind {addr}: {e}"))?;
+        eprintln!("notez headless server listening on {addr}");
+        axum::serve(listener, router)
+            .await
+            .map_err(|e| anyhow::anyhow!("server error: {e}"))
+    })
 }
 
 #[cfg(feature = "server")]
-fn main() {
-    // Never expose a manually launched server by default. Deployments that
-    // intentionally bind publicly must set IP explicitly and configure
-    // NOTEZ_WEB_TOKEN for mutation routes.
-    if std::env::var_os("IP").is_none() {
-        unsafe { std::env::set_var("IP", "127.0.0.1"); }
+fn main() -> Result<(), anyhow::Error> {
+    ensure_default_bind();
+    match Mode::from_env() {
+        Mode::Web => run_web_mode(),
+        Mode::Server => run_server_mode(),
     }
-    dioxus::serve(move || {
-        let built = build_router();
-        async move { built }
-    });
 }
 
 /// Client entry (wasm32). Hydration is explicitly disabled: with the
