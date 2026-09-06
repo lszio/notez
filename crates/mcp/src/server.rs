@@ -295,6 +295,19 @@ impl NotezMcpServer {
             tool_router: Self::tool_router(),
         }
     }
+    /// Bind to an already-open shared engine handle plus an externally
+    /// owned watch service — the shape the web host uses for
+    /// MCP-over-HTTP sessions against the composition `Runtime`.
+    pub fn with_runtime(
+        service: Arc<Mutex<Engine<SqliteProjection>>>,
+        watch: Arc<notez_core::application::WatchService>,
+    ) -> Self {
+        Self {
+            service,
+            watch,
+            tool_router: Self::tool_router(),
+        }
+    }
 
     /// Run one protocol request through the engine dispatcher while holding
     /// the service mutex mutably (dispatch interprets writes too).

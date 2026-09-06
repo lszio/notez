@@ -40,7 +40,7 @@ pub mod config;
 pub mod error_map;
 pub mod transport;
 
-pub use auth::{AuthConfig, AuthContext};
+pub use auth::{AuthConfig, AuthContext, auth_middleware};
 pub use client::{ClientError, NotezClient, TokenSource};
 pub use config::ServerConfig;
 pub use transport::{ApiState, build_router, serve};

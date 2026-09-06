@@ -222,7 +222,9 @@ fn engine_for(
 /// first; anything else is treated as a path (root dir or notez.toml).
 /// With no selector at all, the global config's default source is
 /// used — and its absence is reported with remediation text.
-fn resolve_selection(selector: Option<&str>) -> Result<SelectedSource, String> {
+pub fn resolve_selection(
+    selector: Option<&str>,
+) -> Result<SelectedSource, String> {
     let env: BTreeMap<String, OsString> = std::env::vars_os()
         .map(|(k, v)| (k.to_string_lossy().into_owned(), v))
         .collect();

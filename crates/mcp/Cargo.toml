@@ -4,9 +4,11 @@ version = "0.1.0"
 edition = "2024"
 description = "notez MCP server: transport-agnostic rmcp handler mapping MCP tools to protocol requests"
 
-[lib]
-name = "notez_mcp"
-path = "src/lib.rs"
+[features]
+default = []
+# Streamable-HTTP serving for hosts that mount MCP beside web/api
+# (packages/web). The stdio surface (cli) stays lean without axum.
+http = ["dep:axum", "dep:tower", "rmcp/transport-streamable-http-server"]
 
 [dependencies]
 notez-core = { path = "../core" }
@@ -16,11 +18,12 @@ rmcp = { version = "1.8", default-features = false, features = [
     "macros",
     "transport-io",
 ] }
+axum = { version = "0.8", optional = true }
+tower = { version = "0.5", optional = true }
 schemars = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 anyhow = "1"
-
 [dev-dependencies]
 tempfile = "3"
 orgmode  = { path = "../adapters/orgmode" }

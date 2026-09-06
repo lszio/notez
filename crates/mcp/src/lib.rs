@@ -17,3 +17,7 @@
 
 pub mod server;
 pub use server::{NotezMcpServer, serve};
+
+/// MCP streamable-HTTP mount for hosts (feature `http`).
+#[cfg(feature = "http")]
+pub mod http;

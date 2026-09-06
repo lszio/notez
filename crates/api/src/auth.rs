@@ -134,7 +134,7 @@ fn constant_time_eq(a: &str, b: &str) -> bool {
 /// Mounted with `axum::middleware::from_fn_with_state` in
 /// [`crate::transport`]; the `AuthConfig` travels through the layer
 /// state.
-pub(crate) async fn auth_middleware(
+pub async fn auth_middleware(
     State(auth): State<AuthConfig>,
     req: axum::extract::Request,
     next: Next,
