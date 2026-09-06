@@ -18,7 +18,7 @@
 //! the shared composition root and cached per canonical source root,
 //! so a single server serves many sources.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -46,7 +46,8 @@ const MAX_BODY_BYTES: usize = 4 * 1024 * 1024;
 /// Shared server state: engine cache + discovery payloads.
 #[derive(Clone)]
 pub struct ApiState {
-    engines: Arc<Mutex<HashMap<PathBuf, Arc<Mutex<Engine<SqliteProjection>>>>>>,
+    /// Shared engine cache + watchers; one runtime per process.
+    runtime: notez_composition::native::Runtime,
     default_source: Option<String>,
     /// Pre-rendered capability catalog (in-memory engine; no source
     /// needed — the catalog is a build-time constant of the binary).
@@ -55,17 +56,32 @@ pub struct ApiState {
 }
 
 impl ApiState {
-    /// Build state with an empty engine cache. Fails only if the
+    /// Build state owning a fresh runtime. Fails only if the
     /// capability catalog cannot be constructed (broken build), which
     /// is a start-up condition, not a per-request one.
     pub fn new(
         default_source: Option<String>,
         auth_mode: &'static str,
     ) -> Result<ApiState, String> {
+        Self::with_runtime(
+            default_source,
+            auth_mode,
+            notez_composition::native::Runtime::new(),
+        )
+    }
+
+    /// Same as [`ApiState::new`], but sharing an externally owned
+    /// runtime so one process (the web host) keeps a single engine
+    /// cache and watcher set across every mounted surface.
+    pub fn with_runtime(
+        default_source: Option<String>,
+        auth_mode: &'static str,
+        runtime: notez_composition::native::Runtime,
+    ) -> Result<ApiState, String> {
         let store = SqliteProjection::in_memory().map_err(|e| format!("in-memory store: {e}"))?;
         let capabilities = Arc::new(Engine::new(store).capabilities_json());
         Ok(ApiState {
-            engines: Arc::new(Mutex::new(HashMap::new())),
+            runtime,
             default_source,
             capabilities,
             auth_mode,
@@ -176,8 +192,9 @@ async fn dispatch(
 
 // ---- engine cache -------------------------------------------------------------
 
-/// Resolve the selector to an opened, cached engine. `Err` carries the
-/// ready-made error response (400 / 500 per failure class).
+/// Resolve the selector to an opened, cached engine through the shared
+/// runtime. `Err` carries the ready-made error response (400 / 500 per
+/// failure class).
 fn engine_for(
     state: ApiState,
     selector: Option<&str>,
@@ -189,18 +206,7 @@ fn engine_for(
         )
     })?;
 
-    let key = std::fs::canonicalize(&selected.root).unwrap_or_else(|_| selected.root.clone());
-
-    if let Some(hit) = state
-        .engines
-        .lock()
-        .expect("engine cache poisoned")
-        .get(&key)
-    {
-        return Ok(hit.clone());
-    }
-
-    let handle = notez_composition::native::open_selected(&selected, None).map_err(|e| {
+    state.runtime.open(&selected).map_err(|e| {
         error_response(
             notez_protocol::Error::Unavailable {
                 source: selected.source_name.clone(),
@@ -208,14 +214,7 @@ fn engine_for(
             },
             StatusCode::INTERNAL_SERVER_ERROR,
         )
-    })?;
-    let engine = Arc::new(Mutex::new(handle.engine));
-    state
-        .engines
-        .lock()
-        .expect("engine cache poisoned")
-        .insert(key, engine.clone());
-    Ok(engine)
+    })
 }
 
 /// Turn the `X-Notez-Source` header value (or the server default) into

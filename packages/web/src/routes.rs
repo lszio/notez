@@ -37,16 +37,27 @@ pub fn auto_start_watch(source_root: &std::path::Path) {
 
 #[derive(Clone)]
 pub struct WebState {
+    /// Process-global watch service (shared with the composition
+    /// `Runtime` so form routes and server functions observe one
+    /// live-reindex state).
     pub watch: Arc<WatchService>,
-    pub engines: Arc<Mutex<HashMap<PathBuf, Arc<Mutex<Engine<SqliteProjection>>>>>>,
+    /// Shared engine cache + watcher set. Engine acquisition now
+    /// delegates to the composition root so the web surface, the HTTP
+    /// API and the MCP host all open the same engine per source root.
+    runtime: notez_composition::native::Runtime,
 }
 
 impl WebState {
     pub fn new() -> Self {
-        Self {
-            watch: GLOBAL_WATCH.clone(),
-            engines: Arc::new(Mutex::new(HashMap::new())),
-        }
+        let runtime = notez_composition::native::Runtime::with_watch(GLOBAL_WATCH.clone());
+        let watch = runtime.watch();
+        Self { watch, runtime }
+    }
+
+    /// Clone the shared runtime (for surfaces mounted beside the web
+    /// routes in the same process).
+    pub fn runtime(&self) -> notez_composition::native::Runtime {
+        self.runtime.clone()
     }
 
     /// Acquire (or create) an `Engine` for `source_root`.
@@ -55,22 +66,10 @@ impl WebState {
         source_root: &PathBuf,
     ) -> Result<Arc<Mutex<Engine<SqliteProjection>>>, WebRouteError> {
         let canonical = std::fs::canonicalize(source_root).unwrap_or_else(|_| source_root.clone());
-        auto_start_watch(&canonical);
-        {
-            let cache = self.engines.lock().expect("engine cache poisoned");
-            if let Some(f) = cache.get(&canonical) {
-                return Ok(f.clone());
-            }
-        }
         let sel = core_resolve_space(&canonical).map_err(WebRouteError::from)?;
-        let handle = notez_composition::native::open_selected(&sel, None)
-            .map_err(|e| WebRouteError::Internal(e.to_string()))?;
-        let engine = Arc::new(Mutex::new(handle.engine));
-        self.engines
-            .lock()
-            .expect("engine cache poisoned")
-            .insert(canonical, engine.clone());
-        Ok(engine)
+        self.runtime
+            .open(&sel)
+            .map_err(|e| WebRouteError::Internal(e.to_string()))
     }
 }
 

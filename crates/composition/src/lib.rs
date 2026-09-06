@@ -11,14 +11,16 @@
 #[cfg(not(target_arch = "wasm32"))]
 pub mod native {
     use notez_core::application::federation::SourceInstancesCache;
-    use notez_core::application::{Engine, NativeJanetExecutor, SourceContext};
+    use notez_core::application::{Engine, NativeJanetExecutor, SourceContext, WatchService};
     use notez_core::config::{
-        ConfigError, ConfigPaths, SelectedSource, SourceSelector, resolve_source_runtime, select_source,
+        ConfigError, ConfigPaths, SelectedSource, SourceSelector, resolve_source_runtime,
+        select_source,
     };
     use notez_core::storage::{SqliteProjection, StorageError};
-    use std::collections::BTreeMap;
+    use std::collections::{BTreeMap, HashMap};
     use std::ffi::OsString;
     use std::path::{Path, PathBuf};
+    use std::sync::{Arc, Mutex};
     
     /// A fully wired space runtime: the bound engine plus the
     /// [`SourceContext`] it was opened against.
@@ -138,7 +140,73 @@ pub mod native {
             .map(|(k, v)| (k.to_string_lossy().to_string(), v))
             .collect()
     }
-    
+    /// Shared server runtime: an engine cache keyed by canonical source
+    /// root, plus the watch service. Every transport in one process (web
+    /// SSR, HTTP API, MCP host, embedded desktop) opens engines through
+    /// the same `Runtime`, so a canonical root maps to exactly one engine
+    /// and one watcher — no surface keeps its own second cache.
+    #[derive(Clone)]
+    pub struct Runtime {
+        engines: Arc<Mutex<HashMap<PathBuf, Arc<Mutex<Engine<SqliteProjection>>>>>>,
+        watch: Arc<WatchService>,
+    }
+
+    impl Default for Runtime {
+        fn default() -> Self {
+            Self::new()
+        }
+    }
+
+    impl Runtime {
+        /// New runtime owning its own watch service.
+        pub fn new() -> Self {
+            Self {
+                engines: Arc::new(Mutex::new(HashMap::new())),
+                watch: WatchService::new(),
+            }
+        }
+
+        /// New runtime sharing an externally owned watch service. The web
+        /// host passes its process-global watcher so every `WebState` /
+        /// router copy observes the same live-reindex state.
+        pub fn with_watch(watch: Arc<WatchService>) -> Self {
+            Self {
+                engines: Arc::new(Mutex::new(HashMap::new())),
+                watch,
+            }
+        }
+
+        /// The watch service this runtime starts watchers on.
+        pub fn watch(&self) -> Arc<WatchService> {
+            self.watch.clone()
+        }
+
+        /// Open (or reuse) the engine for an already-resolved selection.
+        /// Starting the source watcher is part of opening: a surface that
+        /// opens an engine gets live reindexing without extra ceremony.
+        pub fn open(
+            &self,
+            selected: &SelectedSource,
+        ) -> Result<Arc<Mutex<Engine<SqliteProjection>>>, OpenSpaceError> {
+            let canonical = std::fs::canonicalize(&selected.root)
+                .unwrap_or_else(|_| selected.root.clone());
+            {
+                let cache = self.engines.lock().expect("runtime engine cache poisoned");
+                if let Some(engine) = cache.get(&canonical) {
+                    return Ok(engine.clone());
+                }
+            }
+            let handle = open_selected(selected, None)?;
+            let engine = Arc::new(Mutex::new(handle.engine));
+            self.engines
+                .lock()
+                .expect("runtime engine cache poisoned")
+                                .insert(canonical.clone(), engine.clone());
+            let _ = self.watch.start(&canonical);
+            Ok(engine)
+        }
+    }
+
 }
 
 /// On wasm32 the composition root is unavailable: the client talks
