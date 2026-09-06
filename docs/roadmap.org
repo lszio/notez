@@ -79,18 +79,28 @@
 
 验收（规范 §8 MVP-2）：Agent 可由符号获得设计、任务、实现与摘要，并在授权范围内写回决策、任务与实现记录；未授权操作被拒绝且可审计。
 
-** 待办
+** 现状（2026-09 收尾）
 
-- [ ] *0.6 — 保真写回与可观察性强化*
-  - [ ] 把 =mutate= / =relate= / =task transition= 落到最小文本补丁。
-  - [ ] 引入 journal 与 expected revision 机制（并发与冲突控制）。
-  - [ ] 引入操作审计（Audit）与端到端 Trace。
-  - [ ] 完善 source =stale= 状态与链接解析指标。
-  - [ ] 引入 =Change= 投递模型：失败、冲突、授权结果可检查与重试（规范 §3、§7）。
-  - [ ] 引入 notez:// =object= / =query= / =code= scheme（规范 §5.3）。
-  - [ ] 引入 =Principal × Space × Source × Action × Scope= 授权维度（规范 §5.2）。
-  - [ ] 引入代码符号索引：解析注释与代码，建立「符号—文件—实现—设计—决策—任务」关系（规范 §5.1）。
-  - [ ] 引入 summary 协议：保留来源对象、生成者、输入 revision、过期状态（规范 §5.1）。
+0.6 写入脊柱在 dev 分支已部分落地；剩余工作项清晰：
+- [X] =notez_core::application::write_check= 提供 =check_capability= / =check_revision= / =check_address_uniqueness= 三个 check 入口（写入路径必须顺序调用）。
+- [X] =Engine::attach_journal= / =Engine::attach_audit= 把 journal / audit port 接到 engine 上；=composition::native::open_selected_with_paths= 每个新打开的 engine 自动注入 SQLite journal + SQLite audit（默认 =NullAuditLog= / SQLite 实现）。
+- [/] =application::projector= 写路径产生 =Change= 记录，但 CLI/HTTP/MCP 的写操作尚未强制走 =write_check= —— =check_revision= 在 CLI legacy 路径上仍被空 expected 字符串旁路（"no precondition"）。
+- [ ] CLI 写操作退出码 + protocol Error 稳定映射：CLI 已有 =remote_exit_code= 映射；HTTP /api/v1/dispatch 通过 =error_map=，MCP 走 =struct_err=。还需要把 =write_check= 的每个新错误变体接入该映射。
+- [ ] =Principal × Space × Source × Action × Scope= 授权维度：当前仅 capability 级 =check_capability=；MVP-2 要扩展到 Principal + Scope。
+- [ ] notez:// =object= / =query= / =code= scheme：协议层 =ObjectIdentity= / =Query= 类型已存在，URI scheme 解析与跨 Source 引用未实现。
+- [ ] 代码符号索引、summary 协议：未启动。
+
+** 待办（精确）
+- [ ] *0.6.a — 写路径接入 write_check*
+  - [ ] =application::projector= 的每条写路径（resource upsert/delete / relate / task transition / attachment extract / community / sync）顺序调用 =write_check= 三件。
+  - [ ] CLI 写命令（=notez resource write= / =notez task transition= / =notez attachment add=）传 =expected_revision= 并校验失败退出。
+  - [ ] =Error= 变体覆盖 =StaleRevision= / =Forbidden= / =Conflict= 时 =api/error_map= / =cli remote_exit_code= / MCP =struct_err= 三处同时响应。
+- [ ] *0.6.b — Principal × Space × Source × Action × Scope*
+  - [ ] 在 =notez_api::auth= 增加 Principal/Space/Source-aware 授权模型；=check_capability= 拆为多维检查。
+  - [ ] 拒绝路径写 audit record；audit 可通过 =/api/v1/dispatch{op:"audit_query"}= 查询。
+- [ ] *0.6.c — notez:// scheme + 代码索引 + summary*
+  - [ ] =notez_protocol= 加 URI scheme parser；=notez_core::source= 增加 code 索引适配器（解析注释）；=summary= 协议实现。
+
 - [ ] *1.0 — 稳定本地优先知识联邦*
   - [ ] 冻结公开地址、配置版本、错误码协议（继承 0.5 =ApplicationError=）。
   - [ ] 完成跨平台路径与 Unicode 行为的规范化。
