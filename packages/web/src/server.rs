@@ -23,6 +23,7 @@ use notez_core::config::web_space::{
     list_sources, resolve_source as core_resolve_space, ListedSource, SourceOrigin,
     WebSourceError,
 };
+use ui::Backend;
 use notez_core::config::SelectedSource;
 use notez_core::source::{SourceCapabilities, SourceConfig as AdapterSourceConfig, SourceKind};
  
@@ -360,6 +361,37 @@ pub async fn list_resources_via_backend(
         .collect())
 }
 pub async fn list_resources(source_root: String) -> Result<Vec<ResourceRow>, ServerFnError> {
+
+/// Scan a space through the surface-agnostic `ui::Backend`. Mirrors
+/// `list_resources_via_backend`: when the host runs with
+/// `NOTEZ_DATA_BACKEND=http` this fn goes through `notez-api::NotezClient`,
+/// otherwise it stays in-process.
+#[server]
+pub async fn scan_space_via_backend(source_root: String) -> Result<u32, ServerFnError> {
+    let backend = crate::host::DataBackend::from_env();
+    ui::Backend::scan_space(&backend, &source_root)
+        .await
+        .map_err(|e| ServerFnError::new(e.to_string()))
+}
+
+/// Single-resource fetch through the surface-agnostic `ui::Backend`.
+/// Returns a slim DTO (`BackendResourceRow`); pages that need a body
+/// preview should keep using the typed `get_resource` server function
+/// below (which retains the rich `ResourceRow` shape).
+#[server]
+pub async fn get_resource_via_backend(
+    source_root: String,
+    ref_str: String,
+) -> Result<Option<crate::model::BackendResourceRow>, ServerFnError> {
+    let backend = crate::host::DataBackend::from_env();
+    let rows = ui::Backend::query_resources(&backend, &source_root, None, None, Some(50))
+        .await
+        .map_err(|e| ServerFnError::new(e.to_string()))?;
+    Ok(rows
+        .into_iter()
+        .find(|r| r.id == ref_str)
+        .map(Into::into))
+}
     list_resources_impl(Path::new(&source_root))
         .await
         .map_err(|e| ServerFnError::new(e.to_string()))
