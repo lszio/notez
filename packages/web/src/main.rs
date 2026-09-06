@@ -77,12 +77,20 @@ fn main() -> Result<(), anyhow::Error> {
     }
 }
 
-/// Client entry (wasm32). Hydration is explicitly disabled: with the
-/// current split server/client builds the interpreter's hydrate walk
-/// crashes (`hydrate_node` TypeError), killing all element events.
-/// A fresh client mount attaches every handler and renders fully
-/// interactive; once upstream hydration is fixed, flip to
-/// `.hydrate(true)` to resume resuming-from-SSR.
+/// Client entry (wasm32). Hydration is explicitly disabled.
+///
+/// With Dioxus 0.7.10 + the current split server/client build, the
+/// interpreter's `hydrate_node` walk crashes with a TypeError
+/// (`Cannot read properties of undefined (reading 'toString')`),
+/// killing element events. Until Dioxus upstream fixes the walk or we
+/// replace the inline public shell with `dx`'s generated one, the
+/// wasm client is NOT a usable interactive surface — only the SSR
+/// HTML returned by the same `web` binary is interactive. We mount
+/// every handler fresh in the browser and accept the extra hydration
+/// cost. Once upstream hydration is fixed, flip to
+/// `Config::new().hydrate(true)`. Tracking: justfile `web-dx` entry;
+/// `packages/web/build.rs` already handles the public dir copy that
+/// `dx` skips in dev mode.
 #[cfg(not(feature = "server"))]
 fn main() {
     use dioxus_web::Config;
