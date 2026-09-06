@@ -8,5 +8,5 @@
 //! Library name: `notez_cli`.
 
 pub mod commands;
-
 pub mod handlers;
+pub mod host;

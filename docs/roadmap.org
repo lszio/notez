@@ -95,16 +95,17 @@
   - [ ] =application::projector= 的每条写路径（resource upsert/delete / relate / task transition / attachment extract / community / sync）顺序调用 =write_check= 三件。
   - [ ] CLI 写命令（=notez resource write= / =notez task transition= / =notez attachment add=）传 =expected_revision= 并校验失败退出。
   - [ ] =Error= 变体覆盖 =StaleRevision= / =Forbidden= / =Conflict= 时 =api/error_map= / =cli remote_exit_code= / MCP =struct_err= 三处同时响应。
-- [ ] *0.6.b — Principal × Space × Source × Action × Scope*
-  - [ ] 在 =notez_api::auth= 增加 Principal/Space/Source-aware 授权模型；=check_capability= 拆为多维检查。
-  - [ ] 拒绝路径写 audit record；audit 可通过 =/api/v1/dispatch{op:"audit_query"}= 查询。
 - [ ] *0.6.c — notez:// scheme + 代码索引 + summary*
   - [ ] =notez_protocol= 加 URI scheme parser；=notez_core::source= 增加 code 索引适配器（解析注释）；=summary= 协议实现。
+- [ ] *0.6.b — Principal × Space × Source × Action × Scope*
+  - [ ] 在 =notez_api::auth= 增加 Principal/Space/Source-aware 授权模型；=check_capability= 拆为多维检查。
 
-- [ ] *1.0 — 稳定本地优先知识联邦*
-  - [ ] 冻结公开地址、配置版本、错误码协议（继承 0.5 =ApplicationError=）。
-  - [ ] 完成跨平台路径与 Unicode 行为的规范化。
-  - [ ] 支持长时间重建进度与故障恢复机制。
+** 已交付（2026-09 收尾）
+- [X] *0.7 — `notez host` 长寿命监管*
+  - [X] =crates/cli/src/host.rs= 新模块：PID 文件（$XDG_RUNTIME_DIR）、SIGTERM 陷阱、status / stop / restart / logs 子命令。
+  - [X] 事件驱动同步：=WatchService= 缓存事件，=run_supervisor_loop= 每 1s drain 一次，对每个非空 batch 调度 =Request::SyncPush=，零轮询。
+  - [X] 全 workspace 88 个 test result: ok 行、零 FAILED。
+
   - [ ] 执行安全审计（尤其是挂载与附件相关逻辑）。
   - [ ] 提供从 0.x 数据和配置升级的正式版本迁移工具。
 

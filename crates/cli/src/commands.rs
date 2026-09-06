@@ -6,7 +6,7 @@ use std::path::PathBuf;
 #[command(name = "notez", version, about = "Notez CLI")]
 pub struct Cli {
     #[arg(long, global = true)]
-    pub space: Option<String>,
+    pub space: Option<PathBuf>,
 
     #[arg(long, global = true)]
     pub db: Option<PathBuf>,
@@ -137,6 +137,10 @@ pub enum Commands {
         #[command(subcommand)]
         command: RemoteCommands,
     },
+
+    /// Long-lived host: filesystem watch → event-driven sync push +
+    /// optional HTTP API + MCP servers, supervised by a PID file.
+    Host(HostSubcommand),
 }
 
 /// Sub-operations a remote notez server can perform. Each maps to one
@@ -589,3 +593,57 @@ pub enum WatchCommands {
         limit: usize,
     },
 }
+
+/// `notez host` — start / stop / status / restart / logs the long-lived
+/// service supervisor. Reads its config from `--space`, `--actor`,
+/// `--folder`, and env vars (see `host::host_run` for the full env
+/// contract).
+#[derive(Args, Debug)]
+pub struct HostSubcommand {
+    #[command(subcommand)]
+    pub command: HostCommands,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum HostCommands {
+    /// Start the host in the background (writes a PID file and returns).
+    Start {
+        /// `NOTEZ_SPACE_ROOT` env var — the host runs the watch on
+        /// the same space the rest of the CLI resolves.
+        #[arg(long = "root", env = "NOTEZ_SPACE_ROOT")]
+        space: Option<PathBuf>,
+        /// Sync actor id (e.g. `device_a`). Required when `--folder` is set.
+        #[arg(long)]
+        actor: Option<String>,
+        /// Shared sync folder. Triggers `sync push` on every watch event.
+        #[arg(long)]
+        folder: Option<PathBuf>,
+        /// Bind address for the optional in-process HTTP API. `None`
+        /// disables API serving; the host still runs watch + sync.
+        #[arg(long, env = "NOTEZ_HOST_BIND")]
+        api_bind: Option<String>,
+        /// Bind path for the optional in-process MCP streamable-HTTP server.
+        /// `None` disables MCP.
+        #[arg(long, env = "NOTEZ_HOST_MCP_BIND")]
+        mcp_bind: Option<String>,
+    },
+    /// Print host status (pid, alive, log path).
+    Status,
+    /// Read the last `LINES` lines from the host log (default 50).
+    Logs {
+        #[arg(long, default_value_t = 50)]
+        lines: usize,
+    },
+    /// `stop` sends SIGTERM to the running host and removes the pid file.
+    Stop,
+    /// `restart` = `stop` then `start` (uses the previous start's
+    /// options, recorded in the log file header).
+    Restart {
+        #[arg(long, default_value_t = 50)]
+        lines: usize,
+    },
+    /// Tail the host log (`-f` style). Blocking.
+    /// Tail the host log. Blocking until the host process exits.
+    Tail,
+}
+

@@ -17,7 +17,7 @@ notez-protocol = { path = "../protocol" }
 notez-mcp = { path = "../mcp" }
 markdown   = { path = "../adapters/markdown" }
 composition = { path = "../composition" }
-tokio      = { version = "1", features = ["rt-multi-thread", "macros", "io-util"] }
+tokio      = { version = "1", features = ["rt-multi-thread", "macros", "io-util", "signal", "fs"] }
 notez-api  = { path = "../api" }
 clap       = { workspace = true }
 serde      = { workspace = true }

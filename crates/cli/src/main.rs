@@ -37,14 +37,14 @@ fn main() {
     let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
     let selector = match &cli.space {
         Some(s) => {
-            if std::path::Path::new(s).is_absolute()
-                || s.starts_with('.')
+            if s.is_absolute()
+                || s.starts_with(".")
                 || s.starts_with("~/")
-                || s.contains('/')
+                || s.to_string_lossy().contains('/')
             {
-                notez_core::config::SourceSelector::Path(std::path::Path::new(s))
+                notez_core::config::SourceSelector::Path(s)
             } else {
-                notez_core::config::SourceSelector::Name(s)
+                notez_core::config::SourceSelector::Name(&s.to_string_lossy())
             }
         }
         None => {
@@ -174,6 +174,7 @@ fn main() {
             std::process::exit(1);
         }
         Commands::Watch(args) => handlers::watch::run_watch(args, &source_root),
+        Commands::Host(sub) => notez_cli::host::run_host(sub, &source_root, &selected, &r_config),
         // Reached only if the early-return transports above were skipped
         // (currently impossible because Serve/Remote branch first). Kept
         // here defensively so the inner match stays exhaustive.

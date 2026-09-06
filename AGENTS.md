@@ -34,7 +34,7 @@ cargo check -p mobile                        # mobile native 渲染路径
 | HTTP API transport | `crates/api/src/transport.rs` (`build_router(auth, ApiState::with_runtime(...))`) |
 | MCP stdio / HTTP | `crates/mcp/src/{server.rs,http.rs}` |
 | Web 宿主（双模式） | `packages/web/src/{host.rs,main.rs}` |
-| Dioxus 共享 UI | `packages/ui/src/{notez.rs,backend.rs}` |
+| `notez host` 长寿命监管 | `crates/cli/src/host.rs` (PID file + SIGTERM + event-driven sync) |
 | Desktop EmbeddedBackend | `packages/desktop/src/backend.rs` |
 | 文档入口 | `README.org` → `docs/roadmap.org` / `docs/current-architecture-and-redesign.md` |
 
@@ -47,7 +47,7 @@ cargo check -p mobile                        # mobile native 渲染路径
 - **不要**在 web `main.rs` 用 `dioxus::serve` 跑 headless 模式：headless 必须直接用 `axum::serve`（commit bfa20f1）。
 - **不要**把 MCP 工具注册时漏掉 `#[tool]` 宏：`source_list` 历史上就这么丢过一次（commit 9be47b3 修复），rmcp 不会报错但工具不可达。
 - **不要**新增测试而不放到 `tests/<name>.rs` 顶层：`tests/<subdir>/*.rs` 不会被 cargo 发现为独立测试 target（commit 9be47b3 教训）。
-- **不要**提交 `Cargo.lock` 中 `notez-mcp` 的 `default-features = false` 但漏掉 `http` feature 还要让 web 编译的情况；web 通过 `notez-mcp = { path, optional, features = ["http"] }` 拉起，缺 feature 会无声编译失败。
+- **不要**修改 `notez host` 的 `cmd_start` PID 流程时漏掉 `clear_pid_file_if_ours()`：否则 `host stop` 之后 pid 文件残留，`host status` 会反复看到旧的 dead pid。同步事件循环依赖 `WatchService` 而非定时轮询（`crates/cli/src/host.rs::run_supervisor_loop`）。
 
 ## 6. 触发器
 
