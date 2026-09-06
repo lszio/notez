@@ -1,11 +1,9 @@
 mod common;
 
-use notez_core::application::Engine;
 use common::{initialize_request, run_session};
 use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::fs;
-use notez_core::storage::SqliteProjection;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn mcp_attachment_add_extract_and_query_segments() {
@@ -15,11 +13,10 @@ async fn mcp_attachment_add_extract_and_query_segments() {
     let file_path = source_root.join("mcp_sample.txt");
     fs::write(&file_path, "MCP attachment content for extraction testing.").unwrap();
 
-    let store = SqliteProjection::in_memory().unwrap();
-    let mut service = Engine::new(store);
+    let mut service = common::make_mcp_engine(source_root);
 
     let att_ref = service
-        .add_attachment(source_root, &file_path, "text/plain")
+        .add_attachment(&file_path, "text/plain")
         .unwrap();
 
     let requests = vec![

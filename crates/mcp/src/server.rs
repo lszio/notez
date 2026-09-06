@@ -533,6 +533,7 @@ impl NotezMcpServer {
         }
     }
 
+    #[tool(description = "List sources configured in the current space")]
     fn source_list(
         &self,
         Parameters(args): Parameters<SpaceArgs>,

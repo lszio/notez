@@ -1,6 +1,6 @@
 //! Handler for `Commands::Mcp` (`mcp serve`).
 //!
-//! The MCP server owns the composed service for the lifetime of the
+//! The MCP server (notez_mcp) owns the composed service for the lifetime of the
 //! process, so this handler takes it by value.
 
 use std::process::exit;
@@ -18,7 +18,7 @@ pub fn run_mcp(service: Service) {
             exit(5);
         }
     };
-    if let Err(e) = runtime.block_on(crate::mcp::serve(service)) {
+    if let Err(e) = runtime.block_on(notez_mcp::serve(service)) {
         eprintln!("MCP server error: {e}");
         exit(5);
     }

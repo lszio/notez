@@ -8,7 +8,7 @@
 //! the CLI must also be observable via the MCP `tools/list` and
 //! `list_capabilities` tool surface.
 
-use notez_cli::mcp::NotezMcpServer;
+use notez_mcp::NotezMcpServer;
 use notez_core::application::Engine;
 use notez_core::storage::SqliteProjection;
 use rmcp::service::ServiceExt;

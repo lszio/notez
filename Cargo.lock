@@ -816,11 +816,10 @@ dependencies = [
  "markdown",
  "notez-api",
  "notez-core",
+ "notez-mcp",
  "notez-protocol",
  "predicates",
  "reqwest",
- "rmcp",
- "schemars",
  "serde",
  "serde_json",
  "tempfile",
@@ -4527,6 +4526,23 @@ dependencies = [
  "ulid",
  "walkdir",
  "zip 0.6.6",
+]
+
+[[package]]
+name = "notez-mcp"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "markdown",
+ "notez-core",
+ "notez-protocol",
+ "orgmode",
+ "rmcp",
+ "schemars",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
 ]
 
 [[package]]

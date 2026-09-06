@@ -1,11 +1,9 @@
 mod common;
 
-use notez_core::application::Engine;
 use common::{initialize_request, run_session};
 use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::fs;
-use notez_core::storage::SqliteProjection;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn mcp_community_create_derive_and_export_skill() {
@@ -19,9 +17,8 @@ async fn mcp_community_create_derive_and_export_skill() {
     )
     .unwrap();
 
-    let store = SqliteProjection::in_memory().unwrap();
-    let mut service = Engine::new(store);
-    service.scan_native(source_root).unwrap();
+    let mut service = common::make_mcp_engine(source_root);
+    service.scan_native().unwrap();
 
     let skill_out = source_root.join("mcp_skill");
 

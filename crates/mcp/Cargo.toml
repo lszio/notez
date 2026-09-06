@@ -1,0 +1,34 @@
+[package]
+name = "notez-mcp"
+version = "0.1.0"
+edition = "2024"
+description = "notez MCP server: transport-agnostic rmcp handler mapping MCP tools to protocol requests"
+
+[lib]
+name = "notez_mcp"
+path = "src/lib.rs"
+
+[dependencies]
+notez-core = { path = "../core" }
+notez-protocol = { path = "../protocol" }
+rmcp = { version = "1.8", default-features = false, features = [
+    "server",
+    "macros",
+    "transport-io",
+] }
+schemars = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+anyhow = "1"
+
+[dev-dependencies]
+tempfile = "3"
+orgmode  = { path = "../adapters/orgmode" }
+markdown = { path = "../adapters/markdown" }
+rmcp = { version = "1.8", default-features = false, features = [
+    "server",
+    "client",
+    "macros",
+    "transport-io",
+] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "io-util", "sync", "time"] }

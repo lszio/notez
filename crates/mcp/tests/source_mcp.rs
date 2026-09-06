@@ -1,11 +1,9 @@
 mod common;
 
-use notez_core::application::Engine;
 use common::{initialize_request, run_session};
 use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::fs;
-use notez_core::storage::SqliteProjection;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn mcp_source_add_and_list() {
@@ -20,13 +18,12 @@ async fn mcp_source_add_and_list() {
     )
     .unwrap();
 
-    let store = SqliteProjection::in_memory().unwrap();
-    let mut service = Engine::new(store);
+    let mut service = common::make_mcp_engine(source_root);
 
     let requests = vec![
         initialize_request(1).to_string(),
-        json!({"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "source_add", "arguments": {"space": source_root.to_string_lossy(), "id": "vault", "kind": "obsidian", "path": vault_dir.to_string_lossy(), "read_only": true}}}).to_string(),
-        json!({"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {"name": "source_list", "arguments": {"space": source_root.to_string_lossy()}}}).to_string(),
+        json!({"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "source_add", "arguments": {"id": "vault", "kind": "obsidian", "path": vault_dir.to_string_lossy(), "read_only": true}}}).to_string(),
+        json!({"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {"name": "source_list", "arguments": {}}}).to_string(),
     ];
 
     let responses = run_session(service, requests).await;
@@ -47,7 +44,9 @@ async fn mcp_source_add_and_list() {
     );
 
     let list_resp = by_id.get(&3).expect("source_list");
-    let text = list_resp["result"]["content"][0]["text"].as_str().unwrap();
+    let text = list_resp["result"]["content"][0]["text"]
+        .as_str()
+        .unwrap_or_else(|| panic!("source_list response shape: {list_resp:?}"));
     assert!(
         text.contains("vault"),
         "source_list response missing 'vault': {text}"

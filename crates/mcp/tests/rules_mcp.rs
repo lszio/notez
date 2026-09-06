@@ -1,11 +1,9 @@
 mod common;
 
-use notez_core::application::Engine;
 use common::{initialize_request, run_session};
 use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::fs;
-use notez_core::storage::SqliteProjection;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn mcp_rules_agenda_and_task_transition() {
@@ -18,9 +16,8 @@ async fn mcp_rules_agenda_and_task_transition() {
         "#+title: MCP Rules\n#+ID: 01J00000000000000000000800\n* TODO MCP Task\n:PROPERTIES:\n:ID: 01J00000000000000000000801\n:SCHEDULED: <2026-07-22 Wed>\n:TYPE: project\n:END:\n",
     ).unwrap();
 
-    let store = SqliteProjection::in_memory().unwrap();
-    let mut service = Engine::new(store);
-    service.scan_native(source_root).unwrap();
+    let mut service = common::make_mcp_engine(source_root);
+    service.scan_native().unwrap();
 
     let requests = vec![
         initialize_request(1).to_string(),

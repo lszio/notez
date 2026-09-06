@@ -1,11 +1,9 @@
 mod common;
 
-use notez_core::application::Engine;
 use common::{initialize_request, run_session};
 use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::fs;
-use notez_core::storage::SqliteProjection;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn mcp_stdio_jsonrpc_transcript() {
@@ -18,9 +16,8 @@ async fn mcp_stdio_jsonrpc_transcript() {
         "#+title: MCP Test Doc\n#+ID: 01J00000000000000000000200\n* NEXT Sync mcp heading\n:PROPERTIES:\n:ID: 01J00000000000000000000201\n:END:\n",
     ).unwrap();
 
-    let store = SqliteProjection::in_memory().unwrap();
-    let mut service = Engine::new(store);
-    service.scan_native(source_root).unwrap();
+    let mut service = common::make_mcp_engine(source_root);
+    service.scan_native().unwrap();
 
     let requests = vec![
         initialize_request(1).to_string(),
@@ -100,9 +97,8 @@ async fn mcp_stdio_handshake_state_dropped() {
     )
     .unwrap();
 
-    let store = SqliteProjection::in_memory().unwrap();
-    let mut service = Engine::new(store);
-    service.scan_native(source_root).unwrap();
+    let mut service = common::make_mcp_engine(source_root);
+    service.scan_native().unwrap();
 
     let requests = vec![
         initialize_request(1).to_string(),

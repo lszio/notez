@@ -5,13 +5,40 @@
 //! `mod common;` and `use common::*;` resolve to this file from each test
 //! crate.
 use notez_core::application::Engine;
-use notez_cli::mcp::NotezMcpServer;
+use notez_mcp::NotezMcpServer;
 use rmcp::service::ServiceExt;
 use serde_json::{Value, json};
 use std::time::Duration;
 use notez_core::storage::SqliteProjection;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::time::timeout;
+/// Build a bound engine over `space` with the Org/Markdown parsers
+/// registered — the same engine shape real transports hand to the MCP
+/// tools (a source-bound engine from the composition root).
+pub fn make_mcp_engine(space: &std::path::Path) -> Engine<SqliteProjection> {
+    std::fs::create_dir_all(space.join(".notez")).unwrap();
+    let store = SqliteProjection::open(&space.join(".notez/idx.sqlite")).unwrap();
+    let config = notez_core::config::model::SourceConfig {
+        version: 2,
+        source: notez_core::config::model::SourceIdentity {
+            name: "test".into(),
+            database: std::path::PathBuf::from(".notez/index.sqlite"),
+        },
+        workflow: Default::default(),
+        sources: vec![],
+        link_overrides: serde_json::Value::Null,
+        scan: Default::default(),
+    };
+    let ctx = notez_core::application::context::SourceContext::new(
+        "test",
+        space.to_path_buf(),
+        config,
+    );
+    let mut engine = Engine::with_source(store, ctx);
+    engine.register_format_parser(Box::new(orgmode::OrgParser::new()));
+    engine.register_format_parser(Box::new(markdown::MarkdownParser::new()));
+    engine
+}
 
 /// Build a proper MCP `initialize` request payload.
 ///

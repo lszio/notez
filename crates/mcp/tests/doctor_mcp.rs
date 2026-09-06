@@ -1,14 +1,12 @@
 mod common;
 
-use notez_core::application::Engine;
 use common::{initialize_request, run_session};
 use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::fs;
-use notez_core::storage::SqliteProjection;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn mcp_space_doctor_job_list_and_artifact_stale() {
+async fn mcp_doctor_jobs_stale_report_unsupported() {
     let temp_dir = tempfile::tempdir().unwrap();
     let source_root = temp_dir.path();
 
@@ -21,9 +19,8 @@ async fn mcp_space_doctor_job_list_and_artifact_stale() {
     )
     .unwrap();
 
-    let store = SqliteProjection::open(&source_root.join(".notez/index.sqlite")).unwrap();
-    let mut service = Engine::new(store);
-    service.scan_native(source_root).unwrap();
+    let mut service = common::make_mcp_engine(source_root);
+    service.scan_native().unwrap();
 
     let requests = vec![
         initialize_request(1).to_string(),
@@ -43,22 +40,28 @@ async fn mcp_space_doctor_job_list_and_artifact_stale() {
     let init = by_id.get(&1).expect("initialize");
     assert!(init["result"].is_object());
 
+    // space_doctor / task jobs / artifact stale are explicitly not yet
+    // implemented — the CLI contract test locks the same "unsupported
+    // capability" failure shape. The MCP surface must mirror it, never
+    // fake success.
     let doctor = by_id.get(&2).expect("source_doctor");
     let text = doctor["result"]["content"][0]["text"].as_str().unwrap();
     assert!(
-        text.contains("healthy"),
-        "source_doctor response missing 'healthy': {text}"
+        doctor["result"]["isError"] == true && text.contains("unsupported capability"),
+        "source_doctor should surface unsupported capability: {doctor:?}"
     );
 
     let jobs = by_id.get(&3).expect("job_list");
-    assert_eq!(
-        jobs["result"]["isError"], false,
-        "job_list should succeed: {jobs:?}"
+    let jobs_text = jobs["result"]["content"][0]["text"].as_str().unwrap();
+    assert!(
+        jobs["result"]["isError"] == true && jobs_text.contains("unsupported capability"),
+        "job_list should surface unsupported capability: {jobs:?}"
     );
 
     let stale = by_id.get(&4).expect("artifact_stale");
-    assert_eq!(
-        stale["result"]["isError"], false,
-        "artifact_stale should succeed: {stale:?}"
+    let stale_text = stale["result"]["content"][0]["text"].as_str().unwrap();
+    assert!(
+        stale["result"]["isError"] == true && stale_text.contains("unsupported capability"),
+        "artifact_stale should surface unsupported capability: {stale:?}"
     );
 }
