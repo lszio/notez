@@ -58,13 +58,20 @@ Notez 的核心定位是：
 | M1 服务统一 | =packages/web= 单 binary 双模式（默认 web / =NOTEZ_MODE=server= headless）；同进程同时挂 SSR + =/api/v1= + =/mcp= | bfa20f1 |
 | M2 设计 tokens | =packages/ui/assets/tokens.css= 为 light/dark/system 主题 canonical；web shell 用 link 引用；desktop/mobile assets/main.css 替换为 tokens；web build.rs 复制 public/ 到 target | 4cfb97d |
 | M3 客户端骨架 | =packages/ui::Backend= trait + SpaceRow/ResourceRow；=packages/desktop::EmbeddedBackend= 通过 Runtime 打开引擎 + dispatch；desktop Workspace 视图落地 | 4cfb97d |
+| M3.5 mobile HttpBackend | =packages/mobile::HttpBackend= 经 =notez-api::NotezClient= 连远程 notez 主机；Workspace 视图（NzCard/NzBadge + scan + query）；=NOTEZ_REMOTE_URL= / =NOTEZ_DEFAULT_SOURCE= 驱动 | 000c771 |
 
 里程碑对"目标态"（§6）的影响：
 
 - §3.1 中描述的"两个引擎缓存、ApplicationFacade 仍是服务容器"已不再成立；Runtime 是唯一真相来源。
 - §4 中描述的"web 仅靠 Dioxus server functions、UI 与 API 没有共享 state"已部分缓解；web 宿主同时承担 API + MCP。
 - §7.10 关于"HTTP API 中间件边界、远程对象穿越"已经按本节实现；auth 仍是循环策略（loopback anonymous / public 必带 token 或 OIDC）。
-- 仍未完成：wasm 客户端仍显式禁用 hydration（=crates/web/src/main.rs= 的 =hydrate(false)=），desktop 仍是初版 Workspace 视图，mobile 仍是 starter shell。
+- M3.5 完成 mobile HttpBackend 后，=ui::Backend= trait 的两个生产实现（EmbeddedBackend / HttpBackend）已就绪；web 页面的 =#[server]= 函数迁至 Backend trait 是剩余的桥接工作。
+
+仍未完成：
+
+- wasm 客户端仍显式禁用 hydration（=packages/web/src/main.rs= 的 =hydrate(false)=），需要 Dioxus 0.7 hydration bug 修复或服务端 client 拼装升级；
+- web 页面大量 =#[server]= 函数尚未迁至 =ui::Backend= trait（迁完之后 =Backend::Http= 可让 web 客户端在嵌入式 vs 远程数据面之间切换）；
+- 核心写脊柱（journal + revision + audit）仍是 MVP-1/MVP-2 收尾项。
 
 ## 3. 当前实际架构
 

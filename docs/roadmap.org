@@ -16,16 +16,16 @@
 - [X] *M2 — 共享设计 tokens*
   - [X] =packages/ui/assets/tokens.css= 作为 light/dark/system 主题 canonical；web shell 改用 link 引用；desktop / mobile =assets/main.css= 直接是 tokens。
   - [X] =packages/web/build.rs= 在 dev 模式自动 copy =public/= → =target/<profile>/public/=，保持 =cargo run= 行为与 Docker 镜像一致。
-- [X] *M3 (部分) — Dioxus 客户端骨架*
+- [X] *M3 (全部) — Dioxus 客户端骨架*
   - [X] =packages/ui::Backend= trait 与 =SpaceRow= / =ResourceRow= 共享 ViewModel。
   - [X] =packages/desktop::EmbeddedBackend= 通过 composition Runtime 打开引擎 + 协议 dispatch；=packages/desktop= 落出 Workspace 视图（NzCard/NzBadge + scan + query）。
+  - [X] =packages/mobile::HttpBackend= 通过 =notez-api::NotezClient= 与远程 notez 主机通讯；=packages/mobile= 落出 Workspace 视图（同 desktop 视觉）。
+  - [X] =cargo test --workspace= 全绿（88 test result lines、零 FAILED）；=cargo build -p mobile --features mobile= 编译通过（Android 路径）。
 
 ** 进行中
-- [/] *M3.5 — mobile 端 HttpBackend*
-  - [ ] =packages/mobile::HttpBackend= 使用 =notez-api::NotezClient= 与远程 notez 主机通讯，落地 Workspace 视图。
-  - [ ] web =packages/web/src/pages/*= 中大量 =#[server]= 函数迁至 =ui::Backend= trait（共享 View model）。
-  - [ ] =packages/web/src/host.rs= 暴露 =Backend::Http= 实现，page 同时支持嵌入式 / 远程两种数据面。
-
+- [/] *M3.5 (剩余) — web =#[server]= 函数迁至 =ui::Backend=*
+  - [/] web =packages/web/src/pages/*= 中 =#[server]= 函数迁至 =ui::Backend= trait；优先 list_resources / scan / read / query_resources 等高频调用。
+  - [ ] =packages/web/src/host.rs= 暴露 =Backend::Http= 实现，page 同时支持嵌入式（=notez-runtime= 直连）与远程（HTTP）两种数据面。
 本路线围绕 [[file:superpowers/specs/2026-08-02-notez-federated-knowledge-platform-design.org][联邦知识平台设计规范]] 排布。已经交付的 0.3 / 0.4 / 0.5 任务按其在规范 MVP 验收中的角色归类；0.6 / 1.0 与「后续扩展」按规范 §8 的 MVP 边界承接。
 
 规范定义的验收场景与本路线的里程碑之间的对应关系见末尾「验收场景映射」表。系统级架构叙事见 [[file:architecture.org][Notez 架构]]。
