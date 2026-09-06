@@ -29,6 +29,29 @@ pub struct ResourceRow {
     pub raw_content: String,
 }
 
+/// Slim DTO returned by `list_resources_via_backend` — the
+/// surface-agnostic `ui::ResourceRow` shape, no `body_html`/`raw_content`
+/// so the same wire form is observable from web SSR, desktop, and
+/// mobile without per-surface translation.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct BackendResourceRow {
+    pub id: String,
+    pub kind: String,
+    pub title: String,
+    pub locator: String,
+}
+
+impl From<ui::ResourceRow> for BackendResourceRow {
+    fn from(r: ui::ResourceRow) -> Self {
+        Self {
+            id: r.id,
+            kind: r.kind,
+            title: r.title,
+            locator: r.locator,
+        }
+    }
+}
+
 impl ResourceRow {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
@@ -80,6 +103,26 @@ mod tests {
     #[test]
     fn from_resource_populates_all_fields() {
         let r_ref = ResourceRef::parse("heading:01ARZ3NDEKTSV4RRFFQ69G5FAV").unwrap();
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn backend_resource_row_mirrors_ui_resource_row() {
+        let row = ui::ResourceRow {
+            id: "heading:01J0".into(),
+            kind: "Heading".into(),
+            title: "Design sync".into(),
+            locator: "notes/design.org::Design sync".into(),
+        };
+        let dto = BackendResourceRow::from(row.clone());
+        assert_eq!(dto.id, row.id);
+        assert_eq!(dto.kind, row.kind);
+        assert_eq!(dto.title, row.title);
+        assert_eq!(dto.locator, row.locator);
+    }
+}
         let object_id = derived_object_id("hash", "loc", "h:0");
         let res = Resource {
             r#ref: r_ref,

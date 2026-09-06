@@ -22,6 +22,7 @@ pub mod model;
 pub mod pages;
 pub mod router;
 #[cfg(feature = "server")]
+pub mod backend;
 pub mod routes;
 pub mod server;
 #[cfg(feature = "server")]

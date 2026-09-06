@@ -338,6 +338,27 @@ pub async fn selected_space(source_root: String) -> Result<SelectedSpaceDto, Ser
 }
 
 #[server]
+
+/// List resources through the surface-agnostic `ui::Backend` rather
+/// than the embedded engine. When the host runs with
+/// `NOTEZ_DATA_BACKEND=http` this fn talks to the remote notez server
+/// via `notez_api::NotezClient`; otherwise it stays in-process. The
+/// returned DTO is the slim `ui::ResourceRow` (no `body_html`); pages
+/// that need the rich DTO should keep using the typed `#[server]`
+/// helpers below.
+#[server]
+pub async fn list_resources_via_backend(
+    source_root: String,
+) -> Result<Vec<crate::model::BackendResourceRow>, ServerFnError> {
+    let backend = crate::host::DataBackend::from_env();
+    let rows = ui::Backend::query_resources(&backend, &source_root, None, None, Some(50))
+        .await
+        .map_err(|e| ServerFnError::new(e.to_string()))?;
+    Ok(rows
+        .into_iter()
+        .map(crate::model::BackendResourceRow::from)
+        .collect())
+}
 pub async fn list_resources(source_root: String) -> Result<Vec<ResourceRow>, ServerFnError> {
     list_resources_impl(Path::new(&source_root))
         .await

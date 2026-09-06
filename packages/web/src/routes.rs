@@ -45,13 +45,33 @@ pub struct WebState {
     /// delegates to the composition root so the web surface, the HTTP
     /// API and the MCP host all open the same engine per source root.
     runtime: notez_composition::native::Runtime,
+    /// Optional default space root (resolved at startup from
+    /// =NOTEZ_DEFAULT_SPACE= or cwd/notez.toml). Used by the embedded
+    /// Backend when no per-call space is supplied.
+    default_root: Option<PathBuf>,
+}
+
+fn default_space_root() -> Option<PathBuf> {
+    if let Ok(env_root) = std::env::var("NOTEZ_DEFAULT_SPACE") {
+        let p = PathBuf::from(env_root);
+        if p.exists() {
+            return Some(p);
+        }
+    }
+    std::env::current_dir().ok().filter(|p| p.join("notez.toml").exists())
 }
 
 impl WebState {
     pub fn new() -> Self {
         let runtime = notez_composition::native::Runtime::with_watch(GLOBAL_WATCH.clone());
         let watch = runtime.watch();
-        Self { watch, runtime }
+        let default_root = default_space_root();
+        Self { watch, runtime, default_root }
+    }
+
+    /// Default space root, if configured.
+    pub fn default_root(&self) -> &Option<PathBuf> {
+        &self.default_root
     }
 
     /// Clone the shared runtime (for surfaces mounted beside the web
