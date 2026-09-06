@@ -2,6 +2,30 @@
 #+date: 2026-08-03
 #+STARTUP: showeverything
 
+
+* MVP-0：多形态宿主与服务统一（2026-09）
+
+目标：所有形态（server / web / desktop / mobile）都以 Dioxus 形式包装；web 二进制同进程同时承载 SSR + /api/v1/* + /mcp，并支持 headless 服务模式独立运行；模块边界清晰（核心 crate 服务层不含 dioxus）。
+
+** 已交付
+- [X] *M1 — 服务统一*
+  - [X] 抽取 =crates/mcp= 自 =cli=；stdio 行为不变；激活 9 个原本休眠的 MCP integration 测试（含修复 =source_list= 工具路由 bug）。
+  - [X] =composition::native::Runtime= 成为进程唯一共享的引擎缓存 + watcher；=ApiState= / =WebState= 委托；=cli= =serve= 走 =notez-api=（Runtime::new）。
+  - [X] web 宿主 =packages/web= 单 binary 双模式：=NOTEZ_MODE=server= 走 axum::serve 头less；默认模式 = dioxus::serve SSR。同进程同时挂 =/api/v1/*= + =/mcp= + UI。
+  - [X] workspace tests 全绿（mcp 9 / api 13 / web 55 / preview 21 / parser 4 ...）；headless + web 双 smoke 验证 =/api/v1/healthz=、=/api/v1/capabilities=、=/mcp= initialize 全部 200。
+- [X] *M2 — 共享设计 tokens*
+  - [X] =packages/ui/assets/tokens.css= 作为 light/dark/system 主题 canonical；web shell 改用 link 引用；desktop / mobile =assets/main.css= 直接是 tokens。
+  - [X] =packages/web/build.rs= 在 dev 模式自动 copy =public/= → =target/<profile>/public/=，保持 =cargo run= 行为与 Docker 镜像一致。
+- [X] *M3 (部分) — Dioxus 客户端骨架*
+  - [X] =packages/ui::Backend= trait 与 =SpaceRow= / =ResourceRow= 共享 ViewModel。
+  - [X] =packages/desktop::EmbeddedBackend= 通过 composition Runtime 打开引擎 + 协议 dispatch；=packages/desktop= 落出 Workspace 视图（NzCard/NzBadge + scan + query）。
+
+** 进行中
+- [/] *M3.5 — mobile 端 HttpBackend*
+  - [ ] =packages/mobile::HttpBackend= 使用 =notez-api::NotezClient= 与远程 notez 主机通讯，落地 Workspace 视图。
+  - [ ] web =packages/web/src/pages/*= 中大量 =#[server]= 函数迁至 =ui::Backend= trait（共享 View model）。
+  - [ ] =packages/web/src/host.rs= 暴露 =Backend::Http= 实现，page 同时支持嵌入式 / 远程两种数据面。
+
 本路线围绕 [[file:superpowers/specs/2026-08-02-notez-federated-knowledge-platform-design.org][联邦知识平台设计规范]] 排布。已经交付的 0.3 / 0.4 / 0.5 任务按其在规范 MVP 验收中的角色归类；0.6 / 1.0 与「后续扩展」按规范 §8 的 MVP 边界承接。
 
 规范定义的验收场景与本路线的里程碑之间的对应关系见末尾「验收场景映射」表。系统级架构叙事见 [[file:architecture.org][Notez 架构]]。

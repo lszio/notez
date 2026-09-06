@@ -15,26 +15,33 @@ Notez is a local-first, Org-mode-first knowledge federation engine written in Ru
 
 #+begin_src text
 crates/
-├── domain/       Resource algebra, types, selectors, rules, communities, and projection traits
-├── document/     Lossless Org and Markdown scanners and security guards
-├── storage/      Disposable SQLite projection store and Content-Addressed BlobStore
-├── artifact/     Attachment extractors, segment slicer, recipe engine, and SKILL.md exporter
-├── source/       SourceAdapters (Native, Git, Obsidian Vaults)
-├── sync/         Manifests, object store, 3-way merge engine, and folder transport
-├── application/  Application service (scan, query, resolve, read, attachment, sync, doctor)
-├── cli/          CLI entry point (notez)
-└── mcp/          Model Context Protocol stdio server
+├── core/         Engine<S> + Dispatcher, domain, document, source, sync, artifact, storage
+├── protocol/     Typed Request/Response DTO + JSON Schema
+├── composition/  Shared Runtime (engine cache + watcher) for every host process
+├── api/          notez-api: HTTP transport /api/v1/* + auth + remote NotezClient
+├── mcp/          notez-mcp: rmcp ServerHandler, transport-agnostic
+│                 ├── default: stdio (notez mcp serve)
+│                 └── feature http: streamable-HTTP /mcp via rmcp transport-streamable-http-server
+├── preview/      SSR/CLI preview builders (separate from core)
+├── cli/          notez binary entry point (commands + handlers, delegates mcp to notez-mcp)
+├── adapters/     orgmode + markdown parser/reader crates
+packages/
+├── ui/           Shared Dioxus design system + Backend trait + AppStore
+├── web/          Dioxus fullstack SSR + host assembly
+│                 ├── default mode: SSR + /api/v1 + /mcp (one shared Runtime)
+│                 └── NOTEZ_MODE=server: headless api + mcp only
+├── desktop/      Dioxus desktop + EmbeddedBackend (composition Runtime, no HTTP)
+└── mobile/       Dioxus mobile (future HttpBackend via notez-api::NotezClient)
 #+end_src
 
 
 * Documentation
 
 - [[file:docs/architecture.org][Architecture]]: System boundaries, stable models, component responsibilities, and data flow.
-- [[file:docs/link-protocol.org][Link Protocol]]: Unified representation and resolution of IDs, files, titles, WikiLinks, fragments, and URLs.
-- [[file:docs/configuration.org][Configuration]]: Global space registry, space configuration, discovery, and override hierarchy.
-- [[file:docs/roadmap.org][Roadmap]]: Current baseline, evolution phases, acceptance criteria, and future directions.
-
-*Authority*: Native workspace knowledge is authoritative via files. Public behavior is defined by domain/application protocols and automated tests. Configuration behavior is strictly defined by =configuration.org=. README examples do not override these protocols.
+- [[file:docs/refactoring-v1.org][Refactoring v1]]: Hard requirements for v1 (local Markdown read/write, limited Org, restricted Janet, remote Source, shared Protocol).
+- [[file:docs/current-architecture-and-redesign.md][Current architecture review]]: Audit of the actual code against the target state (most recent authoritative review).
+- [[file:docs/roadmap.org][Roadmap]]: MVP-0 through MVP-3 milestones, acceptance criteria, future directions.
+*Authority*: Native workspace knowledge is authoritative via files. Public behavior is defined by domain/application protocols (see [[file:docs/protocol.org][Protocol]] if present, otherwise =crates/protocol/src/=) and automated tests. README examples do not override these protocols.
 * Building and Installation
 
 #+begin_src bash
@@ -218,7 +225,66 @@ Exposes query, resolve, read, inspect, agenda, task transition, attachment, comm
 notez --space /path/to/space mcp serve
 #+end_src
 
+** HTTP Protocol API
+
+The =notez-api= crate exposes a typed JSON protocol at =/api/v1/*=. The
+=web= binary mounts it beside the SSR UI; the =cli= hosts the same
+router standalone via =notez serve=.
+
+#+begin_src bash
+# Standalone server (CLI):
+notez serve --bind 127.0.0.1:8700 --source /path/to/space
+curl http://127.0.0.1:8700/api/v1/healthz
+curl -X POST -H 'Content-Type: application/json' \
+  --data '{"op":"query_resources","title_contains":"sync","limit":5}' \
+  http://127.0.0.1:8700/api/v1/dispatch
+#+end_src
+
+Auth contract (env vars): =NOTEZ_API_TOKEN= (shared secret) or
+=NOTEZ_API_OIDC_ISSUER= + =NOTEZ_API_OIDC_AUDIENCE= (JWT validation
+against the identity provider's JWKS). Public binds are refused without
+one of them; loopback binds default to anonymous.
+
+** MCP over streamable HTTP
+
+Same =notez-mcp= handler serves stdio (local agent) and streamable-HTTP
+(remote agent reaching a running notez server) when the =http= feature
+is enabled. The web host mounts it at =/mcp= behind the same bearer or
+OIDC middleware the API uses:
+
+#+begin_src bash
+IP=127.0.0.1 PORT=8765 /path/to/web-binary &
+curl -X POST -H 'Content-Type: application/json' \
+  -H 'Accept: application/json, text/event-stream' \
+  --data '{"jsonrpc":"2.0","id":1,"method":"initialize",
+           "params":{"protocolVersion":"2025-11-25","capabilities":{},
+                     "clientInfo":{"name":"smoke","version":"0"}}}' \
+  http://127.0.0.1:8765/mcp
+#+end_src
+
+** Host modes (web binary)
+
+The =web= binary serves both web UI + API + MCP, or a headless server
+mode, depending on =NOTEZ_MODE=:
+
+#+begin_src bash
+# default: SSR + /api/v1 + /mcp over one shared composition Runtime
+IP=127.0.0.1 PORT=8765 ./web-binary
+
+# headless: only /api/v1 + /mcp, no UI
+NOTEZ_MODE=server IP=127.0.0.1 PORT=8765 ./web-binary
+#+end_src
+
+** Embedded Dioxus clients
+
+=packages/desktop= embeds the engine in-process via the composition
+=Runtime= (=EmbeddedBackend= over the =ui::Backend= trait). =packages/mobile=
+is a Dioxus mobile shell that will use =notez-api::NotezClient= to talk
+to a running =notez= host. Both surfaces share =packages/ui= design
+tokens and primitives.
+
 * Exit Codes
+
 
 - =0=: Success
 - =2=: Invalid request or argument error

@@ -81,21 +81,17 @@ Org / Markdown / External Sources
       传输与呈现适配
 #+end_src
 
-Cargo crate 职责：
-
 | crate             | 职责                                  | 禁止承担                                 |
 |-------------------+---------------------------------------+------------------------------------------|
-| =core::domain=      | 稳定领域类型、协议 DTO、选择器、关系 | 文件 I/O、CLI/MCP 呈现                  |
-| =core::document=    | Org/Markdown 保真扫描、链接抽取       | 数据库查询、跨文档决议                  |
-| =core::source=      | 来源枚举、读取、capability、locator   | 全局业务编排                            |
-| =core::application= | 用例、地址解析、权限、事务、诊断      | 复制 CLI/MCP 参数模型                   |
-| =core::storage=     | 可重建投影与 schema migration         | 成为原生内容事实来源                    |
-| =core::sync=        | manifest / object / transport / merge | 依赖 SQLite 投影同步                    |
-| =core::artifact=    | 提取、recipe、Agent 派生产物          | 修改原始笔记                            |
-| =cli=               | 参数解析、输出与退出码                | 直接访问文件或数据库                    |
-| =mcp=               | MCP schema、协议、结果编码            | 独立实现业务能力                        |
+| =notez-core=       | 领域类型、协议 DTO、选择器、关系；用例（Engine + ApplicationDispatcher）；来源枚举与读取；可重建投影与 schema migration；本地同步引擎；附件与派生产物 | 文件 I/O 之外的协议传输（CLI/MCP/HTTP/Web 形态适配）；UI 渲染 |
+| =notez-protocol=   | typed Request/Response；JSON Schema；错误枚举与退出码映射 | 任何实现逻辑、Adapter 类型、SQLite 行为 |
+| =notez-composition=| 进程唯一装配根：Runtime{ 引擎缓存 · watcher · 配置解析 · parser registry · journal/audit 注入 } | 含 Dioxus；多 Runtime 共享（每进程一份） |
+| =notez-api=        | HTTP transport：=/api/v1/dispatch= + healthz/schema/capabilities；静态 token / OIDC 鉴权；远程 =NotezClient= | 重新实现 Engine 缓存（必须共用 Runtime）；Dioxus；SQLite 直接调用 |
+| =notez-mcp=        | rmcp ServerHandler：tool → 协议 Request → dispatcher；stdio 默认；feature =http= 暴露 streamable-HTTP 适配（=notez_mcp::http::router=） | 直接读 SQLite；绕开 dispatcher；feature =http= 时不引入 axum 给 cli 编译路径 |
+| =notez-preview=    | SSR/CLI preview builders；与 core 解耦，避免重型 format parser 进入 Engine 依赖图 | 写路径；协议层 |
+| =notez-cli=        | 参数解析、退出码、surface 命令；=serve= → notez-api；=mcp= → notez-mcp | Engine 缓存、watcher（经 notez-api / notez-mcp） |
+| =orgmode= / =markdown=| 各自的 parser + reader；通过 composition 注册到 Engine | 持有 Engine 缓存或 Runtime |
 
-公开接口统一暴露对象、空间、关系、查询、变更、同步任务与授权结果，不泄漏具体 Adapter DTO。规范 §4 第 3 段要求的 Source Adapter 能力声明（read / write / attachments / incremental_sync / conflict_details 等）已在 =core::capability= 实现并由 =SourceRegistry= 暴露。
 
 * 5. MCP、HTTP API、CLI 与 Agent
 
@@ -145,8 +141,26 @@ notez://code/<repo>/<symbol-id>
 - 全局命令栏：查询、创建、引用、移动、调用已授权工作流。
 
 PARA 是 Space 内的分类关系与保存查询，不是四个互斥文件夹；看板是保存查询的投影；拖动卡片改变统一任务对象状态，而非创建副本。
+* 6. 客户端、PARA 与看板（规范 §6）
 
-当前已实现：=Task= + PARA 模型的 CLI 终端嵌套渲染（见 [[file:roadmap.org][Roadmap]] 0.3 已交付条目）。
+客户端实现统一遵循 "Backend trait = 数据面；Dioxus = 渲染面；Runtime/HttpClient = 传输实现" 三段式：
+
+- =packages/ui= 定义 =ui::Backend= trait 与共享 ViewModel（=SpaceRow=、=ResourceRow= 等）。Nz* 组件与 AppStore 状态结构同样跨形态共享；设计 tokens 集中在 =packages/ui/assets/tokens.css=，所有客户端通过 =<link>= / =asset!()= 引用同一份主题。
+- =packages/web=（Dioxus fullstack SSR）：SSR 首屏 + axum 路由挂载 =/api/sources/*= 表单动作 + =/api/v1/*= 协议 API + =/mcp= MCP HTTP；运行时 =NOTEZ_MODE=server= 走 axum::serve 提供无 UI 头less 服务。同一个二进制 =web=，同一份 composition Runtime。
+- =packages/desktop=（Dioxus desktop）：=EmbeddedBackend= 通过 =notez-composition::Runtime= 进程内打开引擎、dispatch 协议请求；零 HTTP。
+- =packages/mobile=（Dioxus mobile，骨架就位）：=HttpBackend= 待落，使用 =notez-api::NotezClient= 与远程 =notez= 主机通讯。
+
+界面布局目标（规范 §6 原文，从 MVP-3 起逐步落地）：
+- 左侧：Space 切换、来源状态、收藏、收件箱、PARA 入口。
+- 主区：块编辑 / 阅读，可在大纲、关系、文件原文、属性间切换。
+- 右侧：反向链接、关联代码、活动、同步状态、Agent 审计。
+- 全局命令栏：查询、创建、引用、移动、调用已授权工作流。
+
+客户端当前状态（M1-M3 已落地部分）：
+- =packages/ui= 已抽出共享 Nz* 组件、AppStore、=ui::Backend= trait 与设计 tokens（=packages/ui/assets/tokens.css=）。Web/Desktop/Mobile 三个 surface 都已经 link 到这份 tokens，主题在三个平台上保持一致。
+- =packages/desktop= 已用 =EmbeddedBackend= 落出 Workspace 视图：列出默认 source、scan 一次、QueryResources 渲染 =NzCard= 列表；同一进程一个 Engine 缓存。
+- =packages/web= 把 /api/v1 + /mcp 合并到同一个 dioxus 路由；hydration 仍显式禁用，wasm 客户端构建待 M4 修复。
+- =packages/mobile= 接入共享 tokens 与 Nz* 组件；=HttpBackend= 待 M3 收尾（M3.5）落地。
 
 * 7. 本地优先同步与冲突（规范 §7）
 
@@ -161,8 +175,9 @@ PARA 是 Space 内的分类关系与保存查询，不是四个互斥文件夹�
 
 当前实现：
 
-- 本地变更日志与三路合并已就位（=core::sync=）。
+- 本地变更日志与三路合并已就位（=notez-core::sync=）。
 - 0.6 任务「保真写回与可观察性强化」承担：journal + expected revision、conflict 审计、source stale 标记、链接解析指标。
+
 
 * 8. MVP 路线（规范 §8）
 

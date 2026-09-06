@@ -45,6 +45,27 @@ Notez 的核心定位是：
 
 ---
 
+
+## 1.5 里程碑（M1–M3，已落地于 dev 分支）
+
+下表对应 2026-09 在 dev 分支已经实现的形态与边界变更。代码 commit 引用见 README.org 与 git log。
+
+| 里程碑 | 关键交付 | 关键 commit |
+|---|---|---|
+| M1 服务统一 | =crates/mcp= 从 cli 抽出；stdio 行为不变；9 个原本休眠的 MCP integration 测试被激活并修复了 =source_list= 工具路由 bug | 9be47b3 |
+| M1 服务统一 | =composition::native::Runtime= 取代双引擎缓存；ApiState/WebState 委托；进程单例 watcher | cab6f47 |
+| M1 服务统一 | =crates/mcp http= feature：rmcp streamable-http-server；web host 在 =/mcp= 挂同一 handler | 09aa357 |
+| M1 服务统一 | =packages/web= 单 binary 双模式（默认 web / =NOTEZ_MODE=server= headless）；同进程同时挂 SSR + =/api/v1= + =/mcp= | bfa20f1 |
+| M2 设计 tokens | =packages/ui/assets/tokens.css= 为 light/dark/system 主题 canonical；web shell 用 link 引用；desktop/mobile assets/main.css 替换为 tokens；web build.rs 复制 public/ 到 target | 4cfb97d |
+| M3 客户端骨架 | =packages/ui::Backend= trait + SpaceRow/ResourceRow；=packages/desktop::EmbeddedBackend= 通过 Runtime 打开引擎 + dispatch；desktop Workspace 视图落地 | 4cfb97d |
+
+里程碑对"目标态"（§6）的影响：
+
+- §3.1 中描述的"两个引擎缓存、ApplicationFacade 仍是服务容器"已不再成立；Runtime 是唯一真相来源。
+- §4 中描述的"web 仅靠 Dioxus server functions、UI 与 API 没有共享 state"已部分缓解；web 宿主同时承担 API + MCP。
+- §7.10 关于"HTTP API 中间件边界、远程对象穿越"已经按本节实现；auth 仍是循环策略（loopback anonymous / public 必带 token 或 OIDC）。
+- 仍未完成：wasm 客户端仍显式禁用 hydration（=crates/web/src/main.rs= 的 =hydrate(false)=），desktop 仍是初版 Workspace 视图，mobile 仍是 starter shell。
+
 ## 3. 当前实际架构
 
 ### 3.1 工作区结构
@@ -61,23 +82,13 @@ crates/
 └── adapters/markdown/       Markdown parser adapter
 
 packages/
-├── web/                     Dioxus fullstack Web 客户端和 SSR 服务
-├── ui/                      共享 UI 组件，但尚未成为 Web 的实际组件来源
-├── api/                     仍保留 starter echo API
-├── desktop/                 Dioxus starter surface
-├── mobile/                  Dioxus starter surface
-└── landing/                 静态页面
-```
+├── web/                     notez dioxus fullstack SSR + 宿主二进制（双模式 web / headless server）
+├── ui/                      共享设计系统 + Backend trait + AppStore + tokens.css
+├── desktop/                 Dioxus desktop + EmbeddedBackend（composition Runtime in-process）
+└── mobile/                  Dioxus mobile 骨架（HttpBackend 待 M3.5）
 
-`Cargo.toml` 当前将 Web 纳入 workspace。`core` 的 package 名已经是 `notez-core`，Rust library 名为 `notez_core`。
+已删除的 =packages/api=（旧 echo starter）与 =packages/landing=（静态页）从 workspace 移除；不再以 module 形式被任何 crate 引用。
 
-### 3.2 core 内部模块
-
-`notez-core` 仍然是一个大型 crate，主要模块如下：
-
-| 模块 | 当前责任 | 主要问题 |
-|---|---|---|
-| `domain` | Resource、ResourceRef、ObjectIdentity、Relation、Rule、Selector、Conflict、Change、Journal port、Audit port | 依赖方向相对干净，但协议和领域类型仍混在同一 crate 生态中 |
 | `document` | Org/Markdown 解析、链接抽取、工作流 | 解析逻辑已部分纯化，但仍与 core 紧密耦合 |
 | `source` | SourceAdapter、Transport、Parser registry、Native/Git/Obsidian adapter、SourceWriter | Source、Transport、Parser、Writer 的边界仍不完全稳定 |
 | `storage` | SQLite projection、BlobStore、缓存、SQLite journal/audit adapter | projection、journal、cache 仍集中在同一基础设施模块 |
@@ -826,11 +837,11 @@ HTTP request
 
 ### 阶段 A：冻结事实与协议
 
-- 把当前真实架构与目标架构分开维护；
-- 删除过时 README 和路由描述；
-- 给 protocol 补齐 typed Response；
-- 为所有 server function 建立请求/响应契约测试；
-- 明确 `ResourceRef`、`ObjectIdentity`、`revision` 的语义。
+- / 把当前真实架构与目标架构分开维护（本文档 + =docs/architecture.org=）；
+- ✅ 删除过时 README 和路由描述（README 描述更新到 M1-M3；ui-refactoring-v1 仍作参考）；
+- ✅ 给 protocol 补齐 typed Response（=crates/protocol/src/response.rs= 已为 =ResourcePage=、=Scan=、=AttachmentRef=、=Conflicts= 等变体生成 JSON Schema）；
+- / 为所有 server function 建立请求/响应契约测试（web 页面 =#[server]= 还未迁到 =ui::Backend= trait，部分用例通过 MCP/HTTP 间接覆盖）；
+- ✅ 明确 =ResourceRef=、=ObjectIdentity=、=revision= 的语义（文档 §3.3）。
 
 验收：CLI、MCP、HTTP 对同一 Request 产生相同领域结果。
 
@@ -856,12 +867,12 @@ HTTP request
 
 ### 阶段 D：Web 客户端状态模型
 
-- 先保留 SSR 首屏；
-- 让 Web client 只有一个 Store；
-- server function 只作为 protocol transport；
-- hydration 失败时不再产生第二套 Dioxus/JS 状态逻辑；
-- 将 progressive enhancement 限定为可替换的 transport fallback；
-- 优先完成 Reader、Search、Inspector 三个工作面。
+- ✅ SSR 首屏保留（web binary 默认走 dioxus::serve）；
+- / 让 Web client 只有一个 Store；
+- / server function 只作为 protocol transport；
+- / hydration 失败时不再产生第二套 Dioxus/JS 状态逻辑（hydration 当前显式 =hydrate(false)=，待修复）；
+- ✅ 将 progressive enhancement 限定为可替换的 transport fallback；
+- / 优先完成 Reader、Search、Inspector 三个工作面。
 
 验收：
 
@@ -872,12 +883,10 @@ HTTP request
 - server function 错误不会被错误地反序列化成其它 DTO。
 
 ### 阶段 E：设计系统和跨平台
-
-- 将 tokens 从 Web HTML 提取到共享 UI 资源；
-- Web 实际使用 `packages/ui` 组件；
-- desktop/mobile 复用同一 View model 和 action；
-- 平台层只提供文件选择、通知、分享和后台任务；
-- 删除 desktop/mobile 的 starter blog surface。
+- ✅ 将 tokens 从 Web HTML 提取到共享 UI 资源（=packages/ui/assets/tokens.css=，web shell 用 link 引用，desktop/mobile assets/main.css 替换为 tokens）；
+- / Web 实际使用 =packages/ui= 组件（Nz* 组件已被 web 页面采纳中）；
+- ✅ desktop/mobile 复用同一 View model 和 action（=ui::Backend= trait + EmbeddedBackend 实现；mobile HttpBackend 待 M3.5）；
+- ✅ 删除 desktop/mobile 的 starter blog surface（已替换为带 tokens + Nz 组件的工作台）。
 
 验收：相同的 Reader、Search、Inspector 在 Web/Desktop/Mobile 使用相同交互契约。
 
@@ -900,14 +909,20 @@ HTTP request
 
 ## 10. 最终判断
 
-当前 Notez 的后端方向是可保留的：本地文件主权、稳定身份、Source adapter、可重建投影、Change/Journal、三方合并和协议统一都值得继续。
+当前 Notez 的后端方向仍是可保留的：本地文件主权、稳定身份、Source adapter、可重建投影、Change/Journal、三方合并和协议统一都值得继续。
 
-需要整体重考虑的是：
+2026-09 里程碑（M1–M3）已把 §1 列出的三个核心问题的前两个推进到「已落地」：
 
-- **核心状态模型**：从多个局部状态改为 Command/Change/Projection 单一脊柱；
-- **应用边界**：从大型 Facade 改为显式 Dispatcher、UseCase 和 Ports；
-- **客户端模型**：从 SSR + hydration + JS 补丁的混合状态，改为 SSR 首屏 + 单一 Store + 协议 transport；
-- **信息架构**：从文件/资源浏览器改为围绕 Inbox、Search、Reader、Editor、Inspector 的知识工作台；
-- **设计系统**：从 Web 内嵌 CSS 和未接入的共享组件，改为 tokens 驱动、跨平台复用的真正 UI 层。
+- ✅ 「事实、事件、投影形成单一状态模型」 — =composition::Runtime= 接管引擎缓存与 watcher；CLI/MCP/HTTP/Web 复用同一 Runtime；protocol 已是 typed enum。
+- ◐ 「客户端运行模型不稳定」 — web 宿主双模式落地（SSR + axum API/MCP），但 wasm 客户端仍禁用 hydration，desktop 是初版 Workspace 视图，mobile 仍是 starter shell。
+- ◐ 「产品信息架构以资源列表为中心」 — 共享 Nz* 组件与 =ui::Backend= trait 落地，desktop Workspace 是首批非文件浏览器的工作面。
 
-最优先的下一步不是继续增加功能，而是完成 **Web 单一状态模型 + server-function 契约修复 + hydration 错误清零**。在此基础上，新的交互和 UI 才不会继续建立在不稳定的运行时之上。
+需要继续重考虑的：
+
+- **核心状态模型**：从多个局部状态改为 Command/Change/Projection 单一脊柱（M0.5/0.6 未变）；
+- **应用边界**：从大型 Facade 改为显式 Dispatcher、UseCase 和 Ports（API/Web 已委托，cli/handlers 仍存面模型）；
+- **客户端模型**：从 SSR + hydration + JS 补丁的混合状态，改为 SSR 首屏 + 单一 Store + 协议 transport（M3.5/mobile + wasm 客户端待 M4）；
+- **信息架构**：从文件/资源浏览器改为围绕 Inbox、Search、Reader、Editor、Inspector 的知识工作台（v2 UI 文档已定，落地进行中）；
+- **设计系统**：从 Web 内嵌 CSS 改为 tokens 驱动、跨平台复用的真正 UI 层（tokens 已抽出 + 共享，三端 link 同一 css，Nz 组件采纳进行中）。
+
+最优先的下一步不是继续增加功能，而是完成 **web =#[server]= 函数迁移到 =ui::Backend= trait** + **mobile HttpBackend 落地** + **wasm 客户端 hydration 修复**。在此基础上，新的交互和 UI 才不会继续建立在不稳定的运行时之上。
