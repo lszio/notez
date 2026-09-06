@@ -407,6 +407,11 @@ where
 {
     /// Build a facade with the default in-memory state.
     pub fn new(store: S) -> Self {
+        #[cfg(not(target_arch = "wasm32"))]
+        let card_service = super::card_executor::CardExecutionService::new(super::card_executor::CardCache::default())
+            .with_executor(std::sync::Arc::new(super::janet::JanetCardExecutor) as std::sync::Arc<dyn super::card_executor::CardExecutor>);
+        #[cfg(target_arch = "wasm32")]
+        let card_service = super::card_executor::CardExecutionService::new(super::card_executor::CardCache::default());
         Self {
             store,
             rule_engine: crate::domain::RuleEngine::default_rules(),
@@ -414,8 +419,7 @@ where
             source: None,
             #[cfg(not(target_arch = "wasm32"))]
             janet_executor: None,
-            card_service: super::card_executor::CardExecutionService::new(super::card_executor::CardCache::default())
-                .with_executor(std::sync::Arc::new(super::janet::JanetCardExecutor) as std::sync::Arc<dyn super::card_executor::CardExecutor>),
+            card_service,
             capability_catalog: crate::capability::CapabilityCatalog::with_builtins(),
             source_registry: crate::source::SourceRegistry::with_builtins(),
             journal: Box::new(crate::domain::journal::NullJournal::default()),
@@ -425,14 +429,19 @@ where
     }
     /// Construct an `Engine` bound to an explicit `SourceContext`.
     pub fn with_source(store: S, source: SourceContext) -> Self {
+        #[cfg(not(target_arch = "wasm32"))]
+        let card_service = super::card_executor::CardExecutionService::new(super::card_executor::CardCache::default())
+            .with_executor(std::sync::Arc::new(super::janet::JanetCardExecutor) as std::sync::Arc<dyn super::card_executor::CardExecutor>);
+        #[cfg(target_arch = "wasm32")]
+        let card_service = super::card_executor::CardExecutionService::new(super::card_executor::CardCache::default());
         Self {
             source: Some(source),
             store,
             rule_engine: crate::domain::RuleEngine::default_rules(),
             format_parsers: Vec::new(),
+            #[cfg(not(target_arch = "wasm32"))]
             janet_executor: None,
-            card_service: super::card_executor::CardExecutionService::new(super::card_executor::CardCache::default())
-                .with_executor(std::sync::Arc::new(super::janet::JanetCardExecutor) as std::sync::Arc<dyn super::card_executor::CardExecutor>),
+            card_service,
             capability_catalog: crate::capability::CapabilityCatalog::with_builtins(),
             source_registry: crate::source::SourceRegistry::with_builtins(),
             journal: Box::new(crate::domain::journal::NullJournal::default()),
@@ -469,14 +478,19 @@ where
     /// third-party compositions that want to start from an empty
     /// registry or one with custom factories pre-registered.
     pub fn with_registry(store: S, registry: crate::source::SourceRegistry) -> Self {
+        #[cfg(not(target_arch = "wasm32"))]
+        let card_service = super::card_executor::CardExecutionService::new(super::card_executor::CardCache::default())
+            .with_executor(std::sync::Arc::new(super::janet::JanetCardExecutor) as std::sync::Arc<dyn super::card_executor::CardExecutor>);
+        #[cfg(target_arch = "wasm32")]
+        let card_service = super::card_executor::CardExecutionService::new(super::card_executor::CardCache::default());
         Self {
             source: None,
             store,
             rule_engine: crate::domain::RuleEngine::default_rules(),
             format_parsers: Vec::new(),
+            #[cfg(not(target_arch = "wasm32"))]
             janet_executor: None,
-            card_service: super::card_executor::CardExecutionService::new(super::card_executor::CardCache::default())
-                .with_executor(std::sync::Arc::new(super::janet::JanetCardExecutor) as std::sync::Arc<dyn super::card_executor::CardExecutor>),
+            card_service,
             capability_catalog: crate::capability::CapabilityCatalog::with_builtins(),
             source_registry: registry,
             journal: Box::new(crate::domain::journal::NullJournal::default()),
