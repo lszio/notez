@@ -10,18 +10,21 @@ use crate::Heading;
 ///   (`<span class="todo todo-todo">TODO</span>`) and an optional priority
 ///   badge (`<span class="prio">[#A]</span>`).
 /// - `#+TITLE: x` becomes an `<h1>` only when the document has no level-1
-///   heading; every other `#+KEY: value` line is dropped.
+///   heading. Every other `#+KEY: value` line is dropped from its position
+///   and hoisted to the top of the body as a `<dl class="meta">` list.
 /// - Paragraphs: consecutive non-blank lines join into one `<p>`.
 /// - Lists (`-`, `+`, indented `*`, `1.`, `1)`) nested by indentation, with
 ///   `[ ]` / `[x]` / `[-]` checkboxes.
 /// - Inline emphasis (`*bold*`, `/italic/`, `_underline_`, `+strike+`),
-///   code/verbatim (`=code=`, `~code~`) and `[[target][desc]]` links.
+///   code/verbatim (`=code=`, `~code~`), `[[target][desc]]` links and
+///   `<<target>>` / `<<<radio>>>` targets.
 ///   Delimiters follow Emacs Org's flanking rules, so `snake_case`,
 ///   `path/to/file`, `https://example.com/` and `对象/块/关系` stay literal.
 /// - Image embeds for a paragraph that is exactly one image link.
 /// - `#+BEGIN_SRC` / `EXAMPLE` / `VERSE` / `QUOTE` / `CENTER` blocks.
 /// - Tables (`| a | b |`) with a `|---|` separator marking the header row.
-/// - `:PROPERTIES:`..`:END:` drawers, `# ` comments and `-----` rules.
+/// - `:PROPERTIES:`..`:END:` drawers, `# ` comments and rules made of five or
+///   more `-`, `_` or `=` characters.
 ///
 /// Every user-visible character is HTML-escaped; link `href`/`src` values are
 /// emitted verbatim (metacharacters escaped) so the caller can rewrite
@@ -35,6 +38,7 @@ pub fn render_org_html(src: &str) -> (String, Vec<Heading>) {
         has_h1,
         title_emitted: false,
     };
+    renderer.emit_metadata(&collect_metadata(&lines));
     renderer.render_blocks(&lines);
     (renderer.out, renderer.outline)
 }
@@ -108,6 +112,22 @@ impl Renderer {
             }
             i = self.render_paragraph(lines, i);
         }
+    }
+
+    /// Hoist `#+KEY: value` metadata into one `<dl>` at the top of the body.
+    fn emit_metadata(&mut self, metadata: &[(String, String)]) {
+        if metadata.is_empty() {
+            return;
+        }
+        self.out.push_str("<dl class=\"meta\">");
+        for (key, value) in metadata {
+            self.out.push_str("<dt>");
+            self.out.push_str(&html_escape(key));
+            self.out.push_str("</dt><dd>");
+            self.out.push_str(&html_escape(value));
+            self.out.push_str("</dd>");
+        }
+        self.out.push_str("</dl>\n");
     }
 
     fn emit_heading(
@@ -513,6 +533,43 @@ fn title_meta_value(rest: &str) -> Option<String> {
     }
 }
 
+/// Collect `#+KEY: value` metadata (excluding `TITLE` and block markers) in
+/// document order. `#+` lines inside literal blocks are content, not metadata.
+fn collect_metadata(lines: &[&str]) -> Vec<(String, String)> {
+    let mut metadata = Vec::new();
+    let mut literal: Option<String> = None;
+    for line in lines {
+        if let Some(keyword) = &literal {
+            if parse_end_keyword(line).as_deref() == Some(keyword.as_str()) {
+                literal = None;
+            }
+            continue;
+        }
+        if let Some(open) = parse_begin_block(line) {
+            if open.kind != BlockKind::Quote && open.kind != BlockKind::Center {
+                literal = Some(open.keyword.clone());
+            }
+            continue;
+        }
+        let Some(rest) = line.trim_start().strip_prefix("#+") else {
+            continue;
+        };
+        let Some((key, value)) = rest.split_once(':') else {
+            continue;
+        };
+        let key = key.trim();
+        if key.is_empty() || key.eq_ignore_ascii_case("title") {
+            continue;
+        }
+        let upper = key.to_ascii_uppercase();
+        if upper.starts_with("BEGIN_") || upper.starts_with("END_") {
+            continue;
+        }
+        metadata.push((upper, value.trim().to_string()));
+    }
+    metadata
+}
+
 fn skip_drawer(lines: &[&str], start: usize) -> usize {
     let mut i = start + 1;
     while i < lines.len() {
@@ -572,9 +629,17 @@ fn is_block_start(line: &str) -> bool {
     is_horizontal_rule(line)
 }
 
+/// A rule is five or more identical `-`, `_` or `=` characters.
 fn is_horizontal_rule(line: &str) -> bool {
     let trimmed = line.trim();
-    trimmed.len() >= 5 && trimmed.chars().all(|c| c == '-')
+    if trimmed.len() < 5 {
+        return false;
+    }
+    let mut chars = trimmed.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    matches!(first, '-' | '_' | '=') && chars.all(|c| c == first)
 }
 
 // ---------------------------------------------------------------------------
@@ -781,6 +846,34 @@ fn inline(text: &str) -> String {
             }
         }
 
+        if c == '<' && chars.get(i + 1) == Some(&'<') {
+            if chars.get(i + 2) == Some(&'<') {
+                if let Some(end) = find_seq(&chars, i + 3, &['>', '>', '>']) {
+                    let text: String = chars[i + 3..end].iter().collect();
+                    let text = text.trim();
+                    if !text.is_empty() {
+                        out.push_str("<span class=\"radio-target\" id=\"");
+                        out.push_str(&slugify(text));
+                        out.push_str("\">");
+                        out.push_str(&html_escape(text));
+                        out.push_str("</span>");
+                        i = end + 3;
+                        continue;
+                    }
+                }
+            } else if let Some(end) = find_seq(&chars, i + 2, &['>', '>']) {
+                let text: String = chars[i + 2..end].iter().collect();
+                let text = text.trim();
+                if !text.is_empty() {
+                    out.push_str("<span class=\"target\">");
+                    out.push_str(&html_escape(text));
+                    out.push_str("</span>");
+                    i = end + 2;
+                    continue;
+                }
+            }
+        }
+
         if matches!(c, '=' | '~') && emphasis_open_ok(&chars, i) {
             if let Some(end) = find_emphasis_close(&chars, i, c) {
                 let inner: String = chars[i + 1..end].iter().collect();
@@ -862,6 +955,15 @@ fn find_emphasis_close(chars: &[char], open: usize, delimiter: char) -> Option<u
         i += 1;
     }
     None
+}
+
+/// First index of `needle` in `chars` at or after `from`.
+fn find_seq(chars: &[char], from: usize, needle: &[char]) -> Option<usize> {
+    if needle.is_empty() || from > chars.len() {
+        return None;
+    }
+    (from..=chars.len().saturating_sub(needle.len()))
+        .find(|index| chars[*index..*index + needle.len()] == *needle)
 }
 
 struct Link {
@@ -1005,12 +1107,18 @@ fn is_cjk(c: char) -> bool {
         | '\u{20000}'..='\u{2FA1F}')
 }
 
+/// Slugify a heading or target for use as an HTML `id`.
+///
+/// Alphanumerics are kept (CJK included, lowercased), runs of anything else
+/// collapse to a single `-`, and an id is never empty.
 fn slugify(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     let mut last_dash = true;
     for c in s.chars() {
-        if c.is_ascii_alphanumeric() {
-            out.push(c.to_ascii_lowercase());
+        if c.is_alphanumeric() {
+            for lower in c.to_lowercase() {
+                out.push(lower);
+            }
             last_dash = false;
         } else if !last_dash {
             out.push('-');
@@ -1019,6 +1127,9 @@ fn slugify(s: &str) -> String {
     }
     while out.ends_with('-') {
         out.pop();
+    }
+    if out.is_empty() {
+        out.push_str("section");
     }
     out
 }
@@ -1304,6 +1415,79 @@ mod tests {
         assert!(!html.contains("<p>-----</p>"), "{html}");
         assert!(html.contains("<p>before</p>"), "{html}");
         assert!(html.contains("<p>after</p>"), "{html}");
+    }
+
+    #[test]
+    fn horizontal_rules_accept_dashes_underscores_and_equals() {
+        for rule in ["-----", "________________________", "===================="] {
+            let html = render(&format!("before\n\n{rule}\n\nafter\n"));
+            assert!(html.contains("<hr>"), "rule {rule}: {html}");
+            assert!(!html.contains(&format!("<p>{rule}</p>")), "{html}");
+            assert!(html.contains("<p>after</p>"), "{html}");
+        }
+
+        let html = render("---\n\n- item\n");
+        assert!(!html.contains("<hr>"), "{html}");
+        assert!(html.contains("<li>item</li>"), "{html}");
+    }
+
+    #[test]
+    fn angle_bracket_targets_render_spans() {
+        let html = render("see <<target>> and <<<radio>>>\n");
+        assert!(html.contains("<span class=\"target\">target</span>"), "{html}");
+        assert!(
+            html.contains("<span class=\"radio-target\" id=\"radio\">radio</span>"),
+            "{html}"
+        );
+        assert!(!html.contains("&lt;&lt;"), "{html}");
+
+        let (html, outline) = render_org_html("* <<sec-one>> 章节\n");
+        assert!(html.contains("<span class=\"target\">sec-one</span>"), "{html}");
+        assert!(!html.contains("&lt;&lt;"), "{html}");
+        assert_eq!(outline[0].anchor, "sec-one-章节");
+
+        let html = render("<<<中文目标>>>\n");
+        assert!(
+            html.contains("<span class=\"radio-target\" id=\"中文目标\">中文目标</span>"),
+            "{html}"
+        );
+    }
+
+    #[test]
+    fn slugify_keeps_cjk_and_never_returns_empty() {
+        let (html, outline) = render_org_html("* 中文 标题\n");
+        assert!(html.contains("id=\"中文-标题\""), "{html}");
+        assert_eq!(outline[0].anchor, "中文-标题");
+
+        let (html, outline) = render_org_html("* !!!\n");
+        assert!(html.contains("id=\"section\""), "{html}");
+        assert_eq!(outline[0].anchor, "section");
+    }
+
+    #[test]
+    fn metadata_is_hoisted_into_one_dl_at_the_top() {
+        let html = render("#+AUTHOR: 李\n#+DATE: 2026-08-02\n#+OPTIONS: toc:nil\n\nbody\n");
+        assert!(html.starts_with("<dl class=\"meta\">"), "{html}");
+        assert!(
+            html.contains(
+                "<dt>AUTHOR</dt><dd>李</dd><dt>DATE</dt><dd>2026-08-02</dd><dt>OPTIONS</dt><dd>toc:nil</dd>"
+            ),
+            "{html}"
+        );
+        assert!(html.contains("</dl>\n<p>body</p>"), "{html}");
+        assert_eq!(html.matches("<dl").count(), 1, "{html}");
+
+        let html = render("#+title: 我的笔记\n#+date: 2026-08-02\n\nbody\n");
+        assert!(html.contains("<h1 id=\"我的笔记\">我的笔记</h1>"), "{html}");
+        assert!(html.contains("<dt>DATE</dt><dd>2026-08-02</dd>"), "{html}");
+        assert!(!html.contains("TITLE"), "{html}");
+
+        let html = render("#+BEGIN_SRC\n#+AUTHOR: nope\n#+END_SRC\n");
+        assert!(!html.contains("<dl"), "{html}");
+        assert!(html.contains("#+AUTHOR: nope"), "{html}");
+
+        let html = render("body only\n");
+        assert!(!html.contains("<dl"), "{html}");
     }
 
     #[test]
