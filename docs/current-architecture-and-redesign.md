@@ -147,15 +147,18 @@ Protocol Request
   -> AuditLog
 ```
 
-目前已接入 Projector 的重要路径包括 resource upsert/delete 和扫描中的 projection replacement。其它写路径仍存在直接写 `ProjectionWrite` 的路径，尤其是：
+2026-09-07 复核（HEAD 0a69336）：上列路径已全部改走 `Projector` + `Journaling`
+（task.rs:133-141、link.rs:81-90、attachment.rs:95/172、sync.rs:51/129、scan.rs 四处、
+resource.rs:31/57、writeback 经 service.rs:975）。写脊柱的剩余缺口收窄为三个：
 
-- 任务状态变更；
-- 链接解析和诊断写入；
-- attachment segment 写入；
-- sync conflict 写入；
-- 某些 source/writeback 路径。
+1. **revision 前置是 opt-in**：`effective_expected`（dispatcher.rs:49-57）把空/缺失的
+   `expected_revision` 过滤成"无前置条件"，而 CLI 全部写命令硬编码 `expected_revision: None`
+   （handlers/{resource,task,source,janet}.rs）——并发覆盖窗口仍在（0.6.a）。
+2. **journal 无回放**：`rebuild()` 仍是 clear + 全量重扫（service.rs:1067），
+   `since(cursor>0)` 无生产读者；journal 现有读者只有 activity 流（web activity 页）。
+3. **sync 裁决与 push 失败不产生可重放事件**（见 §3.5 与阶段 C）。
 
-因此当前不能把“Change journal 是所有状态的唯一脊柱”当成已经完成的事实。它是正在形成的结构。
+因此"Change journal 是唯一脊柱"在投影写侧已成立，在"回放/增量"侧尚未成立。
 
 ### 3.5 当前同步链路
 
@@ -932,4 +935,4 @@ HTTP request
 - **信息架构**：从文件/资源浏览器改为围绕 Inbox、Search、Reader、Editor、Inspector 的知识工作台（v2 UI 文档已定，落地进行中）；
 - **设计系统**：从 Web 内嵌 CSS 改为 tokens 驱动、跨平台复用的真正 UI 层（tokens 已抽出 + 共享，三端 link 同一 css，Nz 组件采纳进行中）。
 
-最优先的下一步不是继续增加功能，而是完成 **web =#[server]= 函数迁移到 =ui::Backend= trait** + **mobile HttpBackend 落地** + **wasm 客户端 hydration 修复**。在此基础上，新的交互和 UI 才不会继续建立在不稳定的运行时之上。
+最优先的下一步（2026-09-07 复核）：① 0.6.a 让 CLI 写命令携带真实 =expected_revision=（dispatcher 端空值旁路关闭）；② web 剩余 28/31 个 =#[server]= 函数迁至 =ui::Backend=（trait 现仅 3 方法，list/scan/get_resource 已桥接）；③ wasm 客户端 hydration 修复（=main.rs:98 =hydrate(false)= 仍生效）。mobile HttpBackend 已于 000c771 落地，不再是待办。
