@@ -468,8 +468,8 @@ fn resolve_file_path(source_root: &Path, locator: &str) -> PathBuf {
 }
 
 fn raw_attachment_url(source_root: &Path, locator: &str) -> String {
-    let encoded = crate::ui::urls::encode_space(&source_root.to_string_lossy());
-    crate::ui::urls::raw_url(&encoded, locator)
+    let encoded = crate::data::urls::encode_space(&source_root.to_string_lossy());
+    crate::data::urls::raw_url(&encoded, locator)
 }
 
 // ----- tests -----------------------------------------------------------------

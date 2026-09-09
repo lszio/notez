@@ -29,6 +29,9 @@ fn main() {
 fn App() -> Element {
     rsx! {
         document::Link { rel: "stylesheet", href: MAIN_CSS }
+        // The workspace shell/tree/document styles are shared with the
+        // web surface (packages/ui/assets/workspace.css).
+        style { dangerous_inner_html: ui::WORKSPACE_CSS }
         Router::<Route> {}
     }
 }

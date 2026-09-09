@@ -1,150 +1,133 @@
-//! Minimal server-rendered workspace UI.
+//! Server-side data access and the workspace's utility endpoints.
 //!
-//! Design goals (see the session brief): start from a usable reader —
-//! browse a space, read a note, edit and save it, preview attachments
-//! — with a SilverBullet-style shell: one narrow sidebar listing the
-//! pages, one content column, no client framework.
+//! The Dioxus app in [`crate::app`] renders every page; this module
+//! owns the non-rendering HTTP surface plus the data layer the
+//! components read during SSR:
 //!
-//! Everything is plain HTTP: `GET` renders, `POST` mutates, every
-//! interaction is a normal navigation or form submit. The only
-//! JavaScript is the page filter, the editor shortcuts and the
-//! unsaved-changes guard.
+//! * [`space`] — open a space, list files, read/save documents;
+//! * [`urls`] — space/locator encoding and URL builders;
+//! * [`html`] — escaping and relative-URL rewriting for rendered bodies;
+//! * the router below — raw bytes, form writes, live preview, and
+//!   status endpoints the pages call from small JS islands.
 //!
-//! Route table:
-//!
-//! ```text
-//! GET  /                        space picker (or redirect to the only space)
-//! GET  /app.css                 embedded stylesheet
-//! POST /register                register a directory as a space
-//! GET  /s/{space}               space index (README/index page or page list)
-//! GET  /s/{space}/{*locator}    note view, `?edit=1` for the editor,
-//!                               attachment preview for non-documents
-//! GET  /raw/{space}/{*locator}  raw bytes (images, PDFs, downloads)
-//! GET  /new/{space}             new-note form
-//! POST /new/{space}             create the note and open the editor
-//! POST /save/{space}            save a document (revision guarded)
-//! POST /scan/{space}            rescan the space
-//! POST /api/janet/eval          restricted Janet evaluation (debug)
-//! ```
+//! Every read goes through the composition `Runtime` engine cache and
+//! every write through the protocol spine, so the UI, the HTTP API and
+//! MCP observe one state.
 
-mod page;
-mod space;
+pub mod html;
+pub mod pending;
+pub mod picker;
+pub mod space;
 pub mod urls;
 
 pub use space::{Entry, Space, UiError};
 
 use axum::extract::{Form, Path, Query};
 use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
-use axum::response::{IntoResponse, Redirect, Response};
+use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::Router;
 use serde::Deserialize;
 
 use crate::server::{SaveFailure, SaveOutcome};
 
-/// Cache-busting token for the embedded stylesheet. Bump on edit.
-pub const STYLE_HASH: &str = "sb-1";
+/// Cache-busting token for the embedded stylesheet/script, derived from
+/// their contents at build time (see `build.rs`).
+pub const ASSET_VERSION: &str = env!("NOTEZ_ASSET_VERSION");
 
-const STYLE: &str = include_str!("style.css");
+/// Shared workspace stylesheet (owned by `packages/ui`).
+const STYLE: &str = ui::WORKSPACE_CSS;
+const SCRIPT: &str = include_str!("app.js");
 
 /// Maximum accepted form body (a long note is still well under this).
 const MAX_BODY: usize = 32 * 1024 * 1024;
 
-/// UI routes. Mounted beside the protocol API and MCP routers.
+/// Utility routes, mounted beside the Dioxus SSR app.
+///
+/// GET page routes are intentionally absent: `dioxus::server::router`
+/// renders those through [`crate::app`].
 pub fn router() -> Router {
     Router::new()
-        .route("/", get(home))
+        .route("/", get(home_get))
         .route("/app.css", get(stylesheet))
+        .route("/app.js", get(script))
         .route("/favicon.ico", get(|| async { StatusCode::NO_CONTENT }))
-        .route("/register", post(register_post))
-        .route("/s/{encoded}", get(space_index))
-        .route("/s/{encoded}/{*locator}", get(doc_get))
         .route("/raw/{encoded}/{*locator}", get(raw_get))
-        .route("/new/{encoded}", get(new_get).post(new_post))
+        .route("/register", post(register_post))
         .route("/save/{encoded}", post(save_post))
         .route("/scan/{encoded}", post(scan_post))
+        .route("/new/{encoded}", post(new_post))
+        .route("/api/render", post(render_post))
+        .route("/api/space-status", get(space_status_get))
+        .route("/api/janet/eval", post(crate::routes::janet_eval))
         .layer(axum::extract::DefaultBodyLimit::max(MAX_BODY))
         .layer(axum::middleware::from_fn(crate::routes::mutation_auth_middleware))
 }
 
 // ------------------------------------------------------------ responses
 
-fn html(status: StatusCode, body: String) -> Response {
+/// `/` — redirect into the configured default space, else show the picker.
+async fn home_get() -> Response {
+    if let Some(space) = space::default_space() {
+        return redirect(&urls::space_url(&space.encoded));
+    }
     (
-        status,
-        [(
-            header::CONTENT_TYPE,
-            HeaderValue::from_static("text/html; charset=utf-8"),
-        )],
-        body,
+        StatusCode::OK,
+        [(header::CONTENT_TYPE, HeaderValue::from_static("text/html; charset=utf-8"))],
+        picker::picker_page(&space::list_spaces()),
     )
         .into_response()
-}
-
-fn page_response(
-    status: StatusCode,
-    title: &str,
-    space: Option<&Space>,
-    current: Option<&str>,
-    entries: &[Entry],
-    topbar: &str,
-    body: &str,
-) -> Response {
-    html(
-        status,
-        page::shell(title, space, current, entries, topbar, body),
-    )
-}
-
-impl IntoResponse for UiError {
-    fn into_response(self) -> Response {
-        let status = self.status();
-        page_response(
-            status,
-            "error",
-            None,
-            None,
-            &[],
-            &format!("<span class=\"title\">{}</span>", page::esc(self.message())),
-            &page::error_page(self.message()),
-        )
-    }
 }
 
 async fn stylesheet() -> Response {
     (
         StatusCode::OK,
         [
-            (
-                header::CONTENT_TYPE,
-                HeaderValue::from_static("text/css; charset=utf-8"),
-            ),
-            (
-                header::CACHE_CONTROL,
-                HeaderValue::from_static("public, max-age=86400"),
-            ),
+            (header::CONTENT_TYPE, HeaderValue::from_static("text/css; charset=utf-8")),
+            (header::CACHE_CONTROL, HeaderValue::from_static("public, max-age=86400")),
         ],
         STYLE,
     )
         .into_response()
 }
 
-// ------------------------------------------------------------ handlers
-
-async fn home() -> Response {
-    if let Some(space) = space::default_space() {
-        return Redirect::to(&urls::space_url(&space.encoded)).into_response();
-    }
-    page_response(
+async fn script() -> Response {
+    (
         StatusCode::OK,
-        "spaces",
-        None,
-        None,
-        &[],
-        "<span class=\"title\">notez</span>",
-        &page::picker(&space::list_spaces(), None),
+        [
+            (
+                header::CONTENT_TYPE,
+                HeaderValue::from_static("application/javascript; charset=utf-8"),
+            ),
+            (header::CACHE_CONTROL, HeaderValue::from_static("public, max-age=86400")),
+        ],
+        SCRIPT,
     )
+        .into_response()
 }
+
+impl IntoResponse for UiError {
+    fn into_response(self) -> Response {
+        let status = self.status();
+        let body = format!(
+            "<!doctype html><html><head><meta charset=\"utf-8\"><title>{}</title>\
+             <link rel=\"stylesheet\" href=\"/app.css?v={}\"></head>\
+             <body><main class=\"content\"><div class=\"banner err\">{}</div>\
+             <p class=\"edit-hint\"><a href=\"/\">back to the space picker</a></p></main></body></html>",
+            html::esc(self.message()),
+            ASSET_VERSION,
+            html::esc(self.message()),
+        );
+        (
+            status,
+            [(header::CONTENT_TYPE, HeaderValue::from_static("text/html; charset=utf-8"))],
+            body,
+        )
+            .into_response()
+    }
+}
+
+// ------------------------------------------------------------ handlers
 
 #[derive(Deserialize)]
 struct RegisterForm {
@@ -153,138 +136,17 @@ struct RegisterForm {
     name: Option<String>,
 }
 
-async fn register_post(Form(form): Form<RegisterForm>) -> Result<Redirect, UiError> {
+async fn register_post(Form(form): Form<RegisterForm>) -> Result<Response, UiError> {
     let path = crate::routes::register_source(&form.path, form.name.as_deref())
         .map_err(UiError::BadRequest)?;
     let root = path.to_string_lossy().into_owned();
-    Ok(Redirect::to(&urls::space_url(&urls::encode_space(&root))))
-}
-
-async fn space_index(Path(encoded): Path<String>) -> Result<Response, UiError> {
-    let space = space::open(&encoded)?;
-    let entries = space::entries(&space.root)?;
-
-    // A README/index page at the space root is the landing document.
-    let landing = ["README.org", "README.md", "index.org", "index.md"]
-        .into_iter()
-        .find(|name| space.root.join(name).is_file());
-
-    let (title, body) = match landing {
-        Some(locator) => {
-            let (content, _rev) = space::read_doc(&space.root, locator)?;
-            let title = space::doc_title(&space.root, locator, &content);
-            let row = doc_row(locator, &title, "document");
-            let rendered = crate::body::render_body(&row, &space.root);
-            let rendered = page::rewrite_local_urls(&rendered, &encoded, "");
-            (
-                title,
-                format!(
-                    "<article class=\"doc\">{rendered}</article><hr><p class=\"edit-hint\"><a href=\"{edit}\">edit {locator}</a></p>",
-                    edit = urls::edit_url(&encoded, locator),
-                ),
-            )
-        }
-        None => {
-            let body = format!(
-                "<h1>{}</h1><p class=\"edit-hint\">{} files · {} documents</p>{}",
-                page::esc(&space.name),
-                entries.len(),
-                entries.iter().filter(|e| e.editable()).count(),
-                page::page_list(&space, &entries),
-            );
-            (space.name.clone(), body)
-        }
-    };
-
-    Ok(page_response(
-        StatusCode::OK,
-        &title,
-        Some(&space),
-        None,
-        &entries,
-        &page::topbar_space(&space, &title),
-        &body,
-    ))
-}
-
-#[derive(Deserialize, Default)]
-struct ViewQuery {
-    #[serde(default)]
-    edit: Option<String>,
-    #[serde(default)]
-    saved: Option<String>,
-    #[serde(default)]
-    err: Option<String>,
-}
-
-async fn doc_get(
-    Path((encoded, locator)): Path<(String, String)>,
-    Query(query): Query<ViewQuery>,
-) -> Result<Response, UiError> {
-    let space = space::open(&encoded)?;
-    let locator = urls::decode_locator(locator.trim_start_matches('/'));
-    let full = safe_join(&space.root, &locator)?;
-    if !full.is_file() {
-        return Err(UiError::NotFound(format!("not found: {locator}")));
-    }
-    let entries = space::entries(&space.root)?;
-    let is_doc = is_doc_locator(&locator);
-
-    if !is_doc {
-        let title = std::path::Path::new(&locator)
-            .file_name()
-            .and_then(|s| s.to_str())
-            .unwrap_or(&locator)
-            .to_string();
-        let preview = crate::body::render_path(&full, &title, &space.root);
-        let doc_dir = urls::split_locator(&locator).0;
-        let preview = page::rewrite_local_urls(&preview, &encoded, doc_dir);
-        return Ok(page_response(
-            StatusCode::OK,
-            &title,
-            Some(&space),
-            Some(&locator),
-            &entries,
-            &page::topbar_file(&space, &locator, &title),
-            &page::file_view(&preview, ""),
-        ));
-    }
-
-    let (content, revision) = space::read_doc(&space.root, &locator)?;
-    let title = space::doc_title(&space.root, &locator, &content);
-    let notice = saved_notice(query.saved.as_deref(), query.err.as_deref());
-
-    if query.edit.as_deref() == Some("1") {
-        return Ok(page_response(
-            StatusCode::OK,
-            &title,
-            Some(&space),
-            Some(&locator),
-            &entries,
-            &page::topbar_doc(&space, &locator, &title, true),
-            &page::editor(&space, &locator, &revision, &content, &notice),
-        ));
-    }
-
-    let row = doc_row(&locator, &title, "document");
-    let rendered = crate::body::render_body(&row, &space.root);
-    let doc_dir = urls::split_locator(&locator).0;
-    let rendered = page::rewrite_local_urls(&rendered, &encoded, doc_dir);
-    Ok(page_response(
-        StatusCode::OK,
-        &title,
-        Some(&space),
-        Some(&locator),
-        &entries,
-        &page::topbar_doc(&space, &locator, &title, false),
-        &page::doc_view(&space, &locator, &rendered, &notice),
-    ))
+    Ok(redirect(&urls::space_url(&urls::encode_space(&root))))
 }
 
 async fn raw_get(Path((encoded, locator)): Path<(String, String)>) -> Result<Response, UiError> {
     let space = space::open(&encoded)?;
     let locator = urls::decode_locator(locator.trim_start_matches('/'));
-    let full = safe_join(&space.root, &locator)?;
+    let full = space::safe_join(&space.root, &locator)?;
     if !full.is_file() {
         return Err(UiError::NotFound(format!("not found: {locator}")));
     }
@@ -327,81 +189,70 @@ async fn save_post(
 ) -> Result<Response, UiError> {
     let space = space::open(&encoded)?;
     let locator = form.locator.trim().to_string();
-    let full = safe_join(&space.root, &locator)?;
+    let full = space::safe_join(&space.root, &locator)?;
     if !full.is_file() {
         return Err(UiError::NotFound(format!("not found: {locator}")));
     }
-    let entries = space::entries(&space.root)?;
-    let title = space::doc_title(&space.root, &locator, &form.content);
-
     let outcome = space::save_doc(&space.root, &locator, &form.revision, &form.content)?;
     match outcome {
-        SaveOutcome::Saved { revision, .. } => Ok(Redirect::to(&format!(
+        SaveOutcome::Saved { revision, .. } => Ok(redirect(&format!(
             "{}?saved={}",
             urls::view_url(&encoded, &locator),
             urlencoding::encode(&revision)
-        ))
-        .into_response()),
+        ))),
         SaveOutcome::Failed(failure) => {
-            // Keep the user's text: re-render the editor with the
-            // current on-disk revision so a deliberate second save
-            // overwrites instead of silently losing the edit.
-            let (banner, revision) = match &failure {
-                SaveFailure::StaleRevision { actual, .. } => (
-                    page::banner(
-                        "warn",
-                        "The file changed on disk. Your text is kept; Save again overwrites the on-disk version.",
-                    ),
-                    actual.clone(),
-                ),
-                other => (page::banner("err", &page::save_failure_text(other)), form.revision.clone()),
+            // Keep the user's text: stash the submission and send the
+            // browser back to the editor, which restores it.
+            let (kind, revision) = match &failure {
+                SaveFailure::StaleRevision { actual, .. } => ("stale", actual.clone()),
+                _ => ("error", form.revision.clone()),
             };
-            Ok(page_response(
-                StatusCode::CONFLICT,
-                &title,
-                Some(&space),
-                Some(&locator),
-                &entries,
-                &page::topbar_doc(&space, &locator, &title, true),
-                &page::editor(&space, &locator, &revision, &form.content, &banner),
-            ))
+            let token = pending::stash(pending::PendingSave {
+                locator: locator.clone(),
+                content: form.content,
+                kind: kind.to_string(),
+                message: space::save_failure_text(&failure),
+                revision,
+            });
+            Ok(redirect(&format!(
+                "{}?edit=1&restore={token}",
+                urls::view_url(&encoded, &locator),
+            )))
         }
     }
 }
 
-async fn new_get(Path(encoded): Path<String>) -> Result<Response, UiError> {
+#[derive(Deserialize)]
+struct ScanForm {
+    #[serde(default)]
+    next: Option<String>,
+}
+
+async fn scan_post(
+    Path(encoded): Path<String>,
+    Form(form): Form<ScanForm>,
+) -> Result<Response, UiError> {
     let space = space::open(&encoded)?;
-    let entries = space::entries(&space.root)?;
-    let body = format!(
-        r#"<h1>New note</h1>
-<form method="post" action="{action}" class="picker">
-<input type="text" name="name" placeholder="notes/my-idea" autocomplete="off" spellcheck="false" autofocus>
-<button class="btn primary" type="submit">Create</button>
-</form>
-<p class="edit-hint">Path is relative to <code>{root}</code>. <code>.md</code> is appended when no extension is given.</p>"#,
-        action = urls::new_url(&encoded),
-        root = page::esc(&space.root.to_string_lossy()),
-    );
-    Ok(page_response(
-        StatusCode::OK,
-        "new note",
-        Some(&space),
-        None,
-        &entries,
-        &page::topbar_space(&space, "New note"),
-        &body,
-    ))
+    space::scan(&space.root)?;
+    // Return the user where they were; only local paths are honoured.
+    let target = form
+        .next
+        .filter(|n| n.starts_with('/') && !n.starts_with("//"))
+        .unwrap_or_else(|| urls::space_url(&encoded));
+    Ok(redirect(&target))
 }
 
 #[derive(Deserialize)]
 struct NewForm {
     name: String,
+    #[serde(default)]
+    body: Option<String>,
 }
 
 async fn new_post(
     Path(encoded): Path<String>,
     Form(form): Form<NewForm>,
-) -> Result<Redirect, UiError> {
+) -> Result<Response, UiError> {
     let space = space::open(&encoded)?;
     let locator = space::sanitize_new_locator(&form.name)?;
     let title = space::slugify(
@@ -410,95 +261,76 @@ async fn new_post(
             .and_then(|s| s.to_str())
             .unwrap_or("untitled"),
     );
-    space::create_doc(&space.root, &locator, &title)?;
-    Ok(Redirect::to(&urls::edit_url(&encoded, &locator)))
+    space::create_doc(&space.root, &locator, &title, form.body.as_deref())?;
+    Ok(redirect(&urls::edit_url(&encoded, &locator)))
 }
 
-async fn scan_post(Path(encoded): Path<String>) -> Result<Redirect, UiError> {
-    let space = space::open(&encoded)?;
-    space::scan(&space.root)?;
-    Ok(Redirect::to(&urls::space_url(&encoded)))
+/// Live-preview endpoint: render `content` exactly as the read page
+/// would, so the editor's preview pane and the saved page can never
+/// disagree (one renderer, one source of truth).
+#[derive(Deserialize)]
+struct RenderForm {
+    encoded: String,
+    locator: String,
+    content: String,
 }
 
-// ------------------------------------------------------------ helpers
-
-fn is_doc_locator(locator: &str) -> bool {
-    matches!(
-        std::path::Path::new(locator)
-            .extension()
-            .and_then(|e| e.to_str())
-            .map(|e| e.to_ascii_lowercase())
-            .as_deref(),
-        Some("md" | "markdown" | "org")
+async fn render_post(Form(form): Form<RenderForm>) -> Result<Response, UiError> {
+    let space = space::open(&form.encoded)?;
+    let locator = form.locator.trim().to_string();
+    let _ = space::safe_join(&space.root, &locator)?;
+    let html = space::render_document(&space, &locator, &form.content)?;
+    Ok((
+        StatusCode::OK,
+        [(header::CONTENT_TYPE, HeaderValue::from_static("text/html; charset=utf-8"))],
+        html,
     )
+        .into_response())
 }
 
-/// Join `locator` onto `root` and refuse anything that escapes the
-/// space (absolute paths, `..`, symlinks pointing outside).
-fn safe_join(root: &std::path::Path, locator: &str) -> Result<std::path::PathBuf, UiError> {
-    if locator.is_empty() || locator.starts_with('/') {
-        return Err(UiError::BadRequest("empty or absolute path".into()));
-    }
-    for seg in locator.split('/') {
-        if seg == ".." || seg == "." || seg.is_empty() {
-            return Err(UiError::BadRequest(format!("invalid path segment `{seg}`")));
-        }
-    }
-    let full = root.join(locator);
-    let canonical_root = std::fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
-    let canonical_full = std::fs::canonicalize(&full).unwrap_or_else(|_| full.clone());
-    if !canonical_full.starts_with(&canonical_root) {
-        return Err(UiError::BadRequest("path escapes the space".into()));
-    }
-    Ok(full)
+#[derive(Deserialize)]
+struct StatusQuery {
+    encoded: String,
 }
 
-fn doc_row(locator: &str, title: &str, kind: &str) -> crate::model::ResourceRow {
-    crate::model::ResourceRow {
-        ref_str: String::new(),
-        kind: kind.to_string(),
-        title: title.to_string(),
-        source_id: String::new(),
-        locator: locator.to_string(),
-        object_id: String::new(),
-        revision: String::new(),
-        properties: std::collections::BTreeMap::new(),
-        body_html: String::new(),
-        raw_content: String::new(),
-    }
+/// Cheap change fingerprint for the space + watcher state, polled by
+/// the page to surface "changed on disk — reload" without a full
+/// re-render.
+async fn space_status_get(Query(query): Query<StatusQuery>) -> Result<Response, UiError> {
+    let space = space::open(&query.encoded)?;
+    let (fingerprint, files) = space::fingerprint(&space.root);
+    let watching = crate::routes::GLOBAL_WATCH.status(&space.root).is_some();
+    Ok(axum::Json(serde_json::json!({
+        "fingerprint": fingerprint,
+        "files": files,
+        "watching": watching,
+    }))
+    .into_response())
 }
 
-fn saved_notice(saved: Option<&str>, err: Option<&str>) -> String {
-    if let Some(revision) = saved {
-        let short = urlencoding::decode(revision)
-            .map(|c| c.into_owned())
-            .unwrap_or_else(|_| revision.to_string());
-        return page::banner("ok", &format!("Saved · {}", &short[..short.len().min(12)]));
-    }
-    if let Some(err) = err {
-        return page::banner("err", err);
-    }
-    String::new()
+fn redirect(location: &str) -> Response {
+    (
+        StatusCode::SEE_OTHER,
+        [(header::LOCATION, HeaderValue::from_str(location).unwrap())],
+    )
+        .into_response()
 }
-
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn doc_locators_are_recognized() {
-        assert!(is_doc_locator("a/b.md"));
-        assert!(is_doc_locator("a/B.ORG"));
-        assert!(!is_doc_locator("a/b.pdf"));
-        assert!(!is_doc_locator("noext"));
+    fn asset_version_is_part_of_the_asset_urls() {
+        assert!(!ASSET_VERSION.is_empty());
+        assert!(STYLE.contains(".sidebar"));
+        assert!(SCRIPT.contains("addEventListener"));
     }
 
     #[test]
-    fn safe_join_rejects_escapes() {
-        let root = std::path::Path::new("/tmp");
-        assert!(safe_join(root, "../etc/passwd").is_err());
-        assert!(safe_join(root, "/abs").is_err());
-        assert!(safe_join(root, "ok/x.md").is_ok());
+    fn stylesheet_covers_the_shared_workspace_classes() {
+        for class in [".shell", ".sidebar", ".tree-file", ".doc", ".toolbar", ".edit-split"] {
+            assert!(STYLE.contains(class), "missing {class}");
+        }
     }
 }

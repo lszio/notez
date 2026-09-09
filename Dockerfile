@@ -27,6 +27,8 @@ RUN apt-get update \
  && rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /build/target/release/web /usr/local/bin/notez-web
+# The Dioxus SSR renderer reads its template from <bin dir>/public.
+COPY --from=builder /build/packages/web/public /usr/local/bin/public
 
 # The server binds via IP/PORT.
 # NOTEZ_SPACE_ROOT optionally pins a default space root; the web picker can

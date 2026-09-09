@@ -3,6 +3,7 @@ name = "web"
 version = "0.1.0"
 edition = "2024"
 description = "notez web surface: server-rendered workspace UI + protocol API + MCP host"
+build = "build.rs"
 
 [lib]
 name = "notez_web"
@@ -18,10 +19,12 @@ notez-protocol = { path = "../../crates/protocol" }
 notez-api = { path = "../../crates/api" }
 notez-mcp = { path = "../../crates/mcp", features = ["http"] }
 notez-preview = { path = "../../crates/preview" }
+ui = { workspace = true }
 composition = { path = "../../crates/composition" }
 orgmode = { path = "../../crates/adapters/orgmode" }
 markdown = { path = "../../crates/adapters/markdown" }
 
+dioxus = { workspace = true, features = ["router", "fullstack", "server"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
 axum = { version = "0.8", features = ["form"] }

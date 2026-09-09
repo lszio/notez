@@ -16,7 +16,6 @@ use std::sync::{Arc, Mutex};
 use axum::extract::Form;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use axum::routing::post;
 use notez_core::application::{Engine, WatchService};
 use notez_core::config::{
     web_space::{resolve_source as core_resolve_space, WebSourceError},
@@ -200,7 +199,7 @@ pub struct JanetEvalForm {
     pub script: String,
 }
 
-async fn janet_eval(Form(form): Form<JanetEvalForm>) -> Response {
+pub async fn janet_eval(Form(form): Form<JanetEvalForm>) -> Response {
     match crate::janet::eval_janet_checked(&form.script) {
         Ok(value) => (
             StatusCode::OK,
@@ -224,14 +223,7 @@ async fn janet_eval(Form(form): Form<JanetEvalForm>) -> Response {
     }
 }
 
-/// Router for the non-UI endpoints (Janet debug evaluation).
-pub fn build_router(_state: WebState) -> axum::Router {
-    axum::Router::new()
-        .route("/api/janet/eval", post(janet_eval))
-        .layer(axum::middleware::from_fn(mutation_auth_middleware))
-}
-
 /// Re-export the encoded-space helper used by older call sites.
 pub fn encoded_for(source_root: &str) -> String {
-    crate::ui::urls::encode_space(source_root)
+    crate::data::urls::encode_space(source_root)
 }

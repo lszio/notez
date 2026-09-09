@@ -65,8 +65,14 @@ pub fn raw_url(encoded: &str, locator: &str) -> String {
     format!("/raw/{encoded}/{}", encode_locator(locator))
 }
 
-pub fn new_url(encoded: &str) -> String {
+/// Form target that creates the note.
+pub fn new_action_url(encoded: &str) -> String {
     format!("/new/{encoded}")
+}
+
+/// The new-note page.
+pub fn new_url(encoded: &str) -> String {
+    format!("/s/{encoded}/new")
 }
 
 pub fn save_url(encoded: &str) -> String {
@@ -80,7 +86,7 @@ pub fn scan_url(encoded: &str) -> String {
 pub fn css_url() -> String {
     // Cache-bust on every release: the stylesheet is embedded in the
     // binary, so the URL only changes when the file changes.
-    format!("/app.css?v={}", crate::ui::STYLE_HASH)
+    format!("/app.css?v={}", crate::data::ASSET_VERSION)
 }
 
 /// Split a locator into (directory, file name).

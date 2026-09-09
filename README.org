@@ -26,10 +26,13 @@ crates/
 ├── cli/          notez binary entry point (commands + handlers, delegates mcp to notez-mcp)
 ├── adapters/     orgmode + markdown parser/reader crates
 packages/
-├── ui/           Shared Dioxus design system + Backend trait + AppStore
-├── web/          Server-rendered workspace UI + host assembly
-│                 ├── ui/: minimal SilverBullet-style SSR UI (browse / read /
-│                 │        edit / attachment preview); no wasm, no hydration
+├── ui/           Shared Dioxus rendering core + design system + Backend trait
+│                 └── workspace.rs: NzShell / NzTree / NzDocBody + tree model,
+│                     reused by web (SSR), desktop and mobile (native)
+├── web/          Dioxus SSR workspace + host assembly
+│                 ├── app/: pages rendered from data read during SSR
+│                 │        (no #[server] functions, no hydration)
+│                 ├── data/: space/file/document access + utility endpoints
 │                 ├── default mode: UI + /api/v1 + /mcp (one shared Runtime)
 │                 └── NOTEZ_MODE=server: headless api + mcp only
 ├── desktop/      Dioxus desktop + EmbeddedBackend (composition Runtime, no HTTP)
@@ -279,18 +282,26 @@ NOTEZ_MODE=server IP=127.0.0.1 PORT=8765 ./web-binary
 
 ** Workspace UI
 
-The default mode serves a server-rendered workspace: a page list in the
-sidebar, one content column, `?edit=1` for the editor, and inline
-previews for attachments (images, PDF, Office, CSV, archives). It is
-plain HTML + forms — no client framework, no hydration — so every
-interaction is a normal navigation and the page weight stays small.
-Landing: `/` redirects to the only registered space, otherwise it shows
-the space picker (`POST /register` writes it to
-=~/.config/notez/config.toml=).
+The default mode serves a Dioxus-rendered workspace (SSR, no hydration):
+a collapsible *directory tree* in the sidebar, one content column, an
+editor at `?edit=1` with a formatting toolbar and a live preview pane,
+and inline previews for attachments (images, PDF, Office, CSV,
+archives). The presentational pieces (=NzShell=, =NzTree=, =NzDocBody=)
+live in =packages/ui= so desktop and mobile render the same workspace.
+
+- *Scan / Refresh* sit in the sidebar footer; Scan re-indexes the space
+  and returns to the page you were on.
+- A file changed outside the editor raises a "changed on disk — reload"
+  pill (the page polls a cheap mtime fingerprint).
+- Saving is revision-guarded (content sha256); a conflict keeps your
+  text, shows a warning and switches to the on-disk revision so the next
+  save is a deliberate overwrite.
+- Landing: `/` redirects to the configured default source, otherwise it
+  shows the space picker (=POST /register= writes
+  =~/.config/notez/config.toml=).
 
 #+begin_src bash
-just web                # debug build + run (port 8765)
-just web RELEASE=1      # release build; recommended for daily use
+just web                # release build + run (port 8765); DEV=1 for debug
 #+end_src
 
 ** Embedded Dioxus clients

@@ -139,19 +139,30 @@ fi
 echo "  raw endpoint serves the bytes"
 
 echo "Rejecting a stale revision..."
-STALE_STATUS=$(curl -s -o /dev/null -w '%{http_code}' -X POST \
+STALE_HEADERS=$(curl -s -D - -o /dev/null -X POST \
     --data-urlencode "locator=docs/README.org" \
     --data-urlencode "revision=$REVISION" \
     --data-urlencode "content=stale write" \
     "$BASE/save/$ENCODING")
-if [[ "$STALE_STATUS" != "409" ]]; then
-    echo "Error: stale save returned $STALE_STATUS, expected 409"
+STALE_STATUS=$(head -1 <<<"$STALE_HEADERS" | awk '{print $2}')
+if [[ "$STALE_STATUS" != "303" ]]; then
+    echo "Error: stale save returned $STALE_STATUS, expected 303"
     exit 1
 fi
 if grep -q "stale write" "$SPACE_DIR/docs/README.org"; then
     echo "Error: stale save overwrote the file"
     exit 1
 fi
-echo "  stale save rejected with 409"
+RESTORE_URL=$(grep -i '^location:' <<<"$STALE_HEADERS" | tr -d '\r' | awk '{print $2}')
+RESTORE_HTML=$(curl -fsS "$BASE$RESTORE_URL")
+if ! grep -q "stale write" <<<"$RESTORE_HTML"; then
+    echo "Error: failed save did not restore the user's text"
+    exit 1
+fi
+if ! grep -q "banner warn" <<<"$RESTORE_HTML"; then
+    echo "Error: failed save did not surface the conflict banner"
+    exit 1
+fi
+echo "  stale save rejected, text restored, banner shown"
 
 echo "web acceptance: PASS"

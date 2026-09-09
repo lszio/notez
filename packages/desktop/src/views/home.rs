@@ -1,7 +1,10 @@
-//! Desktop home view — embedded workspace list + scan + query.
+//! Desktop workspace view — the same shell, tree and document styles
+//! the web surface uses, rendered natively over the embedded engine.
 
 use dioxus::prelude::*;
-use ui::{Backend, NzBadge, NzCard, ResourceRow};
+use ui::{
+    build_tree, Backend, NzBadge, NzCard, NzShell, NzTree, ResourceRow, TreeEntry, TreeFile,
+};
 
 use crate::backend::EmbeddedBackend;
 
@@ -14,16 +17,32 @@ struct SpaceReport {
     rows: Vec<ResourceRow>,
 }
 
+/// Build the sidebar tree from a space's resource rows. Desktop has no
+/// reader yet, so leaves carry no href (rendered as plain rows).
+fn tree_of(rows: &[ResourceRow]) -> Vec<TreeEntry> {
+    let files: Vec<TreeFile> = rows
+        .iter()
+        .filter(|r| !r.locator.is_empty())
+        .map(|r| TreeFile {
+            path: r.locator.clone(),
+            href: String::new(),
+            kind: r.kind.clone(),
+            badge: r.kind.clone(),
+        })
+        .collect();
+    build_tree(&files)
+}
+
 #[component]
 pub fn Home() -> Element {
     let backend = use_context::<EmbeddedBackend>();
+    let initial_space = use_context::<String>();
+    let mut reload = use_signal(|| 0u32);
 
     let backend_for_load = backend.clone();
-    let initial_space = use_context::<String>();
-
-    // One-shot load: spaces -> scan each -> query resources for each.
     let reports = use_resource(move || {
         let backend = backend_for_load.clone();
+        let _ = reload();
         async move {
             let spaces = backend.list_spaces().await.unwrap_or_default();
             let mut out = Vec::with_capacity(spaces.len());
@@ -31,16 +50,12 @@ pub fn Home() -> Element {
                 let root = s.root.to_string_lossy().to_string();
                 let scan_count = backend.scan_space(&root).await.ok();
                 let scan_error = if scan_count.is_none() {
-                    backend
-                        .scan_space(&root)
-                        .await
-                        .err()
-                        .or(Some("scan failed".into()))
+                    backend.scan_space(&root).await.err()
                 } else {
                     None
                 };
                 let rows = backend
-                    .query_resources(&root, None, None, Some(50))
+                    .query_resources(&root, None, None, Some(500))
                     .await
                     .unwrap_or_default();
                 out.push(SpaceReport {
@@ -55,63 +70,66 @@ pub fn Home() -> Element {
         }
     });
 
-    rsx! {
-        main { class: "workspace",
-            NzCard { padded: true,
-                h1 { "Notez desktop workspace" }
-                p { class: "muted", "Local embedded engine — opens a space, scans it, lists resources." }
-                NzBadge { text: "embedded".to_string(), tone: "info".to_string() }
-                p { class: "dim mono-sm", "Initial space: {initial_space}" }
-            }
+    let reports_value = reports.cloned().unwrap_or_default();
+    let active = reports_value.first().cloned();
+    let space_name = active
+        .as_ref()
+        .map(|r| r.display_name.clone())
+        .unwrap_or_else(|| "notez".to_string());
+    let tree = active.as_ref().map(|r| tree_of(&r.rows)).unwrap_or_default();
 
-            match reports.cloned() {
-                Some(reps) if !reps.is_empty() => rsx! {
-                    NzCard { padded: true,
-                        h2 { "Spaces" }
-                        for r in reps.iter() {
-                            SpaceBlock { report: r.clone() }
-                        }
+    rsx! {
+        NzShell {
+            space: space_name.clone(),
+            sidebar: rsx! {
+                div { class: "brand",
+                    span { class: "tree-name", "notez" }
+                    span { class: "space-name", "{space_name}" }
+                }
+                div { class: "tree-wrap", id: "tree",
+                    NzTree { nodes: tree, current: None }
+                }
+                div { class: "sb-foot",
+                    span { class: "edit-hint", "desktop · embedded" }
+                    button {
+                        class: "btn ghost",
+                        onclick: move |_| reload += 1,
+                        "Scan"
                     }
-                },
-                Some(_) => rsx! {
+                }
+            },
+            topbar: rsx! {
+                span { class: "title", "{space_name}" }
+                span { class: "spacer" }
+                NzBadge { text: "embedded".to_string(), tone: "info".to_string() }
+            },
+            main { class: "workspace",
+                if reports_value.is_empty() {
                     NzCard { padded: true,
                         h2 { "No spaces" }
-                        p { class: "muted", "Set NOTEZ_DEFAULT_SPACE or run inside a space root." }
+                        p { class: "edit-hint", "Set NOTEZ_DEFAULT_SPACE or run inside a space root." }
                     }
-                },
-                None => rsx! {
+                }
+                for report in reports_value.iter() {
                     NzCard { padded: true,
-                        h2 { "Loading spaces…" }
-                    }
-                },
-            }
-        }
-    }
-}
-
-#[component]
-fn SpaceBlock(report: SpaceReport) -> Element {
-    rsx! {
-        section { class: "space-entry",
-            header { class: "space-head",
-                strong { "{report.display_name}" }
-                span { class: "mono-sm dim", "{report.root}" }
-            }
-            match (report.scan_count, report.scan_error) {
-                (Some(n), _) => rsx! { p { class: "muted", "Scanned resources: {n}" } },
-                (None, Some(err)) => rsx! { p { class: "err-text", "Scan error: {err}" } },
-                (None, None) => rsx! { p { class: "muted", "Scanning…" } },
-            }
-            ul {
-                for r in report.rows.iter() {
-                    li {
-                        NzCard { padded: true,
-                            strong { "{r.title}" }
-                            span { class: "mono-sm dim", "{r.locator}" }
-                            NzBadge { text: r.kind.clone(), tone: "muted".to_string() }
+                        h2 { "{report.display_name}" }
+                        p { class: "edit-hint", "{report.root}" }
+                        match (report.scan_count, report.scan_error.clone()) {
+                            (Some(n), _) => rsx! { p { class: "edit-hint", "{n} indexed resources" } },
+                            (None, Some(err)) => rsx! { p { class: "banner err", "Scan error: {err}" } },
+                            (None, None) => rsx! { p { class: "edit-hint", "Scanning…" } },
+                        }
+                        ul { class: "doc",
+                            for row in report.rows.iter().take(200) {
+                                li {
+                                    "{row.title}"
+                                    span { class: "tree-badge", "{row.kind}" }
+                                }
+                            }
                         }
                     }
                 }
+                p { class: "edit-hint", "Initial space: {initial_space}" }
             }
         }
     }

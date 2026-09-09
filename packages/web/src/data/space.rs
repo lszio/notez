@@ -1,4 +1,4 @@
-//! Space resolution and data access for the minimal workspace UI.
+//! Space resolution and data access for the workspace UI.
 //!
 //! A *space* is a notez source root (a directory with an optional
 //! `notez.toml`). The UI addresses it by its base64url-encoded
@@ -12,7 +12,7 @@
 //! writes bypass the protocol spine.
 
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use notez_core::application::dispatcher::{ApplicationDispatcher, Response as DispatchResponse};
 use notez_core::config::web_space::{list_sources, WebSourceError};
@@ -23,15 +23,15 @@ use crate::routes::WebState;
 use crate::server::{SaveFailure, SaveOutcome};
 
 /// A resolved space.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Space {
     pub root: PathBuf,
     pub name: String,
     pub encoded: String,
 }
 
-/// One row in the page list / attachment list.
-#[derive(Debug, Clone)]
+/// One file the space owns, as listed in the sidebar.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Entry {
     pub locator: String,
     pub title: String,
@@ -107,7 +107,7 @@ fn state() -> WebState {
 
 /// Open the space addressed by a URL segment.
 pub fn open(encoded: &str) -> Result<Space, UiError> {
-    let root_str = crate::ui::urls::decode_space(encoded);
+    let root_str = crate::data::urls::decode_space(encoded);
     if root_str.is_empty() {
         return Err(UiError::BadRequest("malformed space segment".into()));
     }
@@ -131,7 +131,7 @@ pub fn list_spaces() -> Vec<Space> {
             let root_str = s.root.to_string_lossy().into_owned();
             out.push(Space {
                 name: s.name,
-                encoded: crate::ui::urls::encode_space(&root_str),
+                encoded: crate::data::urls::encode_space(&root_str),
                 root: s.root,
             });
         }
@@ -187,18 +187,21 @@ fn space_from_root(root: PathBuf, name: Option<String>) -> Space {
             .unwrap_or(&root_str)
             .to_string()
     });
-    Space { encoded: crate::ui::urls::encode_space(&root_str), root, name }
+    Space { encoded: crate::data::urls::encode_space(&root_str), root, name }
 }
 
 /// Open the space's engine handle (cached per root by the Runtime).
-fn engine(root: &std::path::Path) -> Result<std::sync::Arc<std::sync::Mutex<notez_core::application::Engine<notez_core::storage::SqliteProjection>>>, UiError> {
+#[allow(clippy::type_complexity)]
+fn engine(
+    root: &Path,
+) -> Result<std::sync::Arc<std::sync::Mutex<notez_core::application::Engine<notez_core::storage::SqliteProjection>>>, UiError> {
     state()
         .engine_for(&root.to_path_buf())
-        .map_err(|e| UiError::Internal(e.to_string()))
+        .map_err(UiError::Internal)
 }
 
 /// Every indexed resource in the space.
-pub fn resources(root: &std::path::Path) -> Result<Vec<Resource>, UiError> {
+pub fn resources(root: &Path) -> Result<Vec<Resource>, UiError> {
     crate::server::dispatch_query(root).map_err(UiError::Internal)
 }
 
@@ -206,7 +209,7 @@ pub fn resources(root: &std::path::Path) -> Result<Vec<Resource>, UiError> {
 ///
 /// Headings and blocks share their file's locator, so the document row
 /// (or the attachment row) wins over them.
-pub fn resource_for(root: &std::path::Path, locator: &str) -> Result<Option<Resource>, UiError> {
+pub fn resource_for(root: &Path, locator: &str) -> Result<Option<Resource>, UiError> {
     let mut fallback: Option<Resource> = None;
     for resource in resources(root)? {
         if resource.locator != locator {
@@ -229,10 +232,7 @@ pub fn resource_for(root: &std::path::Path, locator: &str) -> Result<Option<Reso
 
 /// Page list: every non-hidden file on disk, enriched with the
 /// projection's title and kind where the file is indexed.
-///
-/// Loose files (never scanned, or attachments) keep their file name as
-/// the title so nothing the user has on disk is invisible.
-pub fn entries(root: &std::path::Path) -> Result<Vec<Entry>, UiError> {
+pub fn entries(root: &Path) -> Result<Vec<Entry>, UiError> {
     let loose = list_files(root);
     let indexed = index_by_locator(resources(root).unwrap_or_default());
 
@@ -262,9 +262,8 @@ pub fn entries(root: &std::path::Path) -> Result<Vec<Entry>, UiError> {
 /// The walk applies the Source's structural rules (hidden paths,
 /// `exclude` globs, symlinks) but not the indexer's `include` globs or
 /// size cap — a 30 MB PDF is still a file the user must be able to see
-/// and preview. Titles come from the projection where the file is
-/// indexed; loose files fall back to their file name.
-fn list_files(root: &std::path::Path) -> Vec<Entry> {
+/// and preview.
+fn list_files(root: &Path) -> Vec<Entry> {
     const MAX_FILES: usize = 20_000;
     let policy = notez_core::source::policy::SourcePolicy::load_for_root(root);
     let mut out: Vec<Entry> = Vec::new();
@@ -276,8 +275,8 @@ fn list_files(root: &std::path::Path) -> Vec<Entry> {
 }
 
 fn walk(
-    root: &std::path::Path,
-    dir: &std::path::Path,
+    root: &Path,
+    dir: &Path,
     policy: &notez_core::source::policy::SourcePolicy,
     out: &mut Vec<Entry>,
 ) {
@@ -306,7 +305,7 @@ fn walk(
         if locator.is_empty() {
             continue;
         }
-        let rel_path = std::path::Path::new(&locator);
+        let rel_path = Path::new(&locator);
         if let notez_core::source::policy::Decision::Ignore(_) = policy.decide_file(rel_path, is_symlink)
         {
             continue;
@@ -367,7 +366,7 @@ fn index_by_locator(resources: Vec<Resource>) -> HashMap<String, (String, String
 
 /// Read a document's raw text plus its revision (sha256 of the bytes),
 /// which is the precondition the write path expects.
-pub fn read_doc(root: &std::path::Path, locator: &str) -> Result<(String, String), UiError> {
+pub fn read_doc(root: &Path, locator: &str) -> Result<(String, String), UiError> {
     let full = root.join(locator);
     let bytes = std::fs::read(&full)
         .map_err(|e| UiError::NotFound(format!("cannot read {}: {e}", full.display())))?;
@@ -375,36 +374,72 @@ pub fn read_doc(root: &std::path::Path, locator: &str) -> Result<(String, String
     Ok((String::from_utf8_lossy(&bytes).into_owned(), revision))
 }
 
-/// Title for a document: front-matter/`#+TITLE` heading when present,
-/// else the first heading, else the file name.
-pub fn doc_title(root: &std::path::Path, locator: &str, content: &str) -> String {
+/// Render a document body (with relative links rewritten to notez URLs).
+///
+/// The editor's live preview and the read page call this with the same
+/// input, so they can never disagree.
+pub fn render_document(space: &Space, locator: &str, content: &str) -> Result<String, UiError> {
+    let full = safe_join(&space.root, locator)?;
+    let title = doc_title(&space.root, locator, content);
+    let row = document_row(locator, &title);
+    // `render_body` reads the on-disk bytes for the previewer context;
+    // for the live preview we want the *edited* text, so seed the body
+    // property explicitly.
+    let mut row = row;
+    row.properties.insert("body".to_string(), content.to_string());
+    let html = crate::body::render_body(&row, &space.root);
+    let dir = crate::data::urls::split_locator(locator).0;
+    let _ = full;
+    Ok(crate::data::html::rewrite_local_urls(&html, &space.encoded, dir))
+}
+
+/// Build the `ResourceRow` the previewer needs for `locator`.
+pub fn document_row(locator: &str, title: &str) -> crate::model::ResourceRow {
+    crate::model::ResourceRow {
+        ref_str: String::new(),
+        kind: "document".to_string(),
+        title: title.to_string(),
+        source_id: String::new(),
+        locator: locator.to_string(),
+        object_id: String::new(),
+        revision: String::new(),
+        properties: std::collections::BTreeMap::new(),
+        body_html: String::new(),
+        raw_content: String::new(),
+    }
+}
+
+/// Render an attachment (non-document) file.
+pub fn render_file(space: &Space, locator: &str, title: &str) -> Result<String, UiError> {
+    let full = safe_join(&space.root, locator)?;
+    if !full.is_file() {
+        return Err(UiError::NotFound(format!("not found: {locator}")));
+    }
+    let html = crate::body::render_path(&full, title, &space.root);
+    let dir = crate::data::urls::split_locator(locator).0;
+    Ok(crate::data::html::rewrite_local_urls(&html, &space.encoded, dir))
+}
+
+/// Title for a document: `#+TITLE`/`# ` heading when present, else the
+/// first `* ` heading, else the file name.
+pub fn doc_title(root: &Path, locator: &str, content: &str) -> String {
     for line in content.lines().take(80) {
         let t = line.trim();
-        if let Some(rest) = t.strip_prefix("#+TITLE:") {
-            let v = rest.trim();
-            if !v.is_empty() {
-                return v.to_string();
-            }
-        }
-        if let Some(rest) = t.strip_prefix("# ") {
-            let v = rest.trim();
-            if !v.is_empty() {
-                return v.to_string();
-            }
-        }
-        if let Some(rest) = t.strip_prefix("* ") {
-            let v = rest.trim();
-            if !v.is_empty() {
-                return v.to_string();
+        for prefix in ["#+TITLE:", "# ", "* "] {
+            if let Some(rest) = t.strip_prefix(prefix) {
+                let v = rest.trim();
+                if !v.is_empty() {
+                    return v.to_string();
+                }
             }
         }
     }
-    let stem = std::path::Path::new(locator)
+    let stem = Path::new(locator)
         .file_stem()
         .and_then(|s| s.to_str())
         .unwrap_or(locator);
     if stem == "README" || stem == "index" {
-        if let Some(parent) = std::path::Path::new(locator).parent().and_then(|p| p.file_name()) {
+        if let Some(parent) = Path::new(locator).parent().and_then(|p| p.file_name()) {
             return parent.to_string_lossy().into_owned();
         }
         if let Some(name) = root.file_name().and_then(|s| s.to_str()) {
@@ -418,7 +453,7 @@ pub fn doc_title(root: &std::path::Path, locator: &str, content: &str) -> String
 /// journal + projection refresh). The locator must be indexed as a
 /// document; a not-yet-indexed file is scanned once and retried.
 pub fn save_doc(
-    root: &std::path::Path,
+    root: &Path,
     locator: &str,
     expected_revision: &str,
     content: &str,
@@ -470,9 +505,24 @@ pub fn save_doc(
     }
 }
 
+/// Human text for a failed save.
+pub fn save_failure_text(failure: &SaveFailure) -> String {
+    match failure {
+        SaveFailure::StaleRevision { expected, actual } => format!(
+            "The file changed on disk since you opened it (expected {}, found {}). Your text is kept; saving again overwrites the on-disk version.",
+            &expected[..expected.len().min(12)],
+            &actual[..actual.len().min(12)],
+        ),
+        SaveFailure::ReadOnly { reason } => format!("Read-only source: {reason}"),
+        SaveFailure::NotFound { path } => format!("File not found: {path}"),
+        SaveFailure::Unsupported { reason } => format!("Cannot edit this file: {reason}"),
+        SaveFailure::Internal { message } => format!("Save failed: {message}"),
+    }
+}
+
 /// Rescan the space (index new/changed files). Returns the number of
 /// indexed resources after the scan.
-pub fn scan(root: &std::path::Path) -> Result<usize, UiError> {
+pub fn scan(root: &Path) -> Result<usize, UiError> {
     let facade = engine(root)?;
     let mut guard = facade
         .lock()
@@ -484,9 +534,22 @@ pub fn scan(root: &std::path::Path) -> Result<usize, UiError> {
     Ok(resources(root).map(|r| r.len()).unwrap_or(0))
 }
 
+/// Cheap change fingerprint: newest mtime + file count. Polled by the
+/// page to detect external edits without re-rendering.
+pub fn fingerprint(root: &Path) -> (String, usize) {
+    let files = list_files(root);
+    let newest = files.iter().map(|f| f.mtime_ms).max().unwrap_or(0);
+    (format!("{newest}-{}", files.len()), files.len())
+}
+
 /// Create a note if absent, then return its locator. `locator` is a
 /// sanitized space-relative path ending in `.md` or `.org`.
-pub fn create_doc(root: &std::path::Path, locator: &str, title: &str) -> Result<(), UiError> {
+pub fn create_doc(
+    root: &Path,
+    locator: &str,
+    title: &str,
+    body: Option<&str>,
+) -> Result<(), UiError> {
     let full = root.join(locator);
     if full.exists() {
         return Ok(());
@@ -495,12 +558,12 @@ pub fn create_doc(root: &std::path::Path, locator: &str, title: &str) -> Result<
         std::fs::create_dir_all(parent)
             .map_err(|e| UiError::Internal(format!("create dirs: {e}")))?;
     }
-    let body = if locator.ends_with(".org") {
-        format!("* {title}\n\n")
-    } else {
-        format!("# {title}\n\n")
+    let content = match body {
+        Some(text) if !text.trim().is_empty() => text.to_string(),
+        _ if locator.ends_with(".org") => format!("* {title}\n\n"),
+        _ => format!("# {title}\n\n"),
     };
-    std::fs::write(&full, body).map_err(|e| UiError::Internal(format!("write note: {e}")))?;
+    std::fs::write(&full, content).map_err(|e| UiError::Internal(format!("write note: {e}")))?;
     let _ = scan(root);
     Ok(())
 }
@@ -519,7 +582,7 @@ pub fn sanitize_new_locator(input: &str) -> Result<String, UiError> {
         segments.push(seg);
     }
     let mut loc = segments.join("/");
-    let ext = std::path::Path::new(&loc)
+    let ext = Path::new(&loc)
         .extension()
         .and_then(|e| e.to_str())
         .map(|e| e.to_ascii_lowercase())
@@ -553,6 +616,38 @@ pub fn slugify(input: &str) -> String {
     if out.is_empty() { "untitled".to_string() } else { out }
 }
 
+/// Join `locator` onto `root` and refuse anything that escapes the
+/// space (absolute paths, `..`, symlinks pointing outside).
+pub fn safe_join(root: &Path, locator: &str) -> Result<PathBuf, UiError> {
+    if locator.is_empty() || locator.starts_with('/') {
+        return Err(UiError::BadRequest("empty or absolute path".into()));
+    }
+    for seg in locator.split('/') {
+        if seg == ".." || seg == "." || seg.is_empty() {
+            return Err(UiError::BadRequest(format!("invalid path segment `{seg}`")));
+        }
+    }
+    let full = root.join(locator);
+    let canonical_root = std::fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
+    let canonical_full = std::fs::canonicalize(&full).unwrap_or_else(|_| full.clone());
+    if !canonical_full.starts_with(&canonical_root) {
+        return Err(UiError::BadRequest("path escapes the space".into()));
+    }
+    Ok(full)
+}
+
+/// Whether a locator is an editable document.
+pub fn is_doc_locator(locator: &str) -> bool {
+    matches!(
+        Path::new(locator)
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(|e| e.to_ascii_lowercase())
+            .as_deref(),
+        Some("md" | "markdown" | "org")
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -575,6 +670,22 @@ mod tests {
     fn slugify_matches_note_filenames() {
         assert_eq!(slugify("Hello World"), "hello-world");
         assert_eq!(slugify("   "), "untitled");
+    }
+
+    #[test]
+    fn doc_locators_are_recognized() {
+        assert!(is_doc_locator("a/b.md"));
+        assert!(is_doc_locator("a/B.ORG"));
+        assert!(!is_doc_locator("a/b.pdf"));
+        assert!(!is_doc_locator("noext"));
+    }
+
+    #[test]
+    fn safe_join_rejects_escapes() {
+        let root = Path::new("/tmp");
+        assert!(safe_join(root, "../etc/passwd").is_err());
+        assert!(safe_join(root, "/abs").is_err());
+        assert!(safe_join(root, "ok/x.md").is_ok());
     }
 
     fn resource(kind: notez_core::domain::ResourceKind, locator: &str, title: &str) -> Resource {
@@ -617,5 +728,18 @@ mod tests {
             map.get("assets/x.png"),
             Some(&("x.png".to_string(), "attachment".to_string()))
         );
+    }
+
+    #[test]
+    fn doc_title_prefers_org_title_then_heading() {
+        assert_eq!(
+            doc_title(Path::new("/tmp"), "a.org", "#+TITLE: Hello\n* other\n"),
+            "Hello"
+        );
+        assert_eq!(
+            doc_title(Path::new("/tmp"), "a.org", "* Hello\n"),
+            "Hello"
+        );
+        assert_eq!(doc_title(Path::new("/tmp"), "notes/a.org", "body\n"), "a");
     }
 }

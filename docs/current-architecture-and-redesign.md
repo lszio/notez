@@ -195,66 +195,58 @@ shared-folder/
 
 ### 4.1 当前 Web 运行时
 
-Web 现在是**纯服务端渲染**的工作区，不再是「SSR + hydration + JS 补丁」的混合体：
+Web 是**服务端渲染的 Dioxus 工作区**：页面由 Dioxus 组件渲染，但数据在
+渲染过程中同步读取，没有 `#[server]` 函数、没有客户端取数，因此浏览器
+收到的 HTML 是完整的（不存在「永久 Loading」这一失效模式），也没有需要
+hydrate 的东西。
 
 ```text
-Axum handler
-  -> 直接读 projection / 文件（同一 composition Runtime）
-  -> 拼装 HTML 字符串（结构 + 转义）
-  -> 返回完整页面
+Dioxus 页面组件
+  -> 渲染期同步读 projection / 文件（同一 composition Runtime）
+  -> SSR 输出完整 HTML
 + 原生 <form method="post"> 写入
-+ 一份内嵌 CSS（/app.css，编译进二进制）
-+ 约 40 行内联 JS（列表过滤 / 编辑器快捷键 / 未保存提醒）
++ 一份内嵌 CSS + 一个 ~300 行 island（过滤 / 编辑器 / 磁盘变更提示）
 ```
 
-入口 `packages/web/src/main.rs` 把三个 router 合并成一个 axum Router：
+表现层（`NzShell` / `NzTree` / `NzDocBody` / `build_tree`）放在
+`packages/ui/src/workspace.rs`，desktop 与 mobile 原生渲染同一套组件；
+数据加载留在各自表面。`packages/web` 不再依赖 `packages/ui` 之外的设计
+系统代码，也不再有任何 wasm 客户端。
+
+路由（`packages/web/src/app/route.rs` + `packages/web/src/data/mod.rs`）：
 
 ```text
-ui::router()              工作区 UI（packages/web/src/ui/）
-routes::build_router()    源注册 / Janet 求值
-host::protocol_router()   /api/v1/* + /mcp
-```
-
-没有 wasm 客户端、没有 `dioxus::serve`、没有 `#[server]` 函数、没有
-`packages/web/public/index.html`。`packages/web` 也不再依赖 `dioxus` 与
-`packages/ui`。
-
-路由（`packages/web/src/ui/mod.rs`）：
-
-```text
-GET  /                          space picker（仅一个空间时 303 到 /s/<enc>）
-GET  /app.css                   内嵌样式表
-POST /register                  注册目录为空间（写 ~/.config/notez/config.toml）
-GET  /s/{space}                 空间首页（README/index 页，否则页面列表）
-GET  /s/{space}/{*locator}      笔记阅读；?edit=1 编辑器；非文档 → 附件预览
+GET  /                          重定向到 default_source，否则空间选择器
+GET  /s/{space}                 空间首页（README/index 或页面列表）
+GET  /s/{space}/{*locator}      阅读；?edit=1 编辑器；非文档 → 附件预览
+GET  /s/{space}/new             新建表单
 GET  /raw/{space}/{*locator}    原始字节（图片 / PDF / 下载）
-GET  /new/{space}               新建表单
-POST /new/{space}               创建并打开编辑器
 POST /save/{space}              保存（expected_revision 守卫）
-POST /scan/{space}              重新扫描
+POST /scan/{space}              重新扫描后回到 next
+POST /new/{space}               创建笔记
+POST /register                  注册空间（写 ~/.config/notez/config.toml）
+POST /api/render                实时预览（与阅读页同一渲染器）
+GET  /api/space-status          空间 mtime 指纹 + watcher 状态
 POST /api/janet/eval            受限 Janet 求值（调试）
 ```
 
 数据来源与渲染：
 
-- 侧栏页面列表 = 文件系统遍历（`SourcePolicy::decide_file` 的结构规则：
+- 侧栏目录树 = 文件系统遍历（`SourcePolicy::decide_file` 的结构规则：
   隐藏路径 / exclude glob / 符号链接；**不**应用文档 include glob 与大小
   上限，因此附件可见）+ projection 标题合并；
 - 正文仍走 `notez-preview` catalog（markdown / org / PDF / Office / 表格 /
   归档 / 图片），`body.rs` 只负责把 `PreviewModel` 转成 HTML；
-- 渲染出的相对 `href`/`src` 由 `ui::page::rewrite_local_urls` 重写为
+- 渲染出的相对 `href`/`src` 由 `data::html::rewrite_local_urls` 重写为
   `/s/...`（页面）或 `/raw/...`（资源），文档相对路径按所在目录解析。
-
-> 历史快照：v2 笔记工作台（`docs/ui-refactoring-v2.org`）的三栏布局、
-> 右侧栏、仪表盘挂件、`web.toml` 配置、命令面板与 Dioxus 路由已随本次
-> 精简移除（`pages/*`、`layout.rs`、`router.rs`、`space_ctx.rs`、
-> `ui_config.rs`、`backend.rs`、`tree.rs` 均已删除）。
 
 ### 4.2 交互约束
 
 - 每个交互只有一条实现路径：过滤只有客户端 DOM 过滤（服务端已有全量
-  列表），编辑器只有 `<form>` + 一个 `<textarea>`，保存只有
+  目录树），编辑器只有 `<form>` + 一个 `<textarea>`，保存只有
   `POST /save/{space}`；
+- 保存失败不丢文本：提交内容按一次性 token 暂存，重定向回编辑器时恢复
+  （无 JavaScript 也成立）；
 - 保存以内容 sha256 作为 `expected_revision`，冲突返回 409 并保留用户
   文本、同时把 revision 换成磁盘当前值，二次保存才是显式覆盖；
 - 附件预览与编辑共享同一路径解析与安全检查（`safe_join`：绝对路径、
@@ -784,7 +776,7 @@ HTTP request
 - / 把当前真实架构与目标架构分开维护（本文档 + =docs/architecture.org=）；
 - ✅ 删除过时 README 和路由描述（README 描述更新到 M1-M3；ui-refactoring-v1 仍作参考）；
 - ✅ 给 protocol 补齐 typed Response（=crates/protocol/src/response.rs= 已为 =ResourcePage=、=Scan=、=AttachmentRef=、=Conflicts= 等变体生成 JSON Schema）；
-- / 为所有 server function 建立请求/响应契约测试（web 页面 =#[server]= 还未迁到 =ui::Backend= trait，部分用例通过 MCP/HTTP 间接覆盖）；
+- / 为 /api/v1 与 MCP 工具建立请求/响应契约测试（web 页面已无 =#[server]= 函数）；
 - ✅ 明确 =ResourceRef=、=ObjectIdentity=、=revision= 的语义（文档 §3.3）。
 
 验收：CLI、MCP、HTTP 对同一 Request 产生相同领域结果。
@@ -858,7 +850,7 @@ HTTP request
 2026-09 里程碑（M1–M3）已把 §1 列出的三个核心问题的前两个推进到「已落地」：
 
 - ✅ 「事实、事件、投影形成单一状态模型」 — =composition::Runtime= 接管引擎缓存与 watcher；CLI/MCP/HTTP/Web 复用同一 Runtime；protocol 已是 typed enum。
-- ✅ 「客户端运行模型不稳定」 — Web 改为纯服务端渲染工作区（axum + 原生表单，无 hydration / server function / wasm），单一状态来源；desktop 是初版 Workspace 视图，mobile 仍是 starter shell。
+- ✅ 「客户端运行模型不稳定」 — Web 改为 Dioxus 服务端渲染工作区（渲染期同步读数据，无 hydration / server function / wasm），表现层组件与 desktop/mobile 共享；desktop 是初版 Workspace 视图，mobile 仍是 starter shell。
 - ◐ 「产品信息架构以资源列表为中心」 — 共享 Nz* 组件与 =ui::Backend= trait 落地，desktop Workspace 是首批非文件浏览器的工作面。
 
 需要继续重考虑的：
