@@ -202,7 +202,7 @@ mod tests {
             }),
             Request::DeleteResource(DeleteResourceRequest {
                 r_ref: String::new(),
-                expected_revision: None,
+                expected_revision: "revision-1".into(),
             }),
             Request::ListBySource(ListBySourceRequest {
                 source_id: String::new(),

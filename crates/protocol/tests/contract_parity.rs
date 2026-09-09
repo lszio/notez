@@ -326,3 +326,61 @@ fn legacy_request_remains_available_during_protocol_migration() {
     let request = Request::ScanNative(notez_protocol::request::ScanNativeRequest {});
     assert_eq!(serde_json::to_value(request).unwrap()["op"], "scan_native");
 }
+
+#[test]
+fn legacy_mutation_requests_require_non_empty_expected_revision() {
+    let cases = [
+        (
+            "delete_resource",
+            json!({"r_ref": "document:1"}),
+        ),
+        (
+            "upsert_resource",
+            json!({"resource": {
+                "ref": "document:1",
+                "kind": "document",
+                "title": "Document",
+                "source_id": "notes"
+            }}),
+        ),
+        (
+            "transition_task",
+            json!({"r_ref": "task:1", "to_state": "done"}),
+        ),
+        (
+            "writeback_resource",
+            json!({"source_id": "notes", "r_ref": "document:1", "payload": "body"}),
+        ),
+        (
+            "update_document",
+            json!({"source_id": "notes", "locator": "daily.md", "content": "# Daily"}),
+        ),
+    ];
+
+    for (op, fields) in cases {
+        let mut request = fields.clone();
+        request["op"] = json!(op);
+        assert!(serde_json::from_value::<Request>(request).is_err(), "{op} accepted an omitted expected_revision");
+
+        for invalid_revision in ["", "   "] {
+            let mut request = fields.clone();
+            request["op"] = json!(op);
+            request["expected_revision"] = json!(invalid_revision);
+            assert!(serde_json::from_value::<Request>(request).is_err(), "{op} accepted an invalid expected_revision");
+        }
+
+        let mut request = fields;
+        request["op"] = json!(op);
+        request["expected_revision"] = json!("revision-1");
+        let request = serde_json::from_value::<Request>(request)
+            .unwrap_or_else(|error| panic!("{op} rejected a valid expected_revision: {error}"));
+        match request {
+            Request::DeleteResource(request) => assert_eq!(request.expected_revision, "revision-1"),
+            Request::UpsertResource(request) => assert_eq!(request.expected_revision, "revision-1"),
+            Request::TransitionTask(request) => assert_eq!(request.expected_revision, "revision-1"),
+            Request::WritebackResource(request) => assert_eq!(request.expected_revision, "revision-1"),
+            Request::UpdateDocument(request) => assert_eq!(request.expected_revision, "revision-1"),
+            request => panic!("{op} deserialized as an unexpected request: {request:?}"),
+        }
+    }
+}

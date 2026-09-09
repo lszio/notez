@@ -52,8 +52,8 @@ pub struct ReadResourceRequest {
 pub struct DeleteResourceRequest {
     pub r_ref: String,
     /// Optimistic-concurrency guard on the row being deleted.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub expected_revision: Option<String>,
+    #[serde(deserialize_with = "deserialize_non_empty")]
+    pub expected_revision: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -107,8 +107,8 @@ pub struct ResourcePayload {
 pub struct UpsertResourceRequest {
     pub resource: ResourcePayload,
     /// Optimistic-concurrency guard for this upsert.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub expected_revision: Option<String>,
+    #[serde(deserialize_with = "deserialize_non_empty")]
+    pub expected_revision: String,
 }
 /// Overwrite a whole document's content at `source_id` + `locator`.
 /// Field names follow the existing web `update_document` entry-point
@@ -121,15 +121,10 @@ pub struct UpdateDocumentRequest {
     /// Source-relative POSIX path of the document file.
     pub locator: String,
     pub content: String,
-    /// Revision the caller loaded (content hash of the raw bytes).
-    /// Alias of `expected_revision` kept for web parity; the engine
-    /// falls back to it when `expected_revision` is absent.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub base_revision: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub format: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub expected_revision: Option<String>,
+    #[serde(deserialize_with = "deserialize_non_empty")]
+    pub expected_revision: String,
 }
 
 /// Run a Janet script in the restricted read-only query runtime.
@@ -144,8 +139,6 @@ pub struct ExecuteJanetRequest {
     pub document_ref: Option<String>,
     #[serde(default = "default_actor")]
     pub actor_id: String,
-    #[serde(default)]
-    pub expected_revision: Option<String>,
     #[serde(default)]
     pub trace_id: Option<String>,
     /// Wall-clock budget in milliseconds. The adapter may apply a tighter cap.
@@ -267,8 +260,8 @@ pub struct TransitionTaskRequest {
     pub to_state: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub timestamp: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub expected_revision: Option<String>,
+    #[serde(deserialize_with = "deserialize_non_empty")]
+    pub expected_revision: String,
 }
 
 // ---- attachments ---------------------------------------------------------------
@@ -370,8 +363,8 @@ pub struct WritebackResourceRequest {
     pub r_ref: String,
     pub payload: String,
     /// Optimistic-concurrency guard on the resource being written back.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub expected_revision: Option<String>,
+    #[serde(deserialize_with = "deserialize_non_empty")]
+    pub expected_revision: String,
 }
 /// can POST `{"op": "query_resources", ...}` directly.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -460,9 +453,9 @@ where
     D: serde::Deserializer<'de>,
 {
     let value = String::deserialize(deserializer)?;
-    if value.is_empty() {
+    if value.trim().is_empty() {
         return Err(serde::de::Error::custom(
-            "expected_revision must not be empty",
+            "expected_revision must not be empty or whitespace",
         ));
     }
     Ok(value)
