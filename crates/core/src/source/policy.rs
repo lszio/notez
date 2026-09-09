@@ -167,26 +167,47 @@ impl SourcePolicy {
     /// Full decision for one file. `rel` is the source-relative path
     /// with `/` separators (the locator form).
     pub fn decide(&self, rel: &Path, is_symlink: bool, size: u64) -> Decision {
-        if is_hidden(rel) {
-            return Decision::Ignore(IgnoreReason::Hidden);
-        }
-        if is_symlink && !self.follow_symlinks {
-            return Decision::Ignore(IgnoreReason::Symlink);
+        if let Some(ignore) = self.structural_decision(rel, is_symlink) {
+            return ignore;
         }
         if size > self.max_file_size {
             return Decision::Ignore(IgnoreReason::TooLarge);
         }
-        if self.legacy_prefix_hit(rel) {
-            return Decision::Ignore(IgnoreReason::Excluded);
-        }
         let candidate = rel.to_string_lossy().replace('\\', "/");
-        if self.exclude.is_match(&candidate) {
-            return Decision::Ignore(IgnoreReason::Excluded);
-        }
         if !self.include.is_match(&candidate) {
             return Decision::Ignore(IgnoreReason::NotIncluded);
         }
         Decision::Allow
+    }
+
+    /// Decision for a file that belongs to the Source whether or not
+    /// it is indexed. Identical to [`Self::decide`] except that the
+    /// `include` globs and the size cap are not applied: they select
+    /// the *documents* the indexer parses, while attachments (PDF,
+    /// images, Office, archives…) are Source files too and must be
+    /// listable and previewable. Callers that read a file apply their
+    /// own size limit.
+    pub fn decide_file(&self, rel: &Path, is_symlink: bool) -> Decision {
+        self.structural_decision(rel, is_symlink)
+            .unwrap_or(Decision::Allow)
+    }
+
+    /// Hidden / symlink / exclude rules shared by every decision.
+    fn structural_decision(&self, rel: &Path, is_symlink: bool) -> Option<Decision> {
+        if is_hidden(rel) {
+            return Some(Decision::Ignore(IgnoreReason::Hidden));
+        }
+        if is_symlink && !self.follow_symlinks {
+            return Some(Decision::Ignore(IgnoreReason::Symlink));
+        }
+        if self.legacy_prefix_hit(rel) {
+            return Some(Decision::Ignore(IgnoreReason::Excluded));
+        }
+        let candidate = rel.to_string_lossy().replace('\\', "/");
+        if self.exclude.is_match(&candidate) {
+            return Some(Decision::Ignore(IgnoreReason::Excluded));
+        }
+        None
     }
 
     fn legacy_prefix_hit(&self, rel: &Path) -> bool {
@@ -252,6 +273,35 @@ mod tests {
         assert_eq!(
             p.decide(Path::new("data/dump.bin"), false, 10),
             Decision::Ignore(IgnoreReason::NotIncluded)
+        );
+    }
+
+    #[test]
+    fn decide_file_keeps_attachments_but_applies_structural_rules() {
+        let p = SourcePolicy::default_policy();
+        // Not a document, so the indexer skips it…
+        assert_eq!(
+            p.decide(Path::new("assets/diagram.png"), false, 10),
+            Decision::Ignore(IgnoreReason::NotIncluded)
+        );
+        // …but it is still a Source file the UI must list and preview.
+        assert_eq!(p.decide_file(Path::new("assets/diagram.png"), false), Decision::Allow);
+        assert_eq!(
+            p.decide_file(Path::new("参考材料/样张.pdf"), false),
+            Decision::Allow
+        );
+        // Structural rules still apply.
+        assert_eq!(
+            p.decide_file(Path::new(".git/config"), false),
+            Decision::Ignore(IgnoreReason::Hidden)
+        );
+        assert_eq!(
+            p.decide_file(Path::new("target/debug/web"), false),
+            Decision::Ignore(IgnoreReason::Excluded)
+        );
+        assert_eq!(
+            p.decide_file(Path::new("link.bin"), true),
+            Decision::Ignore(IgnoreReason::Symlink)
         );
     }
 
