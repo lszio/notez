@@ -2,7 +2,7 @@
 #
 # Usage:
 #   just                  # list available recipes
-#   just web              # Dioxus SSR development server with hot reload
+#   just web              # server-rendered workspace UI + API + MCP
 #   just app              # desktop client (auto-detects platform)
 #   just ios              # iOS simulator (macOS host required)
 #   just android          # Android emulator / device
@@ -19,6 +19,9 @@ set positional-arguments
 
 # Build profile for cargo targets. Override per-invocation: `just web RELEASE=1`.
 release := env_var_or_default("RELEASE", "0")
+
+# `just web` defaults to a release build (see the recipe); `DEV=1` builds debug.
+dev := env_var_or_default("DEV", "0")
 
 # Space root consumed by the web SSR server. Optional — the web client picks
 # the space at runtime through its picker, so this is only a default hint.
@@ -41,6 +44,9 @@ mobile_dir  := "packages/mobile"
 
 # A `cargo build`/`run` invocation that picks debug vs release.
 _cargo_profile := if release == "1" { "--release" } else { "" }
+
+# Profile flag for the web recipes: release unless DEV=1.
+_web_profile := if dev == "1" { "" } else { "--release" }
 
 # _features_flag "<csv>" → "--features <csv>" when non-empty, else "".
 _features_flag features:
@@ -107,43 +113,31 @@ api *args:
     cargo {{_cargo_profile}} run -p {{cli_pkg}} --bin notez -- serve {{args}}
 # ---- Web development --------------------------------------------------------
 #
-# `just web` launches the SSR server via cargo. This is the only path
-# the current web runtime supports: the binary serves the custom
-# `packages/web/public/index.html` shell (the inline CSS + progressive
-# enhancement script) and hydration is explicitly disabled
-# (see `packages/web/src/main.rs`).
+# `just web` launches the server-rendered workspace UI (packages/web).
+# One binary serves the UI, the protocol API (`/api/v1/*`) and MCP
+# (`/mcp`) on one composition Runtime. The UI is plain server-rendered
+# HTML + forms: no wasm, no hydration, no client framework.
 #
-# `just web-dx` exists for reference but does NOT work in this repo:
-# `dx serve --platform web` first builds the wasm32 client target,
-# which does not compile (web server modules + notez-core janet are
-# native-only by design). Do not use it for day-to-day UI iteration.
+# Release is the default: the binary is ~25 MB vs ~247 MB in debug and
+# cold start is dominated by paging the binary in. `just web DEV=1`
+# builds debug instead.
+#
+# Serve the workspace UI (release by default; DEV=1 for debug).
 web:
     #!/usr/bin/env bash
     set -euo pipefail
     if [ -n "{{space}}" ]; then export NOTEZ_SPACE_ROOT="{{space}}"; fi
     export IP="{{host}}"
     export PORT="{{port}}"
-    exec cargo {{_cargo_profile}} run -p {{web_pkg}} --bin {{web_pkg}}
+    exec cargo run {{_web_profile}} -p {{web_pkg}} --bin {{web_pkg}}
 
-# Alias: same as `just web` (cargo SSR with the custom public shell).
+# Alias: same as `just web`.
 web-shell:
     just web
 
-# Referenced above: Dioxus-CLI web serve. Keep this recipe only as
-# documentation of what `just web` intentionally is not; wasm client
-# compilation is broken upstream for this crate layout.
-web-dx:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    export IP="{{host}}"
-    export PORT="{{port}}"
-    exec dx serve --platform web --package {{web_pkg}} --bin {{web_pkg}} --addr "{{host}}" --port "{{port}}"
-#
-
-# Build the web client only (no run).
-
+# Build the web server only (no run).
 web-build:
-    cargo {{_cargo_profile}} build -p {{web_pkg}} --bin {{web_pkg}}
+    cargo build {{_web_profile}} -p {{web_pkg}} --bin {{web_pkg}}
 
 # ---- Desktop app (auto-detect platform) -------------------------------------
 

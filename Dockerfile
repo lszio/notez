@@ -1,8 +1,6 @@
 # --- builder -------------------------------------------------------------
-# Builds the notez web SSR server (package `web`, bin `web`).
-# `dx` is NOT required: `cargo build -p web --bin web` produces the same
-# standalone SSR server that `just web` falls back to when the Dioxus CLI
-# is absent (see justfile `web` recipe).
+# Builds the notez web server (package `web`, bin `web`): the
+# server-rendered workspace UI plus the protocol API and MCP host.
 FROM rust:1-bookworm AS builder
 WORKDIR /build
 
@@ -28,13 +26,9 @@ RUN apt-get update \
  && apt-get install -y --no-install-recommends ca-certificates \
  && rm -rf /var/lib/apt/lists/*
 
-# Dioxus fullstack resolves the asset/template directory relative to the
-# server binary (`<bin dir>/public`); without it the server refuses to
-# start ("Couldn't read public directory").
 COPY --from=builder /build/target/release/web /usr/local/bin/notez-web
-COPY --from=builder /build/packages/web/public /usr/local/bin/public
 
-# The SSR server binds via IP/PORT (dioxus fullstack_address_or_localhost).
+# The server binds via IP/PORT.
 # NOTEZ_SPACE_ROOT optionally pins a default space root; the web picker can
 # still register/choose spaces at runtime.
 ENV IP=0.0.0.0

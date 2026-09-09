@@ -1,15 +1,11 @@
-//! `ResourceRow` — the DTO returned by web server functions.
+//! `ResourceRow` — the view-model the body renderer consumes.
 //!
-//! It mirrors `core::domain::Resource` but uses concrete `String` fields
-//! (no ULID) so it serialises cleanly through `dioxus::server` without
-//! requiring the client to import `ulid`. The `From<Resource>` impl
-//! converts the domain type to the wire shape; rendering code in
-//! `pages/list.rs` and `pages/detail.rs` consumes `ResourceRow` directly.
+//! It mirrors `core::domain::Resource` but uses concrete `String`
+//! fields (no ULID) so rendering code never deals with `ulid`.
 //!
-//! `BackendResourceRow` is the slim surface-agnostic DTO returned by
-//! the `list_resources_via_backend` server function. Pages still need
-//! the full `ResourceRow` for rendering `body_html` and edit-mode
-//! `raw_content`; `BackendResourceRow` is the `ui::Backend` view-model.
+//! `body_html` is filled by `crate::body::render_body`; `raw_content`
+//! is populated only on the document detail path (the editor needs the
+//! raw source, the list does not).
 
 use std::collections::BTreeMap;
 
@@ -25,56 +21,13 @@ pub struct ResourceRow {
     pub object_id: String,
     pub revision: String,
     pub properties: BTreeMap<String, String>,
-    /// Rendered preview HTML for the resource body. Empty for
-    /// kinds that don't have inline content (attachments).
+    /// Rendered preview HTML for the resource body. Empty for kinds
+    /// that don't have inline content (attachments).
     pub body_html: String,
     /// Raw source text for the edit textarea. Populated only in the
     /// document detail path; empty for list rows and non-documents.
     #[serde(default)]
     pub raw_content: String,
-}
-
-#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
-pub struct BackendResourceRow {
-    pub id: String,
-    pub kind: String,
-    pub title: String,
-    pub locator: String,
-}
-
-impl From<ui::ResourceRow> for BackendResourceRow {
-    fn from(r: ui::ResourceRow) -> Self {
-        Self {
-            id: r.id,
-            kind: r.kind,
-            title: r.title,
-            locator: r.locator,
-        }
-    }
-}
-
-/// Merge a `BackendResourceRow` (slim DTO from `ui::Backend`) with the
-/// web-only render fields (`body_html`, `raw_content`, ...) into a full
-/// `ResourceRow`. Used by `list_resources_via_backend` when the host
-/// routes through `Backend::Embedded` (in-process) to enrich the slim
-/// shape with web-local rendering data; `Backend::Http` calls skip
-/// the enrichment because the HTTP API does not yet carry body
-/// HTML.
-impl From<(BackendResourceRow, String, String)> for ResourceRow {
-    fn from((b, body_html, raw_content): (BackendResourceRow, String, String)) -> Self {
-        Self {
-            ref_str: b.id,
-            kind: b.kind,
-            title: b.title,
-            source_id: String::new(),
-            locator: b.locator,
-            object_id: String::new(),
-            revision: String::new(),
-            properties: BTreeMap::new(),
-            body_html,
-            raw_content,
-        }
-    }
 }
 
 impl ResourceRow {
@@ -151,37 +104,5 @@ mod tests {
         assert_eq!(row.revision, "r1");
         assert_eq!(row.properties.get("k").map(String::as_str), Some("v"));
         assert_eq!(row.body_html, "");
-    }
-
-    #[test]
-    fn backend_resource_row_mirrors_ui_resource_row() {
-        let row = ui::ResourceRow {
-            id: "heading:01J0".into(),
-            kind: "Heading".into(),
-            title: "Design sync".into(),
-            locator: "notes/design.org::Design sync".into(),
-        };
-        let dto = BackendResourceRow::from(row.clone());
-        assert_eq!(dto.id, row.id);
-        assert_eq!(dto.kind, row.kind);
-        assert_eq!(dto.title, row.title);
-        assert_eq!(dto.locator, row.locator);
-    }
-
-    #[test]
-    fn backend_resource_row_merges_into_full_resource_row() {
-        let slim = BackendResourceRow {
-            id: "heading:01J0".into(),
-            kind: "Heading".into(),
-            title: "Design sync".into(),
-            locator: "loc".into(),
-        };
-        let row: ResourceRow =
-            (slim, "<p>html</p>".to_string(), "raw source".to_string()).into();
-        assert_eq!(row.ref_str, "heading:01J0");
-        assert_eq!(row.title, "Design sync");
-        assert_eq!(row.locator, "loc");
-        assert_eq!(row.body_html, "<p>html</p>");
-        assert_eq!(row.raw_content, "raw source");
     }
 }

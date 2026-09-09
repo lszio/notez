@@ -2,57 +2,42 @@
 name = "web"
 version = "0.1.0"
 edition = "2024"
-description = "notez dioxus fullstack web client"
+description = "notez web surface: server-rendered workspace UI + protocol API + MCP host"
 
-build = "build.rs"
 [lib]
 name = "notez_web"
 path = "src/lib.rs"
 
+[[bin]]
+name = "web"
+path = "src/main.rs"
 
 [dependencies]
 notez-core = { path = "../../crates/core" }
 notez-protocol = { path = "../../crates/protocol" }
-notez-api = { path = "../../crates/api", optional = true }
-notez-mcp = { path = "../../crates/mcp", optional = true, features = ["http"] }
+notez-api = { path = "../../crates/api" }
+notez-mcp = { path = "../../crates/mcp", features = ["http"] }
 notez-preview = { path = "../../crates/preview" }
 composition = { path = "../../crates/composition" }
-orgmode     = { path = "../../crates/adapters/orgmode" }
-markdown    = { path = "../../crates/adapters/markdown" }
-ui              = { workspace = true }
-serde           = { workspace = true }
-serde_json      = { workspace = true }
-pulldown-cmark  = { version = "0.10", default-features = false }
-urlencoding     = "2"
-base64          = "0.22"
-mime_guess      = "2.0"
-html-escape     = "0.2"
-bytes           = "1.0"
-ulid            = "1.0"
-dioxus          = { workspace = true, features = ["router", "fullstack"] }
-sha2            = "0.10"
-# Server-only stack (axum SSR host + custom API routes). Compiled out
-# of the wasm client via the `server` feature gate.
-axum    = { version = "0.8", features = ["form"], optional = true }
-tokio   = { version = "1", features = ["rt-multi-thread", "macros", "net"], optional = true }
-anyhow  = { version = "1", optional = true }
-toml    = { version = "0.8", optional = true }
+orgmode = { path = "../../crates/adapters/orgmode" }
+markdown = { path = "../../crates/adapters/markdown" }
+
+serde = { workspace = true }
+serde_json = { workspace = true }
+axum = { version = "0.8", features = ["form"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net"] }
+anyhow = "1"
+toml = "0.8"
+base64 = "0.22"
+bytes = "1.0"
+ulid = { workspace = true }
+html-escape = "0.2"
+mime_guess = "2.0"
+sha2 = "0.10"
+urlencoding = "2"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 janetrs = "0.8"
-
-[target.'cfg(target_arch = "wasm32")'.dependencies]
-dioxus       = { workspace = true, features = ["web"] }
-dioxus-web   = { version = "0.7", default-features = false, features = ["document", "mounted"], optional = true }
-
-getrandom_03 = { package = "getrandom", version = "0.3", features = ["wasm_js"] }
-getrandom_04 = { package = "getrandom", version = "0.4", features = ["wasm_js"] }
-
-[features]
-default = ["server"]
-server = ["dioxus/server", "dep:axum", "dep:tokio", "dep:anyhow", "dep:toml", "dep:notez-api", "dep:notez-mcp"]
-
-web    = ["dioxus/web", "dep:dioxus-web"]
 
 [dev-dependencies]
 tempfile = "3"

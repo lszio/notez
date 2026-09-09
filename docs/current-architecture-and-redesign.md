@@ -7,7 +7,7 @@
 Notez 当前已经形成了一个可工作的本地优先知识索引系统，但还不是一个稳定的知识应用平台。核心问题不在于缺少更多功能，而在于三个抽象没有完全闭合：
 
 1. **事实、事件、投影没有形成单一状态模型**：原始文件、SQLite 投影、同步对象、journal、缓存文件分别保存不同部分的状态，写入链路也没有完全统一。
-2. **客户端运行模型不稳定**：Web 同时存在 SSR、Dioxus server functions、WASM hydration、原生表单和 progressive-enhancement JavaScript 五种交互机制。它们可以互相兜底，但没有一个明确的客户端状态机。
+2. **客户端运行模型不稳定**（2026-09-09 已解决）：Web 曾同时存在 SSR、Dioxus server functions、WASM hydration、原生表单和 progressive-enhancement JavaScript 五种交互机制；现已收敛为纯服务端渲染 + 原生表单，见 §4。
 3. **产品信息架构仍以“资源列表”为中心**：用户真正要完成的是阅读、捕获、关联、修改、回顾和推进工作，而当前界面主要展示扫描结果、文件树和调试信息。
 
 建议不要继续在现有页面上堆叠功能。下一阶段应先冻结一个更小、更稳定的核心模型：
@@ -63,15 +63,15 @@ Notez 的核心定位是：
 里程碑对"目标态"（§6）的影响：
 
 - §3.1 中描述的"两个引擎缓存、ApplicationFacade 仍是服务容器"已不再成立；Runtime 是唯一真相来源。
-- §4 中描述的"web 仅靠 Dioxus server functions、UI 与 API 没有共享 state"已部分缓解；web 宿主同时承担 API + MCP。
+- §4 中描述的"web 仅靠 Dioxus server functions、UI 与 API 没有共享 state"已彻底解决：Web 改为服务端渲染工作区，与 API + MCP 共用同一 Runtime，且不再有 server function 层。
 - §7.10 关于"HTTP API 中间件边界、远程对象穿越"已经按本节实现；auth 仍是循环策略（loopback anonymous / public 必带 token 或 OIDC）。
-- M3.5 完成 mobile HttpBackend 后，=ui::Backend= trait 的两个生产实现（EmbeddedBackend / HttpBackend）已就绪；web 页面的 =#[server]= 函数迁至 Backend trait 是剩余的桥接工作。
+- M3.5 完成 mobile HttpBackend 后，=ui::Backend= trait 的两个生产实现（EmbeddedBackend / HttpBackend）已就绪；web 侧不再需要该 trait —— Web 已改为服务端渲染，=#[server]= 函数与 =ui::Backend= 桥接工作一并删除。
 
 仍未完成：
 
-- wasm 客户端仍显式禁用 hydration（=packages/web/src/main.rs= 的 =hydrate(false)=），需要 Dioxus 0.7 hydration bug 修复或服务端 client 拼装升级；
-- web 页面大量 =#[server]= 函数尚未迁至 =ui::Backend= trait（迁完之后 =Backend::Http= 可让 web 客户端在嵌入式 vs 远程数据面之间切换）；
-- 核心写脊柱（journal + revision + audit）仍是 MVP-1/MVP-2 收尾项。
+- 核心写脊柱（journal + revision + audit）仍是 MVP-1/MVP-2 收尾项（revision 前置见 0.6.a）；
+- 同步模型收敛（阶段 C）；
+- Web 工作区的全文搜索、wiki-link 渲染、块级引用。
 
 ## 3. 当前实际架构
 
@@ -89,7 +89,7 @@ crates/
 └── adapters/markdown/       Markdown parser adapter
 
 packages/
-├── web/                     notez dioxus fullstack SSR + 宿主二进制（双模式 web / headless server）
+├── web/                     notez 服务端渲染工作区 UI + 宿主二进制（双模式 web / headless server）
 ├── ui/                      共享设计系统 + Backend trait + AppStore + tokens.css
 ├── desktop/                 Dioxus desktop + EmbeddedBackend（composition Runtime in-process）
 └── mobile/                  Dioxus mobile 骨架（HttpBackend 待 M3.5）
@@ -195,153 +195,87 @@ shared-folder/
 
 ### 4.1 当前 Web 运行时
 
-Web 当前同时包含以下机制：
+Web 现在是**纯服务端渲染**的工作区，不再是「SSR + hydration + JS 补丁」的混合体：
 
 ```text
-SSR HTML
-  + Dioxus server functions
-  + WASM client build
-  + hydration bootstrap
-  + native HTML forms
-  + custom Axum routes
-  + progressive-enhancement JavaScript
+Axum handler
+  -> 直接读 projection / 文件（同一 composition Runtime）
+  -> 拼装 HTML 字符串（结构 + 转义）
+  -> 返回完整页面
++ 原生 <form method="post"> 写入
++ 一份内嵌 CSS（/app.css，编译进二进制）
++ 约 40 行内联 JS（列表过滤 / 编辑器快捷键 / 未保存提醒）
 ```
 
-入口位于 `packages/web/src/main.rs`：
-
-- server feature 使用 `dioxus::serve` 和 `dioxus::server::router(app)`；
-- 自定义 `/api/sources/*` 路由与 Dioxus router 合并；
-- client feature 使用 `LaunchBuilder` / `dioxus::launch`；
-- `packages/web/public/index.html` 同时包含 CSS、hydration loader 和原生 JavaScript fallback。
-
-> **已过时** — 当前路由与信息架构以 `docs/ui-refactoring-v2.org`
-> 为准（v2 笔记工作台）。下列表格保留作为历史快照：
+入口 `packages/web/src/main.rs` 把三个 router 合并成一个 axum Router：
 
 ```text
-/                                      space picker
-/source/<encoded>                      space home
-/source/<encoded>/list                 resource list
-/source/<encoded>/resource/<ref>       resource detail
-/source/<encoded>/graph                graph view
-/source/<encoded>/preview/<locator>   file/attachment preview
+ui::router()              工作区 UI（packages/web/src/ui/）
+routes::build_router()    源注册 / Janet 求值
+host::protocol_router()   /api/v1/* + /mcp
 ```
 
-当前路由（v2）：
+没有 wasm 客户端、没有 `dioxus::serve`、没有 `#[server]` 函数、没有
+`packages/web/public/index.html`。`packages/web` 也不再依赖 `dioxus` 与
+`packages/ui`。
+
+路由（`packages/web/src/ui/mod.rs`）：
 
 ```text
-/                                          configurable home dashboard
-/source/:encoded                           per-space landing (journal/index/files)
-/source/:encoded/journal                   daily journal (today + recent)
-/source/:encoded/note/:encoded_ref         note workbench (read/edit/source + right rail)
-/source/:encoded/files?:..query            all-files browser
-/source/:encoded/activity                  journal stream
-/source/:encoded/graph                     full-space force graph
-/source/:encoded/preview/:encoded_locator  loose-file preview
+GET  /                          space picker（仅一个空间时 303 到 /s/<enc>）
+GET  /app.css                   内嵌样式表
+POST /register                  注册目录为空间（写 ~/.config/notez/config.toml）
+GET  /s/{space}                 空间首页（README/index 页，否则页面列表）
+GET  /s/{space}/{*locator}      笔记阅读；?edit=1 编辑器；非文档 → 附件预览
+GET  /raw/{space}/{*locator}    原始字节（图片 / PDF / 下载）
+GET  /new/{space}               新建表单
+POST /new/{space}               创建并打开编辑器
+POST /save/{space}              保存（expected_revision 守卫）
+POST /scan/{space}              重新扫描
+POST /api/janet/eval            受限 Janet 求值（调试）
 ```
 
-v2 信息架构（来自 `docs/ui-refactoring-v2.org`）：
+数据来源与渲染：
 
-- Source picker（顶部下拉）、文件树侧栏、活动流合并在主页
-  可配置挂件仪表盘上；
-- Daily journal（`/journal`）作为一等目的地，与文件树并排展示；
-- 笔记工作台的三栏布局：左侧文件树 + 搜索、顶部空间名与新建
-  菜单、笔记正文（读/编辑/源模式单标签页切换）+ 右侧大纲/反链/
-  属性/局部图（SSR 确定性，固定 prop 传入，不再依赖 hydration
-  context 信号）；
-- 可配置主页仪表盘由 `~/.config/notez/web.toml` 控制（见
-  `ui-refactoring-v2.org` 第 3/8 节）；
-- watch start/stop / scan / 命令面板等仍存在，但归属在"配置"
-  详情面板内。
+- 侧栏页面列表 = 文件系统遍历（`SourcePolicy::decide_file` 的结构规则：
+  隐藏路径 / exclude glob / 符号链接；**不**应用文档 include glob 与大小
+  上限，因此附件可见）+ projection 标题合并；
+- 正文仍走 `notez-preview` catalog（markdown / org / PDF / Office / 表格 /
+  归档 / 图片），`body.rs` 只负责把 `PreviewModel` 转成 HTML；
+- 渲染出的相对 `href`/`src` 由 `ui::page::rewrite_local_urls` 重写为
+  `/s/...`（页面）或 `/raw/...`（资源），文档相对路径按所在目录解析。
 
-v2 已聚焦到"日常笔记 + 日志 + 反链图谱"主流程，下一阶段继续往
-wikilink 与块级引用演进。
+> 历史快照：v2 笔记工作台（`docs/ui-refactoring-v2.org`）的三栏布局、
+> 右侧栏、仪表盘挂件、`web.toml` 配置、命令面板与 Dioxus 路由已随本次
+> 精简移除（`pages/*`、`layout.rs`、`router.rs`、`space_ctx.rs`、
+> `ui_config.rs`、`backend.rs`、`tree.rs` 均已删除）。
 
-### 4.3 已知交互问题
+### 4.2 交互约束
 
-#### Dioxus hydration
+- 每个交互只有一条实现路径：过滤只有客户端 DOM 过滤（服务端已有全量
+  列表），编辑器只有 `<form>` + 一个 `<textarea>`，保存只有
+  `POST /save/{space}`；
+- 保存以内容 sha256 作为 `expected_revision`，冲突返回 409 并保留用户
+  文本、同时把 revision 换成磁盘当前值，二次保存才是显式覆盖；
+- 附件预览与编辑共享同一路径解析与安全检查（`safe_join`：绝对路径、
+  `..`、逃出空间的符号链接一律拒绝）。
 
-浏览器控制台已经观察到：
+### 4.3 已解决的交互问题
 
-```text
-RawInterpreter.hydrate_node
-TypeError: Cannot read properties of undefined (reading 'toString')
-```
+以下问题在本次精简中随架构一起消失，不再是待办：
 
-同时出现 server-function payload 反序列化类型不匹配。结果是：
+- **hydration 崩溃**（`RawInterpreter.hydrate_node` TypeError）：没有客户端
+  框架，页面是完整 HTML；
+- **同一状态多个写入者**（Signal + inline JS + server function）：命令
+  面板与 `web.toml` 挂件已删除，过滤/编辑器各只有一个实现；
+- **「Loading document tree…」永久加载**：SSR 直接读数据，没有未解析的
+  server-future；
+- **内联 1683 行 `index.html` 双状态源**：样式改为 `ui/style.css`
+  （`include_str!` + 缓存头），页面只含内联小脚本。
 
-- WASM 文件可以加载；
-- 部分 router/history 行为可以工作；
-- 元素级 `oninput`、`onchange`、`onkeydown` 不可靠；
-- 受控输入可能被重新渲染覆盖；
-- 页面退回依赖原生表单和 JavaScript fallback。
-
-当前文档不应把“完整 hydration”描述成已完成能力。
-
-#### 交互机制重复
-
-例如命令面板同时有：
-
-- Dioxus `Signal<bool>` 控制打开状态；
-- inline JavaScript 控制 CSS class；
-- Dioxus `onkeydown` 处理选择；
-- JavaScript fallback 处理搜索和回车；
-- server function 负责搜索结果。
-
-这造成同一状态有多个写入者，任何一个机制失效都会出现“视觉打开但交互不工作”或“输入被重置”。
-
-#### 列表过滤
-
-当前过滤逻辑在 Rust 组件中是合理的：
-
-```text
-q_filter + kind_filter + sort_key
-  -> visible rows
-  -> showing count
-```
-
-但事件来源不稳定，因此又增加了原生 JS 按 DOM 文本过滤。现在是两个过滤实现并存，而不是一个明确的状态源。
-
-#### 命令面板
-
-命令面板在空间页面上可以搜索资源，但它仍承担过多职责：搜索、分组、键盘选择、路由生成、关闭状态、server function loading。它应当被重设计为统一的 Intent Palette，而不是一个特殊的搜索弹窗。
-
-#### 错误呈现
-
-服务器错误在若干页面被压缩成通用 `Internal`。用户需要知道的是：
-
-```text
-找不到 Source
-Source 无权限
-Source 不支持此能力
-文件已变化
-同步冲突
-服务暂不可用
-```
-
-这些状态必须直接进入 UI 状态模型，而不是只剩一段字符串。
-
-### 4.4 当前 UI 组件状态
-
-`packages/ui` 已有：
-
-- `NzButton`；
-- `NzButtonGhost`；
-- `NzInput`；
-- `NzBadge`；
-- `NzCard`。
-
-CSS token 已在 Web HTML 中定义，包括：
-
-- 颜色；
-- 字体；
-- 间距；
-- 圆角；
-- 阴影；
-- light/dark theme。
-
-但 `packages/web` 当前并没有把 `packages/ui` 作为主组件来源，Web 页面仍大量直接书写 RSX 和 class。下一步应先统一组件来源，再继续增加组件。
-
----
+仍然存在的交互缺口（不在本次范围）：wiki-link 渲染（markdown 侧只做
+索引，不渲染为链接）、Org 部分语法（描述列表、脚注、时间戳）、跨文件
+全文搜索。
 
 ## 5. 用 SICP 重新审视 Notez
 
@@ -470,7 +404,7 @@ notez-sync         基于 Change/Object/Head 的同步
 notez-composition  唯一 native 装配根
 notez-cli          CLI adapter
 notez-mcp          MCP adapter
-notez-web          HTTP/server-function adapter + client
+notez-web          服务端渲染工作区 UI + HTTP/MCP 宿主
 notez-ui           共享设计系统和 View primitives
 ```
 
@@ -877,20 +811,20 @@ HTTP request
 
 ### 阶段 D：Web 客户端状态模型
 
-- ✅ SSR 首屏保留（web binary 默认走 dioxus::serve）；
-- / 让 Web client 只有一个 Store；
-- / server function 只作为 protocol transport；
-- / hydration 失败时不再产生第二套 Dioxus/JS 状态逻辑（hydration 当前显式 =hydrate(false)=，待修复）；
-- ✅ 将 progressive enhancement 限定为可替换的 transport fallback；
-- / 优先完成 Reader、Search、Inspector 三个工作面。
+- ✅ 服务端渲染工作区（`packages/web/src/ui/`）：浏览 / 阅读 / 编辑 / 附件
+  预览，全部为原生链接与表单；
+- ✅ 删除 Dioxus 客户端路径（`dioxus::serve`、`#[server]`、wasm、hydration、
+  `public/index.html`），页面只有一个状态来源；
+- ✅ 保存经由 protocol 写脊柱（`UpdateDocument` + expected_revision）；
+- / 下一个工作面：全文搜索、wiki-link 渲染、块级引用。
 
-验收：
+验收（2026-09-09 实测）：
 
-- 页面加载后无 hydration console error；
-- 输入、选择、键盘导航不丢状态；
-- SPA 路由与浏览器前进后退一致；
-- 查询状态可从 URL 恢复；
-- server function 错误不会被错误地反序列化成其它 DTO。
+- 页面加载无 hydration console error（无 hydration）；
+- 输入、选择、键盘导航不丢状态（原生表单）；
+- 浏览器前进后退与 URL 一致；
+- 保存冲突返回 409 且不丢用户文本；
+- `scripts/acceptance-web.sh` PASS。
 
 ### 阶段 E：设计系统和跨平台
 - ✅ 将 tokens 从 Web HTML 提取到共享 UI 资源（=packages/ui/assets/tokens.css=，web shell 用 link 引用，desktop/mobile assets/main.css 替换为 tokens）；
@@ -924,15 +858,15 @@ HTTP request
 2026-09 里程碑（M1–M3）已把 §1 列出的三个核心问题的前两个推进到「已落地」：
 
 - ✅ 「事实、事件、投影形成单一状态模型」 — =composition::Runtime= 接管引擎缓存与 watcher；CLI/MCP/HTTP/Web 复用同一 Runtime；protocol 已是 typed enum。
-- ◐ 「客户端运行模型不稳定」 — web 宿主双模式落地（SSR + axum API/MCP），但 wasm 客户端仍禁用 hydration，desktop 是初版 Workspace 视图，mobile 仍是 starter shell。
+- ✅ 「客户端运行模型不稳定」 — Web 改为纯服务端渲染工作区（axum + 原生表单，无 hydration / server function / wasm），单一状态来源；desktop 是初版 Workspace 视图，mobile 仍是 starter shell。
 - ◐ 「产品信息架构以资源列表为中心」 — 共享 Nz* 组件与 =ui::Backend= trait 落地，desktop Workspace 是首批非文件浏览器的工作面。
 
 需要继续重考虑的：
 
 - **核心状态模型**：从多个局部状态改为 Command/Change/Projection 单一脊柱（M0.5/0.6 未变）；
 - **应用边界**：从大型 Facade 改为显式 Dispatcher、UseCase 和 Ports（API/Web 已委托，cli/handlers 仍存面模型）；
-- **客户端模型**：从 SSR + hydration + JS 补丁的混合状态，改为 SSR 首屏 + 单一 Store + 协议 transport（M3.5/mobile + wasm 客户端待 M4）；
+- **客户端模型**：Web 已完成「SSR 首屏 + 原生表单」的单一模型（2026-09-09）；若将来需要富客户端，再引入一个明确的 Store + 协议 transport，而不是回退到混合状态；
 - **信息架构**：从文件/资源浏览器改为围绕 Inbox、Search、Reader、Editor、Inspector 的知识工作台（v2 UI 文档已定，落地进行中）；
 - **设计系统**：从 Web 内嵌 CSS 改为 tokens 驱动、跨平台复用的真正 UI 层（tokens 已抽出 + 共享，三端 link 同一 css，Nz 组件采纳进行中）。
 
-最优先的下一步（2026-09-07 复核）：① 0.6.a 让 CLI 写命令携带真实 =expected_revision=（dispatcher 端空值旁路关闭）；② web 剩余 28/31 个 =#[server]= 函数迁至 =ui::Backend=（trait 现仅 3 方法，list/scan/get_resource 已桥接）；③ wasm 客户端 hydration 修复（=main.rs:98 =hydrate(false)= 仍生效）。mobile HttpBackend 已于 000c771 落地，不再是待办。
+最优先的下一步（2026-09-09 复核）：① 0.6.a 让 CLI 写命令携带真实 =expected_revision=（dispatcher 端空值旁路关闭）；② 同步模型收敛（阶段 C：content-addressed snapshot + 多 actor heads）；③ Web 工作区的搜索 / wiki-link / 块级引用。~~② =#[server]= 函数迁移~~ 与 ~~③ wasm hydration 修复~~ 已随 Web 精简作废（相关代码已删除）。

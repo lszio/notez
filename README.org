@@ -27,8 +27,10 @@ crates/
 ├── adapters/     orgmode + markdown parser/reader crates
 packages/
 ├── ui/           Shared Dioxus design system + Backend trait + AppStore
-├── web/          Dioxus fullstack SSR + host assembly
-│                 ├── default mode: SSR + /api/v1 + /mcp (one shared Runtime)
+├── web/          Server-rendered workspace UI + host assembly
+│                 ├── ui/: minimal SilverBullet-style SSR UI (browse / read /
+│                 │        edit / attachment preview); no wasm, no hydration
+│                 ├── default mode: UI + /api/v1 + /mcp (one shared Runtime)
 │                 └── NOTEZ_MODE=server: headless api + mcp only
 ├── desktop/      Dioxus desktop + EmbeddedBackend (composition Runtime, no HTTP)
 └── mobile/       Dioxus mobile (future HttpBackend via notez-api::NotezClient)
@@ -268,20 +270,36 @@ The =web= binary serves both web UI + API + MCP, or a headless server
 mode, depending on =NOTEZ_MODE=:
 
 #+begin_src bash
-# default: SSR + /api/v1 + /mcp over one shared composition Runtime
+# default: workspace UI + /api/v1 + /mcp over one shared composition Runtime
 IP=127.0.0.1 PORT=8765 ./web-binary
 
 # headless: only /api/v1 + /mcp, no UI
 NOTEZ_MODE=server IP=127.0.0.1 PORT=8765 ./web-binary
 #+end_src
 
+** Workspace UI
+
+The default mode serves a server-rendered workspace: a page list in the
+sidebar, one content column, `?edit=1` for the editor, and inline
+previews for attachments (images, PDF, Office, CSV, archives). It is
+plain HTML + forms — no client framework, no hydration — so every
+interaction is a normal navigation and the page weight stays small.
+Landing: `/` redirects to the only registered space, otherwise it shows
+the space picker (`POST /register` writes it to
+=~/.config/notez/config.toml=).
+
+#+begin_src bash
+just web                # debug build + run (port 8765)
+just web RELEASE=1      # release build; recommended for daily use
+#+end_src
+
 ** Embedded Dioxus clients
 
 =packages/desktop= embeds the engine in-process via the composition
-=Runtime= (=EmbeddedBackend= over the =ui::Backend= trait). =packages/mobile=
-is a Dioxus mobile shell that will use =notez-api::NotezClient= to talk
-to a running =notez= host. Both surfaces share =packages/ui= design
-tokens and primitives.
+=Runtime=. =packages/mobile= is a Dioxus mobile shell that will use
+=notez-api::NotezClient= to talk to a running =notez= host. Both
+surfaces share =packages/ui= design tokens and primitives; the web
+workspace UI is independent of them.
 
 * Exit Codes
 

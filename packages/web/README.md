@@ -1,67 +1,69 @@
-# notez web (v0.2 — full operations in the UI)
+# notez web (`packages/web`)
 
-The v0.1 reader-only web client (`/`, `/space/.../list`, `/space/.../resource/...`)
-is **read-only**. v0.2 adds three operations that are reachable from the UI
-without a hydrated client bundle:
+The notez web surface: a server-rendered workspace plus the process host
+for the protocol API and MCP.
 
-- **Add space** — a `<details>` form on the home page that POSTs to
-  `/api/spaces/register`. The server validates the path, writes the
-  global XDG config, and `303 See Other`s to the new space's list page.
-- **Scan** — a button on the list page posts a command to the shared Engine
-  runtime and redirects back to the list page.
-- **Watch** — a button on the list page that POSTs to
-  `/api/spaces/watch/start` (inotify-backed `WatchService` in core).
-  A second button stops the watch. The server's
-  `GET /api/spaces/watch/state?path=...` returns the current state and
-  the last 50 events as JSON; the watch panel on the list page links
-  to it so the user can see live activity.
+One binary (`web`) mounts three routers on one axum server, sharing a
+single composition `Runtime` (one engine cache + watcher per process):
 
-The `LaunchBuilder` flow is **not** used. `main.rs` switches to
-`dioxus_server::serve` and builds a merged `axum::Router` containing
-both the Dioxus SSR app and the custom POST routes. This is required
-because the WASM client bundle is not built in this repo (it would
-need a separate `cargo build --target wasm32-unknown-unknown` step
-that pulls in the SQLite C bindings, which don't build for wasm32
-without a C toolchain target).
+| Router | Paths | Source |
+|---|---|---|
+| workspace UI | `/`, `/s/*`, `/raw/*`, `/new/*`, `/save/*`, `/scan/*`, `/register`, `/app.css` | `src/ui/` |
+| web form endpoints | `/api/janet/eval` | `src/routes.rs` |
+| protocol + MCP | `/api/v1/*`, `/mcp` | `crates/api`, `crates/mcp` |
 
-## What this is NOT
+## The UI
 
-There is no client-side hydration in v0.2. Every interaction is a
-plain HTML form submit or anchor click. That is the right trade-off
-for a reader that must work without a client bundle; the v0.2 surface
-is sufficient to exercise all `notez` operations from a browser.
+Plain server-rendered HTML. No wasm, no hydration, no client framework,
+no `#[server]` functions: a click is a normal navigation and a write is
+a normal `<form method="post">`. The only JavaScript is ~40 lines inline
+(page filter, editor shortcuts, unsaved-changes guard).
 
-## Building and running
+- **Sidebar** — every document and attachment in the space, filterable
+  (`/` focuses the box). Documents and attachments are listed
+  separately; titles come from the projection where indexed.
+- **Reading** — `/s/<space>/<locator>` renders markdown/org through the
+  `notez-preview` catalog. Relative links and images are rewritten to
+  `/s/...` and `/raw/...`, resolved against the document's directory.
+- **Editing** — `?edit=1` opens a textarea; `Ctrl/Cmd-S` saves through
+  `POST /save/<space>` with the content hash as `expected_revision`. A
+  conflict returns 409, keeps your text, and switches the revision to
+  the on-disk one so a second save is a deliberate overwrite.
+- **Attachments** — any non-document path renders a preview (image,
+  PDF, Office, CSV, archive, …) with a raw-bytes link.
 
-The Dioxus fullstack runtime still expects the WASM bundle at
-`./public/assets/`. v0.2 ships **without** it, so the SSR pages render
-but no JS runs in the browser. To rebuild with hydration later,
-use `dx build --fullstack` from this directory (requires the `web`
-feature to be in the default set; see `Cargo.toml`).
+Spaces are addressed by base64url-encoded absolute path so one server
+can serve several roots. `/` redirects to the only registered space, or
+shows the picker (`POST /register` writes the global config).
 
-For the v0.2 reader:
+## Running
 
 ```bash
-cargo run -p web --bin web
-# or via the justfile
-just web
+just web                 # debug build + run on 127.0.0.1:8765
+just web RELEASE=1       # release build — recommended for daily use
+NOTEZ_SPACE_ROOT=~/Notes just web
 ```
 
-Then open <http://127.0.0.1:8765/>.
+`NOTEZ_MODE=server` runs the same binary headless (protocol API + MCP
+only, no UI).
 
 ## Layout
 
+```text
+src/main.rs     binary entry: bind + router assembly + serve
+src/host.rs     host assembly (UI + API + MCP against one Runtime)
+src/ui/         the workspace UI (mod.rs router/handlers, page.rs HTML,
+                space.rs data access, urls.rs URL helpers, style.css)
+src/body.rs     PreviewModel -> HTML (delegates to notez-preview)
+src/routes.rs   process-global state, source registration, Janet eval
+src/server.rs   projection query helpers + save outcome types
+src/model.rs    ResourceRow view model
+src/janet.rs    restricted Janet runtime
 ```
-web/
-├─ assets/      # CSS + favicon
-├─ src/
-│  ├─ main.rs         # entry: builds axum router, starts server
-│  ├─ lib.rs          # mounts the App() component
-│  ├─ routes.rs       # custom POST routes (register / scan / watch)
-│  ├─ server.rs       # Dioxus #[server] functions (list_resources, get_resource)
-│  ├─ space_ctx.rs    # Signal<Option<SpaceState>> for the active space
-│  ├─ router.rs       # Dioxus router + base64 URL-safe encoding
-│  ├─ model.rs        # ResourceRow DTO
-│  ├─ layout.rs       # global app shell + error banner
-│  └─ pages/          # per-route components (home, list, detail, picker, ...)
-```
+
+## Tests
+
+`cargo test -p web` covers URL helpers, the HTML rewriter, the locator
+index merge, save-failure serialization and the Janet sandbox. The
+end-to-end surface is covered by `scripts/acceptance-web.sh`
+(picker → list → render → save → raw → stale-revision 409).

@@ -1,14 +1,15 @@
 //! `host` — server-only host assembly.
 //!
-//! Mounts the web SSR surface, the HTTP protocol API (`/api/v1/*`) and
-//! the MCP streamable-HTTP endpoint (`/mcp`) on top of one shared
-//! composition `Runtime` (one engine cache + watcher set per process).
+//! Mounts the workspace UI (`crate::ui`), the HTTP protocol API
+//! (`/api/v1/*`) and the MCP streamable-HTTP endpoint (`/mcp`) on top
+//! of one shared composition `Runtime` (one engine cache + watcher set
+//! per process).
 //!
 //! The same binary runs in two modes selected by `NOTEZ_MODE`:
 //!
 //! * `server` (or `NOTEZ_MODE=server`): headless — no UI, only the
 //!   protocol API and MCP. Bound by `IP`/`PORT` like the web mode.
-//! * default: web — dioxus fullstack SSR plus the API and MCP mounted
+//! * default: web — the server-rendered workspace plus the API and MCP
 //!   on the same router.
 //!
 //! Auth comes from the same environment variables
@@ -23,86 +24,6 @@ use axum::Router;
 use notez_api::auth_middleware;
 
 use crate::routes::{state_snapshot, WebState};
-
-/// What kind of `ui::Backend` the host installs for pages that prefer
-
-/// What kind of [`ui::Backend`] the host installs.
-///
-/// * default (`Embedded`) — composition `Runtime`, in-process; one
-///   Engine cache per source root.
-/// * `Http` — `notez_api::NotezClient` talking to a remote notez
-///   server; the web shell becomes a thin client.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum BackendKind {
-    Embedded,
-    Http,
-}
-
-impl BackendKind {
-    pub fn from_env() -> Self {
-        match std::env::var("NOTEZ_DATA_BACKEND").ok().as_deref() {
-            Some("http") | Some("HTTP") => BackendKind::Http,
-            _ => BackendKind::Embedded,
-        }
-    }
-}
-
-/// Surface-agnostic data port enum — `dyn ui::Backend` is not dyn
-/// compatible (async fns), so we wrap the two production impls in an
-/// enum and dispatch by variant. Each variant owns its own
-/// configuration (Runtime for embedded, NotezClient for http).
-pub enum DataBackend {
-    Embedded(crate::backend::EmbeddedBackend),
-    Http(crate::backend::HttpBackend),
-}
-
-impl DataBackend {
-    /// Build the backend the host uses for `#[server]` fns that have
-    /// migrated to the surface-agnostic port. Pick with
-    /// `NOTEZ_DATA_BACKEND=http` to forward to a remote notez server.
-    pub fn from_env() -> Self {
-        match BackendKind::from_env() {
-            BackendKind::Embedded => {
-                let state = state_snapshot();
-                let root = state.default_root().clone();
-                DataBackend::Embedded(crate::backend::EmbeddedBackend::new(root))
-            }
-            BackendKind::Http => DataBackend::Http(
-                crate::backend::HttpBackend::from_env().unwrap_or_else(|err| {
-                    panic!("notez host: cannot build HttpBackend: {err}")
-                }),
-            ),
-        }
-    }
-}
-
-impl ui::Backend for DataBackend {
-    async fn list_spaces(&self) -> Result<Vec<ui::SpaceRow>, String> {
-        match self {
-            DataBackend::Embedded(b) => b.list_spaces().await,
-            DataBackend::Http(b) => b.list_spaces().await,
-        }
-    }
-    async fn scan_space(&self, root: &str) -> Result<u32, String> {
-        match self {
-            DataBackend::Embedded(b) => b.scan_space(root).await,
-            DataBackend::Http(b) => b.scan_space(root).await,
-        }
-    }
-    async fn query_resources(
-        &self,
-        root: &str,
-        title_contains: Option<&str>,
-        kind: Option<&str>,
-        limit: Option<u32>,
-    ) -> Result<Vec<ui::ResourceRow>, String> {
-        match self {
-            DataBackend::Embedded(b) => b.query_resources(root, title_contains, kind, limit).await,
-            DataBackend::Http(b) => b.query_resources(root, title_contains, kind, limit).await,
-        }
-    }
-}
-
 
 /// What kind of surface the host is currently building.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

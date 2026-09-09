@@ -185,7 +185,7 @@ fn model_to_html(model: &PreviewModel, raw_url: &str, ext: &str, title: &str) ->
         PreviewModel::Zip { entries } => render_zip(entries),
         PreviewModel::Docx { paragraphs } => render_docx(paragraphs),
         PreviewModel::Table { table } => render_table(table),
-        PreviewModel::Image { src, mime, .. } => render_image(src, mime, title),
+        PreviewModel::Image { mime, .. } => render_image(raw_url, mime, title),
         PreviewModel::Mermaid { source } => render_mermaid(source),
         PreviewModel::D2 { source } => render_d2(source),
         PreviewModel::Iframe { src, sandbox } => render_iframe(src, sandbox),
@@ -364,23 +364,14 @@ fn render_table(table: &notez_preview::Table) -> String {
 }
 
 fn render_image(src: &str, mime: &str, title: &str) -> String {
-    // The image previewer emits a `/s/{}/a/{}` URL that has no
-    // handler in this build; rewrite to the raw attachment endpoint.
-    let raw = if src.starts_with("/s/") {
-        // Synthesize a no-cache link to the raw endpoint; the
-        // previewer doesn't carry enough context to build the real
-        // URL, so we fall back to the placeholder. The raw
-        // endpoint is constructed in render_dispatch above; here
-        // we just embed the previewer's URL plus a download link.
-        src.to_string()
-    } else {
-        src.to_string()
-    };
+    // `src` is the raw-bytes URL built by `render_dispatch`; escape it
+    // for the attribute context without touching `/` (the URL
+    // rewriter and the browser both need the real path shape).
     format!(
         "<div class=\"preview-img\"><img src=\"{raw}\" alt=\"{title}\" data-mime=\"{mime}\" style=\"max-width:100%;height:auto;\" /></div>",
-        raw = html_escape::encode_safe(&raw),
-        title = html_escape::encode_safe(title),
-        mime = html_escape::encode_safe(mime),
+        raw = html_escape::encode_double_quoted_attribute(src),
+        title = html_escape::encode_double_quoted_attribute(title),
+        mime = html_escape::encode_double_quoted_attribute(mime),
     )
 }
 
@@ -477,11 +468,8 @@ fn resolve_file_path(source_root: &Path, locator: &str) -> PathBuf {
 }
 
 fn raw_attachment_url(source_root: &Path, locator: &str) -> String {
-    format!(
-        "/api/sources/attachment/raw?source_root={}&locator={}",
-        urlencoding::encode(&source_root.to_string_lossy()),
-        urlencoding::encode(locator)
-    )
+    let encoded = crate::ui::urls::encode_space(&source_root.to_string_lossy());
+    crate::ui::urls::raw_url(&encoded, locator)
 }
 
 // ----- tests -----------------------------------------------------------------
@@ -602,7 +590,8 @@ mod tests {
             Path::new("/space"),
             "docs/proposals/whitepaper.pdf",
         );
-        assert!(url.contains("docs%2Fproposals%2Fwhitepaper.pdf"));
+        assert!(url.starts_with("/raw/"), "{url}");
+        assert!(url.ends_with("/docs/proposals/whitepaper.pdf"), "{url}");
     }
 
     #[test]
