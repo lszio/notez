@@ -183,7 +183,7 @@ impl CardCache {
 
     /// Invalidate every entry whose key contains the supplied
     /// source revision. Called when a Source's revision moves.
-    pub fn invalidate_source_revision(&self, revision: &str) {
+    pub fn invalidate_source_revision(&self, _revision: &str) {
         let mut entries = self.entries.lock().expect("card cache lock");
         entries.retain(|_, entry| match &entry.state {
             CardState::Stale => false,
@@ -233,7 +233,7 @@ impl CardExecutionService {
             return state;
         };
         drop(executors);
-        let timeout = if context.timeout > Duration::ZERO {
+        let _timeout = if context.timeout > Duration::ZERO {
             context.timeout
         } else {
             executor.default_timeout()
@@ -327,7 +327,7 @@ impl CardProjection {
                     CardOutput::Object { .. } => "object",
                     CardOutput::Html(_) => "html",
                 };
-                let output = match &out {
+                let _output = match &out {
                     CardOutput::Json(value) => Some(value.clone()),
                     CardOutput::List(items) => Some(Value::Array(items.clone())),
                     CardOutput::Object { .. } => None,

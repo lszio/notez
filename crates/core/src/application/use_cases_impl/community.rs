@@ -7,7 +7,6 @@ use crate::application::service::{ApplicationError, Engine, StorageErrorKind};
 use crate::application::use_cases::CommunityUseCase;
 use crate::application::write_check;
 use crate::domain::query::{ProjectionReader, ProjectionStore, ProjectionWrite};
-use crate::domain::community::Community;
 
 impl<S> CommunityUseCase for Engine<S>
 where

@@ -194,7 +194,7 @@ pub fn parse_org_notez_blocks(text: &str) -> Vec<NotezBlock> {
         }
         let header = trimmed["#+begin_src".len()..].trim();
         let mut tokens = header.split_whitespace();
-        let language = tokens.next().unwrap_or("janet").to_string();
+        let _language = tokens.next().unwrap_or("janet").to_string();
         let attrs = parse_org_header_args(tokens);
         let marker = attrs
             .get("card")

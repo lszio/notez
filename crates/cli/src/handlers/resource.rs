@@ -14,7 +14,7 @@ use super::{Service, exit_code_for};
 use crate::commands::{QueryArgs, ResourceCommands, ResourceSubcommand};
 use notez_core::application::dispatcher::{ApplicationDispatcher, Response};
 use notez_core::domain::{Resource, ResourceRef};
-use notez_protocol::response::{ResourceKind, ResolveResult};
+use notez_protocol::response::ResolveResult;
 use notez_protocol::request::{
     DeleteResourceRequest, InspectRulesRequest, ListBySourceRequest, ListRecentRequest,
     ReadResourceRequest, Request, ResolveRequest, ResourcePayload, UpsertResourceRequest,

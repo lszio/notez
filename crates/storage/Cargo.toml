@@ -1,0 +1,12 @@
+[package]
+name = "notez-storage"
+version = "0.1.0"
+edition = "2024"
+description = "SQLite projection, journal and audit infrastructure for Notez"
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+notez-domain = { path = "../domain" }
+notez-ports = { path = "../ports" }

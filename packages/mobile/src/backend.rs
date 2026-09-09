@@ -13,7 +13,6 @@
 //! `NOTEZ_API_SOURCE` set, `client.with_default_source(...)` can pin
 //! a default and we can pass empty string for unselected calls.
 
-use std::path::PathBuf;
 
 use notez_api::NotezClient;
 use notez_protocol::request::{

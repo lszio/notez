@@ -4538,6 +4538,48 @@ dependencies = [
 ]
 
 [[package]]
+name = "notez-domain"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "thiserror 2.0.20",
+ "ulid",
+]
+
+[[package]]
+name = "notez-engine"
+version = "0.1.0"
+dependencies = [
+ "notez-domain",
+ "notez-ports",
+ "notez-protocol",
+]
+
+[[package]]
+name = "notez-format-markdown"
+version = "0.1.0"
+dependencies = [
+ "notez-domain",
+ "notez-ports",
+]
+
+[[package]]
+name = "notez-format-org"
+version = "0.1.0"
+dependencies = [
+ "notez-domain",
+ "notez-ports",
+]
+
+[[package]]
+name = "notez-fs"
+version = "0.1.0"
+dependencies = [
+ "notez-domain",
+ "notez-ports",
+]
+
+[[package]]
 name = "notez-mcp"
 version = "0.1.0"
 dependencies = [
@@ -4554,6 +4596,13 @@ dependencies = [
  "tempfile",
  "tokio",
  "tower",
+]
+
+[[package]]
+name = "notez-ports"
+version = "0.1.0"
+dependencies = [
+ "notez-domain",
 ]
 
 [[package]]
@@ -4582,6 +4631,22 @@ dependencies = [
  "schemars",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "notez-storage"
+version = "0.1.0"
+dependencies = [
+ "notez-domain",
+ "notez-ports",
+]
+
+[[package]]
+name = "notez-sync"
+version = "0.1.0"
+dependencies = [
+ "notez-domain",
+ "notez-ports",
 ]
 
 [[package]]

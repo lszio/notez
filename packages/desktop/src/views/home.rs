@@ -1,7 +1,7 @@
 //! Desktop home view — embedded workspace list + scan + query.
 
 use dioxus::prelude::*;
-use ui::{Backend, NzBadge, NzCard, ResourceRow, SpaceRow};
+use ui::{Backend, NzBadge, NzCard, ResourceRow};
 
 use crate::backend::EmbeddedBackend;
 

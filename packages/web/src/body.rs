@@ -34,7 +34,7 @@ use std::sync::LazyLock;
 
 use notez_core::domain::{Resource, ResourceKind, ResourceRef};
 use notez_preview::{
-    builders::org_html::render_org_html, PreviewContext, PreviewModel, PreviewerCatalog,
+    PreviewContext, PreviewModel, PreviewerCatalog,
 };
 use ulid::Ulid;
 
@@ -489,6 +489,7 @@ fn raw_attachment_url(source_root: &Path, locator: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use notez_preview::builders::org_html::render_org_html;
     use std::collections::BTreeMap;
 
     fn row_with_kind_locator(kind: &str, locator: &str) -> ResourceRow {

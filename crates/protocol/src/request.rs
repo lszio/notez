@@ -109,7 +109,6 @@ pub struct UpsertResourceRequest {
     /// Optimistic-concurrency guard for this upsert.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub expected_revision: Option<String>,
-
 }
 /// Overwrite a whole document's content at `source_id` + `locator`.
 /// Field names follow the existing web `update_document` entry-point
@@ -208,9 +207,12 @@ pub struct UpdateDashboardRequest {
     pub hidden_card_ids: Vec<String>,
 }
 
-fn default_janet_timeout_ms() -> u64 { 2_000 }
-fn default_janet_result_limit() -> usize { 256 * 1024 }
-
+fn default_janet_timeout_ms() -> u64 {
+    2_000
+}
+fn default_janet_result_limit() -> usize {
+    256 * 1024
+}
 
 macro_rules! single_ref_request {
     ($name:ident, $doc:literal) => {
@@ -222,11 +224,23 @@ macro_rules! single_ref_request {
     };
 }
 
-single_ref_request!(LinkOccurrencesRequest, "Outgoing link occurrences of a resource.");
-single_ref_request!(ResolvedRelationsRequest, "Persisted resolved relations of a resource.");
+single_ref_request!(
+    LinkOccurrencesRequest,
+    "Outgoing link occurrences of a resource."
+);
+single_ref_request!(
+    ResolvedRelationsRequest,
+    "Persisted resolved relations of a resource."
+);
 single_ref_request!(ListLinksRequest, "Raw link listing of a resource.");
-single_ref_request!(ResolveLinksRequest, "Actively resolve and persist a resource's links.");
-single_ref_request!(DiagnoseLinkRequest, "Per-occurrence resolution diagnostics.");
+single_ref_request!(
+    ResolveLinksRequest,
+    "Actively resolve and persist a resource's links."
+);
+single_ref_request!(
+    DiagnoseLinkRequest,
+    "Per-occurrence resolution diagnostics."
+);
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct ReindexLinksRequest {}
@@ -266,8 +280,14 @@ pub struct AddAttachmentRequest {
     pub mime: Option<String>,
 }
 
-single_ref_request!(ExtractAttachmentRequest, "Run extraction jobs for an attachment.");
-single_ref_request!(QuerySegmentsRequest, "List extracted segments of an attachment.");
+single_ref_request!(
+    ExtractAttachmentRequest,
+    "Run extraction jobs for an attachment."
+);
+single_ref_request!(
+    QuerySegmentsRequest,
+    "List extracted segments of an attachment."
+);
 
 // ---- communities -----------------------------------------------------------------
 
@@ -302,7 +322,10 @@ pub struct ExportSkillRequest {
 
 // ---- inspect -----------------------------------------------------------------------
 
-single_ref_request!(InspectRulesRequest, "Evaluate stored rules against a resource.");
+single_ref_request!(
+    InspectRulesRequest,
+    "Evaluate stored rules against a resource."
+);
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct SourceDoctorRequest {}
@@ -396,4 +419,252 @@ pub enum Request {
     ExecuteCard(ExecuteCardRequest),
     ListDashboard(ListDashboardRequest),
     UpdateDashboard(UpdateDashboardRequest),
+}
+
+// ---- unified command/query contracts ---------------------------------------
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ObjectAddress {
+    Stable {
+        object_id: String,
+    },
+    Positioned {
+        space_id: String,
+        source_id: String,
+        document_path: String,
+        locator: String,
+        /// Content fingerprint guards positioned identity against drift.
+        fingerprint: String,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "query", rename_all = "snake_case")]
+pub enum GraphQuery {
+    Neighbors {
+        principal: String,
+        object: ObjectAddress,
+        scope: String,
+        #[serde(default = "default_graph_depth")]
+        depth: u32,
+    },
+}
+
+fn default_graph_depth() -> u32 {
+    1
+}
+
+fn deserialize_non_empty<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = String::deserialize(deserializer)?;
+    if value.is_empty() {
+        return Err(serde::de::Error::custom(
+            "expected_revision must not be empty",
+        ));
+    }
+    Ok(value)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct WatchChange {
+    pub kind: String,
+    pub locator: String,
+    pub observed_revision: String,
+    pub observed_at: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct IngestWatchBatch {
+    pub principal: String,
+    pub space_id: String,
+    pub source_id: String,
+    pub batch_id: String,
+    #[serde(deserialize_with = "deserialize_non_empty")]
+    pub expected_revision: String,
+    #[serde(rename = "events")]
+    pub events: Vec<WatchChange>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "command", rename_all = "snake_case")]
+pub enum Command {
+    RegisterSpace {
+        principal: String,
+        space_id: String,
+        name: String,
+        #[serde(deserialize_with = "deserialize_non_empty")]
+        expected_revision: String,
+    },
+    RemoveSpace {
+        principal: String,
+        space_id: String,
+        #[serde(deserialize_with = "deserialize_non_empty")]
+        expected_revision: String,
+    },
+    RegisterSource {
+        principal: String,
+        space_id: String,
+        source_id: String,
+        kind: String,
+        #[serde(deserialize_with = "deserialize_non_empty")]
+        expected_revision: String,
+    },
+    AttachSource {
+        principal: String,
+        space_id: String,
+        source_id: String,
+        #[serde(deserialize_with = "deserialize_non_empty")]
+        expected_revision: String,
+    },
+    ScanSpace {
+        principal: String,
+        space_id: String,
+        #[serde(deserialize_with = "deserialize_non_empty")]
+        expected_revision: String,
+    },
+    IngestWatch(IngestWatchBatch),
+    CreateDocument {
+        principal: String,
+        space_id: String,
+        source_id: String,
+        document_path: String,
+        content: String,
+        #[serde(deserialize_with = "deserialize_non_empty")]
+        expected_revision: String,
+    },
+    UpdateDocument {
+        principal: String,
+        space_id: String,
+        source_id: String,
+        document_path: String,
+        content: String,
+        #[serde(deserialize_with = "deserialize_non_empty")]
+        expected_revision: String,
+    },
+    CreateObject {
+        principal: String,
+        space_id: String,
+        address: ObjectAddress,
+        content: String,
+        #[serde(deserialize_with = "deserialize_non_empty")]
+        expected_revision: String,
+    },
+    WriteObject {
+        principal: String,
+        space_id: String,
+        address: ObjectAddress,
+        content: String,
+        #[serde(deserialize_with = "deserialize_non_empty")]
+        expected_revision: String,
+    },
+    TransitionTask {
+        principal: String,
+        space_id: String,
+        object_id: String,
+        state: String,
+        #[serde(deserialize_with = "deserialize_non_empty")]
+        expected_revision: String,
+    },
+    ResolveConflict {
+        principal: String,
+        space_id: String,
+        conflict_id: String,
+        resolution: String,
+        #[serde(deserialize_with = "deserialize_non_empty")]
+        expected_revision: String,
+    },
+}
+
+impl Command {
+    pub fn expected_revision(&self) -> Option<&str> {
+        let revision = match self {
+            Self::RegisterSpace {
+                expected_revision, ..
+            }
+            | Self::RemoveSpace {
+                expected_revision, ..
+            }
+            | Self::RegisterSource {
+                expected_revision, ..
+            }
+            | Self::AttachSource {
+                expected_revision, ..
+            }
+            | Self::ScanSpace {
+                expected_revision, ..
+            }
+            | Self::CreateDocument {
+                expected_revision, ..
+            }
+            | Self::UpdateDocument {
+                expected_revision, ..
+            }
+            | Self::CreateObject {
+                expected_revision, ..
+            }
+            | Self::WriteObject {
+                expected_revision, ..
+            }
+            | Self::TransitionTask {
+                expected_revision, ..
+            }
+            | Self::ResolveConflict {
+                expected_revision, ..
+            } => expected_revision,
+            Self::IngestWatch(batch) => &batch.expected_revision,
+        };
+        Some(revision)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "query", rename_all = "snake_case")]
+pub enum Query {
+    ListSpaces {
+        principal: String,
+    },
+    InspectSpace {
+        principal: String,
+        space_id: String,
+    },
+    ListDocuments {
+        principal: String,
+        space_id: String,
+    },
+    GetDocument {
+        principal: String,
+        space_id: String,
+        document_path: String,
+    },
+    ResolveAddress {
+        principal: String,
+        space_id: String,
+        address: ObjectAddress,
+    },
+    GetObject {
+        principal: String,
+        address: ObjectAddress,
+    },
+    Backlinks {
+        principal: String,
+        address: ObjectAddress,
+    },
+    Graph {
+        principal: String,
+        object: ObjectAddress,
+        scope: String,
+        #[serde(default = "default_graph_depth")]
+        depth: u32,
+    },
+    GetSummary {
+        principal: String,
+        address: ObjectAddress,
+    },
+    WatchStatus {
+        principal: String,
+        source_id: String,
+    },
 }

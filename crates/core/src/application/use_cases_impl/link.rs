@@ -8,7 +8,7 @@ use crate::domain::{ProjectionReader, ProjectionWrite};
 use crate::application::use_cases::LinkUseCase;
 use crate::application::write_check;
 use crate::domain::{
-    LinkDiagnostic, LinkOccurrence, ProjectionStore, ResolutionStatus, ResolvedRelation,
+    LinkDiagnostic, LinkOccurrence, ProjectionStore, ResolvedRelation,
     ResourceRef, Selector,
 };
 

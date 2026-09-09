@@ -475,7 +475,50 @@ pub enum ResolveResult {
     Ambiguous(Vec<String>),
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct SpaceSummary {
+    pub space_id: String,
+    pub name: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct DocumentSummary {
+    pub source_id: String,
+    pub document_path: String,
+    pub revision: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct ObjectSummary {
+    pub address: crate::request::ObjectAddress,
+    pub title: String,
+    pub content: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct GraphResult {
+    pub object: crate::request::ObjectAddress,
+    pub neighbors: Vec<ObjectSummary>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct WatchStatus {
+    pub source_id: String,
+    pub active: bool,
+    pub last_batch_id: Option<String>,
+}
+
 // ---- envelope -------------------------------------------------------------------
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum CommandResult {
+    Applied { new_revision: String },
+    StaleRevision { expected: String, current: String },
+    Conflict { message: String },
+    Forbidden { message: String },
+    Unsupported { capability: String },
+}
 
 /// The complete result set. Tagged with `result_of` so clients can
 /// discriminate without guessing by shape; variant/payload pairing is
@@ -483,6 +526,13 @@ pub enum ResolveResult {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "result_of", rename_all = "snake_case")]
 pub enum Response {
+    CommandResult(CommandResult),
+    Space(SpaceSummary),
+    Document(DocumentSummary),
+    Object(ObjectSummary),
+    Graph(GraphResult),
+    Summary(SpaceSummary),
+    Watch(WatchStatus),
     Scan(ScanReport),
     ResourcePage(QueryPage),
     /// `read`: present-or-absent single resource.
@@ -518,10 +568,15 @@ pub enum Response {
     /// Result of executing one card live: id, state, and typed body.
     CardExecution(CardProjection),
     /// List of card projections for the current dashboard layout.
-    Dashboard { cards: Vec<CardProjection> },
+    Dashboard {
+        cards: Vec<CardProjection>,
+    },
     /// Updated dashboard layout (echoed after `update_dashboard`).
     DashboardUpdate(DashboardLayout),
     Janet(JanetResult),
-    InboxCaptured { r_ref: String, revision: String },
+    InboxCaptured {
+        r_ref: String,
+        revision: String,
+    },
     Done,
 }

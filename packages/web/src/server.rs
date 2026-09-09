@@ -14,8 +14,6 @@
 //! `list_space_tree`, `list_source_files`, `search_palette`,
 //! `resolve_index`. See the `tree` module for details.
 
-use std::collections::BTreeMap;
-use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
 use dioxus::prelude::*;
@@ -23,15 +21,13 @@ use notez_core::config::web_space::{
     list_sources, resolve_source as core_resolve_space, ListedSource, SourceOrigin,
     WebSourceError,
 };
-use ui::Backend;
 use notez_core::config::SelectedSource;
-use notez_core::source::{SourceCapabilities, SourceConfig as AdapterSourceConfig, SourceKind};
+use notez_core::source::{SourceCapabilities, SourceKind};
  
  use serde::{Deserialize, Serialize};
 
 use crate::body::render_body;
 use crate::model::ResourceRow;
-use crate::router::Route;
 #[cfg(not(target_arch = "wasm32"))]
 use crate::tree::{
     self, IndexEntryDto, KindCounts, SearchHit, SourceFileRow, TreeNode,
@@ -249,30 +245,14 @@ impl WebServerError {
             Self::Internal { .. } => "internal",
         }
     }
-    fn not_found(path: &str, msg: impl Into<String>) -> Self {
-        Self::NotFound {
-            path: path.to_string(),
-            message: msg.into(),
-        }
-    }
-    fn not_a_space(path: &str, msg: impl Into<String>) -> Self {
-        Self::NotASpace {
-            path: path.to_string(),
-            message: msg.into(),
-        }
-    }
-    fn internal(msg: impl Into<String>) -> Self {
-        Self::Internal { message: msg.into() }
-    }
 }
-
 impl std::fmt::Display for WebServerError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::NotFound { message, .. } => write!(f, "{message}"),
-            Self::NotASpace { message, .. } => write!(f, "{message}"),
-            Self::InvalidRef { message, .. } => write!(f, "{message}"),
-            Self::Internal { message } => write!(f, "{message}"),
+            Self::NotFound { message, .. }
+            | Self::NotASpace { message, .. }
+            | Self::InvalidRef { message, .. }
+            | Self::Internal { message } => write!(f, "{message}"),
         }
     }
 }
@@ -283,18 +263,13 @@ impl From<WebSourceError> for WebServerError {
         match err {
             WebSourceError::NotFound(p) => Self::NotFound { path: p, message: msg },
             WebSourceError::NotASource(p) => Self::NotASpace { path: p, message: msg },
-            WebSourceError::Source(s) | WebSourceError::InvalidPath(s) | WebSourceError::GlobalConfig(s) => {
-                Self::Internal { message: format!("{s}: {msg}") }
-            }
-            other => Self::Internal {
-                message: format!("{other:?}: {msg}"),
-            },
+            WebSourceError::Source(s)
+            | WebSourceError::InvalidPath(s)
+            | WebSourceError::GlobalConfig(s) => Self::Internal { message: format!("{s}: {msg}") },
         }
     }
 }
 
-
-// ---- server functions ------------------------------------------------------
 
 /// List every space registered in the global XDG config.
 ///
@@ -669,7 +644,7 @@ pub async fn load_index_document(source_root: String) -> Result<IndexDocumentDto
         .map_err(|e| ServerFnError::new(e.to_string()))?;
     auto_start_watch(&sel.root);
     let facade = open_engine(&sel.root).map_err(|e| ServerFnError::new(e.to_string()))?;
-    let mut facade = facade.lock().map_err(|e| ServerFnError::new(format!("facade lock: {e}")))?;
+    let facade = facade.lock().map_err(|e| ServerFnError::new(format!("facade lock: {e}")))?;
     let entry = tree::build_index_entry(&facade).map_err(|e| ServerFnError::new(e.to_string()))?;
     let document = entry
         .as_ref()
@@ -832,12 +807,6 @@ pub enum SaveFailure {
 pub enum SaveOutcome {
     Saved { row: ResourceRow, revision: String },
     Failed(SaveFailure),
-}
-
-impl SaveFailure {
-    fn internal(message: impl Into<String>) -> Self {
-        Self::Internal { message: message.into() }
-    }
 }
 
 #[server]

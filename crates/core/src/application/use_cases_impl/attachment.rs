@@ -8,10 +8,9 @@ use crate::application::service::{
 };
 use crate::application::use_cases::AttachmentUseCase;
 use crate::domain::{ProjectionReader, ProjectionWrite};
-use crate::application::use_cases::ResourceUseCase;
 use crate::application::write_check;
 use crate::domain::{
-    ProjectionStore, Resource, ResourceKind, ResourceRef, SegmentRecord, Selector,
+    ProjectionStore, Resource, ResourceRef, Selector,
 };
 use std::path::Path;
 

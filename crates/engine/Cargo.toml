@@ -1,0 +1,13 @@
+[package]
+name = "notez-engine"
+version = "0.1.0"
+edition = "2024"
+description = "Notez application dispatcher and use cases"
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+notez-domain = { path = "../domain" }
+notez-ports = { path = "../ports" }
+notez-protocol = { path = "../protocol" }

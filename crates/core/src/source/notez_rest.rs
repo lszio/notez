@@ -1,5 +1,5 @@
 use crate::domain::Resource;
-use crate::source::adapter::{PreparedWrite, ScannedSource, SourceAdapter, SourceCapabilities, SourceConfig, SourceError, SourceKind, WriteResult};
+use crate::source::adapter::{PreparedWrite, ScannedSource, SourceAdapter, SourceCapabilities, SourceConfig, SourceError, WriteResult};
 use crate::source::protocol::{RawEntity, SourceTransport, TransportError};
 use std::io::{Read, Write};
 use std::net::TcpStream;
@@ -100,6 +100,7 @@ fn percent_encode(s: &str) -> String { s.bytes().map(|b| if b.is_ascii_alphanume
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::source::SourceKind;
     #[test] fn url_config_is_read_only() { let mut c = SourceConfig::new("up", SourceKind::NotezRest, "/", false); c.url = Some("http://localhost:1".into()); let a = NotezRestSourceAdapter::new(c); assert!(a.config().read_only); assert!(!a.capabilities().can_write); }
     #[test] fn unavailable_is_explicit() { let mut c = SourceConfig::new("up", SourceKind::NotezRest, "/", true); c.url = Some("http://127.0.0.1:1".into()); let a = NotezRestSourceAdapter::new(c); assert!(a.list_resources().unwrap_err().to_string().contains("unavailable")); }
 }

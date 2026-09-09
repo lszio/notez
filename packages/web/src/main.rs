@@ -41,7 +41,6 @@ fn run_web_mode() -> Result<(), anyhow::Error> {
         let merged = dioxus::server::router(app).merge(custom).merge(protocol.clone());
         async move { Ok::<_, anyhow::Error>(merged) }
     });
-    Ok(())
 }
 
 /// Headless mode (`NOTEZ_MODE=server`): no UI, only API + MCP.

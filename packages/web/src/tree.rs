@@ -18,7 +18,6 @@ use std::path::Path;
 
 use notez_core::application::Engine;
 use notez_core::domain::{Resource, ResourceKind, Selector};
-use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct TreeNode {
@@ -270,7 +269,7 @@ pub fn build_tree_from_with_disk(resources: &[Resource], loose: &[SourceFileRow]
     let loose_set: std::collections::HashSet<String> = loose.iter().map(|f| f.display_path.clone()).collect();
     // Filter indexed resources to only those that have a real file
     // on disk (avoids showing deleted files in the tree).
-    let mut resources_vec: Vec<Resource> = resources
+    let resources_vec: Vec<Resource> = resources
         .iter()
         .filter(|r| {
             r.kind != ResourceKind::Heading

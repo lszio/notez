@@ -1,13 +1,11 @@
 use crate::application::context::SourceContext;
 use crate::domain::{ProjectionReader, ProjectionWrite};
-use crate::config::SourceInstanceConfig;
 use crate::domain::{
-    LinkDiagnostic, LinkOccurrence, ProjectionStore, QueryPage, ResolutionStatus, ResolvedRelation,
+    LinkDiagnostic, LinkOccurrence, ProjectionStore, QueryPage, ResolvedRelation,
     Resource, ResourceKind, ResourceRef, Selector,
 };
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
-use walkdir::WalkDir;
 
 /// The stable error taxonomy for the application layer. Every variant
 /// carries typed fields; the `Display` output and the `serde` shape are
@@ -558,7 +556,6 @@ where
     }
 
     pub fn now_unix_millis(&self) -> i64 {
-        use crate::application::ports::Clock;
         self.clock
             .now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -581,16 +578,6 @@ where
         audit: impl crate::domain::audit::AuditLog + 'static,
     ) {
         self.audit = Box::new(audit);
-    }
-
-    /// Borrow the journal adapter (downcast to trait object).
-    fn journal_ref(&self) -> &dyn crate::domain::journal::EventJournal {
-        &*self.journal
-    }
-
-    /// Borrow the audit adapter.
-    fn audit_ref(&self) -> &dyn crate::domain::audit::AuditLog {
-        &*self.audit
     }
 
     /// shared [`crate::capability::catalog_to_json_array`] helper. This

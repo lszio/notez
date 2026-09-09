@@ -2,6 +2,14 @@
 resolver = "3"
 members = [
     "crates/core",
+    "crates/domain",
+    "crates/ports",
+    "crates/engine",
+    "crates/storage",
+    "crates/fs",
+    "crates/format-org",
+    "crates/format-markdown",
+    "crates/sync",
     "crates/cli",
     "crates/composition",
     "crates/adapters/orgmode",

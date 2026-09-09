@@ -2,7 +2,7 @@
 //! resources through `HttpBackend`.
 
 use dioxus::prelude::*;
-use ui::{Backend, NzBadge, NzCard, ResourceRow, SpaceRow};
+use ui::{Backend, NzBadge, NzCard, ResourceRow};
 
 use crate::backend::HttpBackend;
 

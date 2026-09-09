@@ -290,7 +290,7 @@ impl<'a, 'j, S: ProjectionWrite> Projector<'a, 'j, S> {
         &mut self,
         segments: &[SegmentRecord],
     ) -> Result<WriteOutcome, ProjectorError<S::Error>> {
-        let (change, seq) = self.j.record(
+        let (_change, seq) = self.j.record(
             ChangeOp::InsertSegments,
             String::new(),
             vec![],
@@ -311,7 +311,7 @@ impl<'a, 'j, S: ProjectionWrite> Projector<'a, 'j, S> {
         source_id: &str,
         occurrences: Vec<LinkOccurrence>,
     ) -> Result<WriteOutcome, ProjectorError<S::Error>> {
-        let (change, seq) = self.j.record(
+        let (_change, seq) = self.j.record(
             ChangeOp::ReplaceLinkOccurrences,
             source_id.to_string(),
             vec![],
@@ -332,7 +332,7 @@ impl<'a, 'j, S: ProjectionWrite> Projector<'a, 'j, S> {
         source_id: &str,
         relations: Vec<ResolvedRelation>,
     ) -> Result<WriteOutcome, ProjectorError<S::Error>> {
-        let (change, seq) = self.j.record(
+        let (_change, seq) = self.j.record(
             ChangeOp::ReplaceResolvedRelations,
             source_id.to_string(),
             vec![],
@@ -353,7 +353,7 @@ impl<'a, 'j, S: ProjectionWrite> Projector<'a, 'j, S> {
         source_id: &str,
         diagnostics: &[(LinkOccurrence, ResolutionStatus, Vec<ResourceRef>)],
     ) -> Result<WriteOutcome, ProjectorError<S::Error>> {
-        let (change, seq) = self.j.record(
+        let (_change, seq) = self.j.record(
             ChangeOp::WriteLinkDiagnostics,
             source_id.to_string(),
             vec![],
@@ -373,7 +373,7 @@ impl<'a, 'j, S: ProjectionWrite> Projector<'a, 'j, S> {
         &mut self,
         records: &[ConflictRecord],
     ) -> Result<WriteOutcome, ProjectorError<S::Error>> {
-        let (change, seq) = self.j.record(
+        let (_change, seq) = self.j.record(
             ChangeOp::ReplaceConflicts,
             String::new(),
             vec![],
@@ -393,7 +393,7 @@ impl<'a, 'j, S: ProjectionWrite> Projector<'a, 'j, S> {
         &mut self,
         logical_paths: &[String],
     ) -> Result<WriteOutcome, ProjectorError<S::Error>> {
-        let (change, seq) = self.j.record(
+        let (_change, seq) = self.j.record(
             ChangeOp::ReplaceConflicts,
             String::new(),
             vec![],

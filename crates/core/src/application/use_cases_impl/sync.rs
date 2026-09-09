@@ -81,7 +81,7 @@ where
         logical_path: &str,
         keep_mine: bool,
     ) -> Result<crate::application::writeback::WritebackReport, ApplicationError> {
-        use crate::domain::ProjectionReader;
+
         write_check::check_capability(self, "sync")?;
         let pending = crate::domain::ProjectionReader::list_conflicts(&self.store)
             .map_err(|e| ApplicationError::Storage {

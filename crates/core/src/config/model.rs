@@ -1,8 +1,7 @@
 use serde::{Deserialize, Serialize};
-use crate::domain::{ProjectionReader, ProjectionWrite};
 use serde_json::Value as JsonValue;
 use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use thiserror::Error;
 
 #[derive(Error, Debug)]
@@ -145,6 +144,9 @@ impl SourceConfig {
                 }
 
                 let legacy: LegacySourceConfig = toml::from_str(text)?;
+                if legacy.version != 1 {
+                    return Err(ConfigError::UnsupportedVersion(legacy.version));
+                }
                 let cfg = SourceConfig {
                     version: CURRENT_VERSION,
                     source: SourceIdentity {

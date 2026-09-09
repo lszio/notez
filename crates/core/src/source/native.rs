@@ -5,7 +5,7 @@ use walkdir::WalkDir;
 
 use crate::source::adapter::ComposedSourceAdapter;
 use crate::source::protocol::{
-    FormatParser, ParsedEntity, ParserError, RawEntity, SourceTransport, TransportError,
+    FormatParser, ParsedEntity, ParserError, RawEntity, TransportError,
 };
 use std::fs;
 pub struct NativeSourceAdapter {

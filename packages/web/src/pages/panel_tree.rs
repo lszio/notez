@@ -4,18 +4,8 @@ use dioxus::prelude::*;
 
 use crate::router::{route_for_space_preview, route_for_space_note};
 use crate::server::list_space_tree;
-use crate::space_ctx::{SpaceState, SpaceStatus};
+use crate::space_ctx::SpaceState;
 use crate::tree::{TreeChild, TreeNode};
-
-fn empty_tree() -> TreeNode {
-    TreeNode {
-        name: String::new(),
-        path: String::new(),
-        depth: 0,
-        count: 0,
-        children: Vec::new(),
-    }
-}
 
 #[component]
 pub fn TreePanel(active_encoded: Option<String>) -> Element {

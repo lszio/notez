@@ -6,13 +6,10 @@
 use crate::application::service::{
     ApplicationError, Engine, DocumentErrorKind, StorageErrorKind,
 };
-use crate::application::task_para::{AgendaItem, AgendaView, ParaNode, ParaOverview};
 use crate::domain::{ProjectionReader, ProjectionWrite};
 use crate::application::use_cases::TaskUseCase;
 use crate::application::write_check;
-use crate::document::StateTransition;
 use crate::domain::{ProjectionStore, ResourceRef, Selector};
-use std::path::Path;
 
 impl<S> TaskUseCase for Engine<S>
 where

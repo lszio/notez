@@ -1,8 +1,8 @@
 //! Pin that `PreviewContext` carries no concrete engine or storage type.
 //! Preview rendering consumes only caller-provided data.
 
-use notez_core::domain::{Resource, ResourceKind, ResourceRef, ProjectionReader, ProjectionWrite};
-use notez_preview::{PreviewContext, PreviewModel, PreviewerCatalog, default_catalog};
+use notez_core::domain::{Resource, ResourceKind, ResourceRef};
+use notez_preview::{default_catalog, PreviewContext, PreviewerCatalog};
 
 fn make_ctx<'a>(
     bytes: &'static [u8],

@@ -1,0 +1,11 @@
+[package]
+name = "notez-ports"
+version = "0.1.0"
+edition = "2024"
+description = "Infrastructure ports for the Notez application engine"
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+notez-domain = { path = "../domain" }

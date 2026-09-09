@@ -1,0 +1,13 @@
+[package]
+name = "notez-domain"
+version = "0.1.0"
+edition = "2024"
+description = "Pure Notez domain model and algorithms"
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+serde = { workspace = true }
+thiserror = { workspace = true }
+ulid = { workspace = true }

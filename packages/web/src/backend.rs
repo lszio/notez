@@ -17,12 +17,10 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use notez_api::NotezClient;
-use notez_composition::native::Runtime;
 use notez_core::application::dispatcher::{ApplicationDispatcher, Response};
-use notez_core::config::discovery::{SelectedSource, SourceSelector};
+use notez_core::config::discovery::SourceSelector;
 use notez_core::storage::SqliteProjection;
 use notez_protocol::request::{QueryResourcesRequest, Request, ScanNativeRequest};
-use notez_protocol::Error as ProtocolError;
 use ui::{Backend, ResourceRow, SpaceRow};
 
 type EngineHandle =
@@ -40,16 +38,12 @@ fn open_space(root: &PathBuf) -> Result<EngineHandle, String> {
 /// and dispatches typed protocol requests.
 #[derive(Clone)]
 pub struct EmbeddedBackend {
-    runtime: Runtime,
     default_root: Option<PathBuf>,
 }
 
 impl EmbeddedBackend {
     pub fn new(default_root: Option<PathBuf>) -> Self {
-        Self {
-            runtime: Runtime::new(),
-            default_root,
-        }
+        Self { default_root }
     }
 
     fn resolved_root(&self, root: &str) -> Result<PathBuf, String> {

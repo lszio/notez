@@ -6,10 +6,9 @@
 use crate::application::service::{
     ApplicationError, Engine, DocumentErrorKind, StorageErrorKind,
 };
-use crate::application::use_cases::{ArtifactUseCase, ResourceUseCase};
+use crate::application::use_cases::ArtifactUseCase;
 use crate::domain::{ProjectionReader, ProjectionWrite};
 use crate::application::write_check;
-use crate::artifact::{DerivedArtifact, SkillPackage};
 use crate::domain::{ProjectionStore, Resource, Selector};
 use std::path::Path;
 

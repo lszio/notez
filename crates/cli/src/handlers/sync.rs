@@ -11,7 +11,7 @@ use std::process::exit;
 use super::{Service, exit_code_for};
 use crate::commands::{SyncCommands, SyncSubcommand};
 use notez_core::application::dispatcher::{ApplicationDispatcher, Response};
-use notez_protocol::request::{ListConflictsRequest, RelaySyncRequest, Request, SyncPullRequest, SyncPushRequest};
+use notez_protocol::request::{ListConflictsRequest, Request, SyncPullRequest, SyncPushRequest};
 
 pub fn run_sync(json: bool, service: &mut Service, sub: SyncSubcommand) {
     // Resolve needs &mut service directly; every other arm goes

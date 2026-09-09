@@ -80,7 +80,7 @@ where
 /// same `ResourceAddress::Ref`. Locator-based addresses are accepted
 /// as-is for now (deferred to 0.6 along with locator uniqueness).
 pub fn check_address_uniqueness<S>(
-    facade: &Engine<S>,
+    _facade: &Engine<S>,
     addr: &ResourceAddress,
     candidate: &ResourceRef,
 ) -> Result<(), ApplicationError>

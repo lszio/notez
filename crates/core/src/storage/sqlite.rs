@@ -1,5 +1,5 @@
 use crate::domain::{
-    LinkDiagnostic, LinkOccurrence, LinkTarget, ObjectIdentity, ProjectionReader, ProjectionStore,
+    LinkOccurrence, LinkTarget, ObjectIdentity, ProjectionReader, ProjectionStore,
     ProjectionWrite, QueryPage, ResolutionStatus, ResolvedRelation, Resource, ResourceRef,
     ResourceRelation, SegmentRecord, Selector, TextSpan,
 };
@@ -531,7 +531,7 @@ impl ProjectionReader for SqliteProjection {
         for r in rows {
             let (
                 r_ref_str,
-                kind_str,
+                _kind_str,
                 title,
                 revision,
                 source_id,

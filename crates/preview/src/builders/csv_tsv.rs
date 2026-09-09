@@ -17,11 +17,14 @@
 //! surfaced to the caller rather than swallowed, because a truncated
 //! or malformed CSV is a real bug, not an empty result.
 
-use notez_core::domain::{Resource, ResourceKind, ResourceRef};
-use notez_core::domain::{ProjectionReader, ProjectionWrite};
 use crate::{PreviewContext, PreviewError, PreviewModel, Previewer, Table};
 use bytes::Bytes;
+
+#[cfg(test)]
+use notez_core::domain::{Resource, ResourceKind, ResourceRef};
+#[cfg(test)]
 use std::collections::BTreeMap;
+#[cfg(test)]
 use std::path::PathBuf;
 
 /// Maximum number of records (header + rows) parsed before truncation.

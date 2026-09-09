@@ -10,9 +10,7 @@
 //! Auth is intentionally left to the host: mount the returned router
 //! behind the same bearer/OIDC middleware the `/api/v1/*` routes use.
 
-use std::convert::Infallible;
 use std::sync::{Arc, Mutex};
-use std::task::{Context, Poll};
 
 use axum::body::Body as AxBody;
 use axum::extract::{Request as AxRequest, State};
@@ -52,6 +50,6 @@ pub fn router(
 async fn mcp_handler(State(mut service): State<McpHttpService>, req: AxRequest) -> AxResponse {
     match service.call(req).await {
         Ok(resp) => resp.map(|body| AxBody::new(body)),
-        Err(Infallible) => unreachable!("rmcp http service is infallible"),
+        Err(_) => unreachable!("rmcp http service is infallible"),
     }
 }

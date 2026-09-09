@@ -8,6 +8,7 @@ use schemars::Schema;
 use std::collections::BTreeMap;
 
 use crate::request::{self, Request};
+use crate::response;
 
 /// Human-readable tool name for a request variant. Matches the
 /// historical MCP tool naming so the surface does not churn while the
@@ -113,6 +114,28 @@ pub fn request_schemas() -> BTreeMap<String, Schema> {
         request::RelaySyncRequest,
     );
     map.insert("request".to_string(), schemars::schema_for!(Request));
+    map.insert(
+        "command".to_string(),
+        schemars::schema_for!(request::Command),
+    );
+    map.insert("query".to_string(), schemars::schema_for!(request::Query));
+    map.insert(
+        "object_address".to_string(),
+        schemars::schema_for!(request::ObjectAddress),
+    );
+    map.insert(
+        "graph_query".to_string(),
+        schemars::schema_for!(request::GraphQuery),
+    );
+    map.insert(
+        "ingest_watch_batch".to_string(),
+        schemars::schema_for!(request::IngestWatchBatch),
+    );
+    map.insert(
+        "response".to_string(),
+        schemars::schema_for!(response::Response),
+    );
+    map.insert("error".to_string(), schemars::schema_for!(crate::Error));
     map
 }
 
@@ -146,7 +169,7 @@ mod tests {
     #[test]
     fn schemas_cover_every_operation() {
         let map = request_schemas();
-        assert_eq!(map.len(), 42); // 41 ops + the request enum
+        assert_eq!(map.len(), 49); // 41 ops + request + unified command/query contracts
         assert!(map.contains_key("query_resources_request"));
         assert!(map.contains_key("transition_task_request"));
         assert!(map.contains_key("request"));
@@ -174,10 +197,20 @@ mod tests {
                 source_id: None,
                 limit: None,
             }),
-            Request::ReadResource(ReadResourceRequest { r_ref: String::new() }),
-            Request::DeleteResource(DeleteResourceRequest { r_ref: String::new(), expected_revision: None }),
-            Request::ListBySource(ListBySourceRequest { source_id: String::new(), limit: None }),
-            Request::Resolve(ResolveRequest { query: String::new() }),
+            Request::ReadResource(ReadResourceRequest {
+                r_ref: String::new(),
+            }),
+            Request::DeleteResource(DeleteResourceRequest {
+                r_ref: String::new(),
+                expected_revision: None,
+            }),
+            Request::ListBySource(ListBySourceRequest {
+                source_id: String::new(),
+                limit: None,
+            }),
+            Request::Resolve(ResolveRequest {
+                query: String::new(),
+            }),
             Request::Agenda(AgendaRequest {}),
             Request::ListConflicts(ListConflictsRequest {}),
         ];

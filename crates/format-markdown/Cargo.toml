@@ -1,0 +1,12 @@
+[package]
+name = "notez-format-markdown"
+version = "0.1.0"
+edition = "2024"
+description = "Markdown format adapter for Notez"
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+notez-domain = { path = "../domain" }
+notez-ports = { path = "../ports" }

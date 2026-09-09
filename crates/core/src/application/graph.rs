@@ -22,8 +22,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use crate::domain::{ProjectionReader, ProjectionWrite};
 
 use crate::application::service::Engine;
-use crate::application::use_cases::{LinkUseCase, ResourceUseCase, ScanUseCase};
-use crate::domain::{ProjectionStore, ResolvedRelation, Resource, ResourceRef, Selector};
+use crate::domain::{ProjectionStore, Resource, ResourceRef, Selector};
 use serde::{Deserialize, Serialize};
 
 /// A node in the graph. One per `Resource` in the space.

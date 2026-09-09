@@ -1,6 +1,5 @@
 //! Custom HTTP routes for the v0.1+ web client.
 
-use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 

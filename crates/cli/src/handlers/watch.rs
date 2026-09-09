@@ -2,7 +2,6 @@
 //! by the long-running start loop.
 
 use crate::commands;
-use notez_core::domain::{ProjectionReader, ProjectionWrite};
 
 /// Run the `notez watch` subcommand.
 pub fn run_watch(args: commands::WatchArgs, source_root: &std::path::Path) {
@@ -93,7 +92,7 @@ fn install_sigint_handler(running: std::sync::Arc<std::sync::atomic::AtomicBool>
     use std::sync::atomic::Ordering;
     unsafe {
         SIGINT_FLAG = std::sync::Arc::into_raw(running) as *mut std::sync::atomic::AtomicBool;
-        libc::signal(libc::SIGINT, sigint_trampoline as libc::sighandler_t);
+        libc::signal(libc::SIGINT, sigint_trampoline as *const () as libc::sighandler_t);
     }
     // Suppress unused import warning when this fn is dead-code-eliminated
     // by feature gates.

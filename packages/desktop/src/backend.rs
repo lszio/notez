@@ -8,7 +8,7 @@
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-use notez_composition::native::{OpenSpaceError, Runtime, SpaceHandle};
+use notez_composition::native::{OpenSpaceError, SpaceHandle};
 use notez_core::application::dispatcher::{ApplicationDispatcher, Response};
 use notez_core::config::discovery::{SelectedSource, SourceSelector};
 use notez_core::config::ConfigPaths;
@@ -36,16 +36,12 @@ fn open_space(root: &PathBuf) -> Result<SpaceHandle, OpenSpaceError> {
 /// HTTP, single-tenant.
 #[derive(Clone)]
 pub struct EmbeddedBackend {
-    runtime: Runtime,
     default_root: Option<PathBuf>,
 }
 
 impl EmbeddedBackend {
     pub fn new(default_root: Option<PathBuf>) -> Self {
-        Self {
-            runtime: Runtime::new(),
-            default_root,
-        }
+        Self { default_root }
     }
 
     fn resolved_root<'a>(&'a self, root: &'a str) -> Result<PathBuf, String> {

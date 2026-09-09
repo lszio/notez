@@ -15,7 +15,6 @@
 //! Public surface lives in `notez_cli::host::run_host`; sub-routines
 //! in `pid`, `tail` are unit-testable directly.
 
-use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -317,7 +316,7 @@ fn cmd_start(
         cmd.env("NOTEZ_HOST_MCP_BIND", mcp_bind);
     }
     let log_arg = log.clone();
-    if let Some(mut f) = log_f {
+    if let Some(f) = log_f {
         if let Ok(child_stdout) = f.try_clone() {
             cmd.stdout(child_stdout);
         }
@@ -493,7 +492,7 @@ fn run_supervisor_loop(
     // and the main thread can clean up the pid file.
     install_sigterm();
 
-    let mut tick = Duration::from_secs(1);
+    let tick = Duration::from_secs(1);
     loop {
         if shutdown_requested() {
             let _ = append_log(
@@ -548,7 +547,7 @@ fn run_supervisor_loop(
 /// address gets its own listener; if both point at the same port the
 /// routers merge onto a single listener instead.
 fn run_api_mcp_servers(
-    source_root: &Path,
+    _source_root: &Path,
     api_bind: Option<&str>,
     mcp_bind: Option<&str>,
     pid: i32,
@@ -774,12 +773,17 @@ fn install_sigterm() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{Mutex, OnceLock};
+
+    fn runtime_dir_lock() -> &'static Mutex<()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+    }
+
     fn hermetic<F: FnOnce()>(f: F) {
+        let _lock = runtime_dir_lock().lock().expect("runtime-dir lock poisoned");
         let dir = tempfile::tempdir().unwrap();
         let prev = std::env::var("XDG_RUNTIME_DIR").ok();
-        // Safety: tests are single-threaded for env mutation purposes
-        // (this test mod is run with --test-threads=1 by default in
-        // `cargo test -p cli --lib host::` and our CI uses similar).
         unsafe { std::env::set_var("XDG_RUNTIME_DIR", dir.path()); }
         f();
         unsafe {

@@ -26,6 +26,9 @@ pub mod request;
 pub mod response;
 pub mod schema;
 
-pub use request::Request;
 pub use error::Error;
-pub use response::{DocumentUpdateReport, Response};
+pub use request::{Command, GraphQuery, IngestWatchBatch, ObjectAddress, Query, Request};
+pub use response::{
+    CommandResult, DocumentSummary, DocumentUpdateReport, GraphResult, ObjectSummary, Response,
+    SpaceSummary, WatchStatus,
+};

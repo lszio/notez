@@ -1,0 +1,12 @@
+[package]
+name = "notez-sync"
+version = "0.1.0"
+edition = "2024"
+description = "Notez object and folder synchronization"
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+notez-domain = { path = "../domain" }
+notez-ports = { path = "../ports" }

@@ -274,16 +274,6 @@ mod imp {
         }
     }
 
-    fn to_capped_json(value: Janet) -> Result<serde_json::Value, JanetScriptError> {
-        let json = janet_value_to_json(value);
-        match serde_json::to_vec(&json) {
-            Ok(bytes) if bytes.len() > MAX_RESULT_BYTES => Err(JanetScriptError::ResultTooLarge),
-            Ok(_) => Ok(json),
-            Err(e) => Err(JanetScriptError::Runtime(format!(
-                "result serialization failed: {e}"
-            ))),
-        }
-    }
     /// Best-effort conversion of a Janet value to JSON.
     fn janet_value_to_json(value: janetrs::Janet) -> serde_json::Value {
         use janetrs::{JanetArray, JanetBuffer, JanetKeyword, JanetString, JanetStruct,

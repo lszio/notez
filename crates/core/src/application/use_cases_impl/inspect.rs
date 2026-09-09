@@ -6,7 +6,7 @@
 use crate::application::service::{ApplicationError, Engine, StorageErrorKind};
 use crate::domain::{ProjectionReader, ProjectionWrite};
 use crate::application::use_cases::InspectUseCase;
-use crate::domain::{InspectResult, ProjectionStore, ResourceRef};
+use crate::domain::{ProjectionStore, ResourceRef};
 
 impl<S> InspectUseCase for Engine<S>
 where
