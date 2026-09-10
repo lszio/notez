@@ -16,6 +16,29 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+/// A non-empty revision token used by optimistic-concurrency guards.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
+#[schemars(transparent)]
+pub struct NonEmptyRevision(String);
+impl NonEmptyRevision {
+    pub fn new(value: impl Into<String>) -> Result<Self, &'static str> {
+        let value = value.into();
+        if value.trim().is_empty() { Err("revision must not be empty or whitespace") } else { Ok(Self(value)) }
+    }
+    pub fn as_str(&self) -> &str { &self.0 }
+}
+impl AsRef<str> for NonEmptyRevision { fn as_ref(&self) -> &str { self.as_str() } }
+impl<'de> Deserialize<'de> for NonEmptyRevision {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where D: serde::Deserializer<'de> { Self::new(String::deserialize(deserializer)?).map_err(serde::de::Error::custom) }
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum RevisionPrecondition {
+    MustMatch { revision: NonEmptyRevision },
+    MustNotExist,
+}
+
 // ---- scan -----------------------------------------------------------------
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -51,9 +74,7 @@ pub struct ReadResourceRequest {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct DeleteResourceRequest {
     pub r_ref: String,
-    /// Optimistic-concurrency guard on the row being deleted.
-    #[serde(deserialize_with = "deserialize_non_empty")]
-    pub expected_revision: String,
+    pub precondition: RevisionPrecondition,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -106,9 +127,7 @@ pub struct ResourcePayload {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct UpsertResourceRequest {
     pub resource: ResourcePayload,
-    /// Optimistic-concurrency guard for this upsert.
-    #[serde(deserialize_with = "deserialize_non_empty")]
-    pub expected_revision: String,
+    pub precondition: RevisionPrecondition,
 }
 /// Overwrite a whole document's content at `source_id` + `locator`.
 /// Field names follow the existing web `update_document` entry-point
@@ -118,13 +137,11 @@ pub struct UpsertResourceRequest {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct UpdateDocumentRequest {
     pub source_id: String,
-    /// Source-relative POSIX path of the document file.
     pub locator: String,
     pub content: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub format: Option<String>,
-    #[serde(deserialize_with = "deserialize_non_empty")]
-    pub expected_revision: String,
+    pub precondition: RevisionPrecondition,
 }
 
 /// Run a Janet script in the restricted read-only query runtime.
@@ -260,8 +277,7 @@ pub struct TransitionTaskRequest {
     pub to_state: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub timestamp: Option<String>,
-    #[serde(deserialize_with = "deserialize_non_empty")]
-    pub expected_revision: String,
+    pub precondition: RevisionPrecondition,
 }
 
 // ---- attachments ---------------------------------------------------------------
@@ -362,9 +378,7 @@ pub struct WritebackResourceRequest {
     pub source_id: String,
     pub r_ref: String,
     pub payload: String,
-    /// Optimistic-concurrency guard on the resource being written back.
-    #[serde(deserialize_with = "deserialize_non_empty")]
-    pub expected_revision: String,
+    pub precondition: RevisionPrecondition,
 }
 /// can POST `{"op": "query_resources", ...}` directly.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]

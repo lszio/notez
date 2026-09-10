@@ -2,6 +2,7 @@ use notez_protocol::{
     Command, CommandResult, DocumentSummary, Error, GraphQuery, GraphResult, IngestWatchBatch,
     ObjectAddress, ObjectSummary, Query, Request, Response, SpaceSummary, WatchStatus,
 };
+use notez_protocol::request::{NonEmptyRevision, RevisionPrecondition};
 use schemars::schema_for;
 use serde::de::DeserializeOwned;
 use serde_json::json;
@@ -328,59 +329,37 @@ fn legacy_request_remains_available_during_protocol_migration() {
 }
 
 #[test]
-fn legacy_mutation_requests_require_non_empty_expected_revision() {
+fn revision_precondition_round_trips_external_tags() {
     let cases = [
-        (
-            "delete_resource",
-            json!({"r_ref": "document:1"}),
-        ),
-        (
-            "upsert_resource",
-            json!({"resource": {
-                "ref": "document:1",
-                "kind": "document",
-                "title": "Document",
-                "source_id": "notes"
-            }}),
-        ),
-        (
-            "transition_task",
-            json!({"r_ref": "task:1", "to_state": "done"}),
-        ),
-        (
-            "writeback_resource",
-            json!({"source_id": "notes", "r_ref": "document:1", "payload": "body"}),
-        ),
-        (
-            "update_document",
-            json!({"source_id": "notes", "locator": "daily.md", "content": "# Daily"}),
-        ),
+        (RevisionPrecondition::MustMatch { revision: NonEmptyRevision::new("r1").unwrap() }, json!({"kind":"must_match","revision":"r1"})),
+        (RevisionPrecondition::MustNotExist, json!({"kind":"must_not_exist"})),
     ];
-
-    for (op, fields) in cases {
-        let mut request = fields.clone();
-        request["op"] = json!(op);
-        assert!(serde_json::from_value::<Request>(request).is_err(), "{op} accepted an omitted expected_revision");
-
-        for invalid_revision in ["", "   "] {
-            let mut request = fields.clone();
-            request["op"] = json!(op);
-            request["expected_revision"] = json!(invalid_revision);
-            assert!(serde_json::from_value::<Request>(request).is_err(), "{op} accepted an invalid expected_revision");
-        }
-
-        let mut request = fields;
-        request["op"] = json!(op);
-        request["expected_revision"] = json!("revision-1");
-        let request = serde_json::from_value::<Request>(request)
-            .unwrap_or_else(|error| panic!("{op} rejected a valid expected_revision: {error}"));
-        match request {
-            Request::DeleteResource(request) => assert_eq!(request.expected_revision, "revision-1"),
-            Request::UpsertResource(request) => assert_eq!(request.expected_revision, "revision-1"),
-            Request::TransitionTask(request) => assert_eq!(request.expected_revision, "revision-1"),
-            Request::WritebackResource(request) => assert_eq!(request.expected_revision, "revision-1"),
-            Request::UpdateDocument(request) => assert_eq!(request.expected_revision, "revision-1"),
-            request => panic!("{op} deserialized as an unexpected request: {request:?}"),
-        }
+    for (value, expected) in cases {
+        assert_eq!(serde_json::to_value(&value).unwrap(), expected);
+        assert_eq!(serde_json::from_value::<RevisionPrecondition>(expected).unwrap(), value);
     }
+}
+
+#[test]
+fn must_match_rejects_empty_or_whitespace_revision() {
+    for revision in ["", "   ", "\t\n"] {
+        let value = json!({"kind":"must_match", "revision": revision});
+        assert!(serde_json::from_value::<RevisionPrecondition>(value).is_err());
+    }
+}
+
+#[test]
+fn legacy_mutations_require_precondition_and_allow_create_upsert() {
+    let cases = [
+        json!({"op":"delete_resource", "r_ref":"document:1"}),
+        json!({"op":"upsert_resource", "resource":{"ref":"document:1","kind":"document","title":"Document","source_id":"notes"}}),
+        json!({"op":"transition_task", "r_ref":"task:1", "to_state":"done"}),
+        json!({"op":"writeback_resource", "source_id":"notes", "r_ref":"document:1", "payload":"body"}),
+        json!({"op":"update_document", "source_id":"notes", "locator":"daily.md", "content":"# Daily"}),
+    ];
+    for value in cases {
+        assert!(serde_json::from_value::<Request>(value).is_err());
+    }
+    let value = json!({"op":"upsert_resource", "resource":{"ref":"document:1","kind":"document","title":"Document","source_id":"notes"}, "precondition":{"kind":"must_not_exist"}});
+    assert!(serde_json::from_value::<Request>(value).is_ok());
 }
