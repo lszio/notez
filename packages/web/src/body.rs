@@ -22,20 +22,28 @@
 //! - **Image** (`image/*`) — `ImagePreviewer` -> `<img>` tag.
 //! - **PDF** (`.pdf` / `application/pdf`) — `PdfPreviewer` text + `<iframe>`.
 //! - **Excel** (`.xlsx` / xlsx MIME) — `XlsxPreviewer` -> inline `<table>`.
-//! - **PowerPoint** (`.pptx` / pptx MIME) — `PptxPreviewer` -> per-slide
-//!   collapsible cards.
+//! - **Word / PowerPoint** (`.docx` / `.pptx`) — viewer shell; the
+//!   browser renders the real document via the `docx` / `pptx` viewer
+//!   plugins (loading the raw bytes over the raw URL).
+//! - **Media** (`audio/*` / `video/*` MIMEs + common extensions) —
+//!   `MediaPreviewer` -> native `<audio>` / `<video controls>` element.
 //! - **CSV / TSV** (`.csv` / `.tsv` / CSV+TSV MIMEs) — `CsvTsvPreviewer`.
 //! - **Zip** (`.zip` / `application/zip`) — `ZipPreviewer` -> entry list.
 //! - **Anything else** — `FallbackPreviewer` -> text preview (≤ 64 KB) or
 //!   a download link to the raw endpoint.
+//!
+//! Adapters that declare `PreviewCapabilities::can_edit` get a generic
+//! "replace file" upload form appended to their preview (see the
+//! `POST /replace/{space}` route). Richer per-format editors can ship
+//! later as viewer-plugin extensions without changing this module:
+//! `PreviewModel::Html` passes extension HTML through verbatim, and
+//! `[data-viewer]` mounts client-side plugins loaded by `app.js`.
 
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 
 use notez_core::domain::{Resource, ResourceKind, ResourceRef};
-use notez_preview::{
-    PreviewContext, PreviewModel, PreviewerCatalog,
-};
+use notez_preview::{MediaKind, PreviewContext, PreviewModel, PreviewerCatalog, ViewerFormat};
 use ulid::Ulid;
 
 use crate::model::ResourceRow;
@@ -61,6 +69,7 @@ pub fn render_body(row: &ResourceRow, source_root: &Path) -> String {
         .unwrap_or_default();
 
     let raw_url = raw_attachment_url(source_root, &row.locator);
+    let encoded = crate::data::urls::encode_space(&source_root.to_string_lossy());
     // The row's properties carry the body the projection indexed for
     // document / heading resources. Pass them through so the catalog
     // previewers (Markdown / Org / block_embed / query_embed) see
@@ -86,6 +95,8 @@ pub fn render_body(row: &ResourceRow, source_root: &Path) -> String {
         &raw_url,
         row.kind == "attachment",
         &extra,
+        &encoded,
+        &row.locator,
     )
 }
 
@@ -109,6 +120,7 @@ pub fn render_path(file_path: &Path, title: &str, source_root: &Path) -> String 
         .map(|p| p.to_string_lossy().replace('\\', "/"))
         .unwrap_or_else(|| file_path.to_string_lossy().into_owned());
     let raw_url = raw_attachment_url(source_root, &rel_locator);
+    let encoded = crate::data::urls::encode_space(&source_root.to_string_lossy());
 
     // For loose files, seed the body property from the on-disk bytes
     // so document previewers (Markdown / Org) can render the file
@@ -129,6 +141,8 @@ pub fn render_path(file_path: &Path, title: &str, source_root: &Path) -> String 
         &raw_url,
         true,
         &extra,
+        &encoded,
+        &rel_locator,
     )
 }
 /// Build a `PreviewContext` from the on-disk bytes and resolve it
@@ -136,7 +150,10 @@ pub fn render_path(file_path: &Path, title: &str, source_root: &Path) -> String 
 /// catalog cannot resolve a previewer or rendering fails. `extra_props`
 /// is merged into the placeholder resource so catalog previewers that
 /// read from `ctx.resource.properties` (Markdown / Org / block_embed /
-/// query_embed) see the body the caller already loaded.
+/// query_embed) see the body the caller already loaded. `encoded` and
+/// `locator` identify the space/attachment so a `can_edit` adapter gets
+/// the generic replace-file form.
+#[allow(clippy::too_many_arguments)]
 fn render_dispatch(
     file_path: &Path,
     bytes: &[u8],
@@ -145,6 +162,8 @@ fn render_dispatch(
     raw_url: &str,
     is_attachment: bool,
     extra_props: &std::collections::BTreeMap<String, String>,
+    encoded: &str,
+    locator: &str,
 ) -> String {
     let mime = mime_guess::from_ext(ext).first_raw().map(|s| s.to_string());
     let mut resource = placeholder_resource(file_path, title, ext, &mime, is_attachment);
@@ -166,9 +185,17 @@ fn render_dispatch(
         Some(p) => p,
         None => return fallback_link(raw_url, title, ext),
     };
-    match previewer.render(&ctx) {
+    let html = match previewer.render(&ctx) {
         Ok(model) => model_to_html(&model, raw_url, ext, title),
         Err(_) => fallback_link(raw_url, title, ext),
+    };
+    // Extension-declared edit capability: surface a generic replace-file
+    // form. The form posts to `POST /replace/{space}` (multipart) with
+    // the current content hash as the revision precondition.
+    if previewer.capabilities().can_edit && is_attachment {
+        format!("{html}{}", edit_form(encoded, locator, &crate::server::sha256_hex(bytes)))
+    } else {
+        html
     }
 }
 
@@ -181,11 +208,16 @@ fn model_to_html(model: &PreviewModel, raw_url: &str, ext: &str, title: &str) ->
         PreviewModel::Org { html, .. } => html.clone(),
         PreviewModel::Pdf { pages, text } => render_pdf(pages, text, title, raw_url),
         PreviewModel::Xlsx { sheets } => render_xlsx(sheets),
-        PreviewModel::Pptx { slides } => render_pptx(slides),
         PreviewModel::Zip { entries } => render_zip(entries),
-        PreviewModel::Docx { paragraphs } => render_docx(paragraphs),
         PreviewModel::Table { table } => render_table(table),
         PreviewModel::Image { mime, .. } => render_image(raw_url, mime, title),
+        PreviewModel::Media { media } => render_media(*media, raw_url, title),
+        PreviewModel::Viewer { format } => render_viewer(*format, raw_url, title),
+        PreviewModel::Html { html } => {
+            // Extension-provided HTML. The provider is responsible for
+            // escaping (same trust contract as BlockEmbed); emit as-is.
+            html.clone()
+        }
         PreviewModel::Mermaid { source } => render_mermaid(source),
         PreviewModel::D2 { source } => render_d2(source),
         PreviewModel::Iframe { src, sandbox } => render_iframe(src, sandbox),
@@ -265,31 +297,50 @@ fn render_xlsx(sheets: &[notez_preview::Sheet]) -> String {
     out
 }
 
-fn render_pptx(slides: &[notez_preview::Slide]) -> String {
-    if slides.is_empty() {
-        return "<div class=\"preview-pptx\"><p class=\"mono-sm\">Empty deck.</p></div>".into();
-    }
-    let mut out = String::from("<div class=\"preview-pptx\">");
-    for slide in slides {
-        let title = slide.title.clone().unwrap_or_else(|| format!("Slide {}", slide.index));
-        out.push_str(&format!(
-            "<details class=\"pptx-slide\"><summary class=\"mono-sm\"><strong>{}</strong> · {}</summary><div class=\"pptx-body\">",
-            html_escape::encode_safe(&format!("Slide {}", slide.index)),
-            html_escape::encode_safe(&title)
-        ));
-        for run in &slide.body {
-            out.push_str(&format!("<p>{}</p>", html_escape::encode_safe(run)));
-        }
-        if let Some(notes) = &slide.notes {
-            out.push_str(&format!(
-                "<p class=\"dim mono-sm\">Notes: {}</p>",
-                html_escape::encode_safe(notes)
-            ));
-        }
-        out.push_str("</div></details>");
-    }
-    out.push_str("</div>");
-    out
+fn render_media(kind: MediaKind, raw_url: &str, title: &str) -> String {
+    let (tag, _label) = match kind {
+        MediaKind::Audio => ("audio", "audio"),
+        MediaKind::Video => ("video", "video"),
+    };
+    let src = html_escape::encode_double_quoted_attribute(raw_url);
+    let title_esc = html_escape::encode_double_quoted_attribute(title);
+    format!(
+        "<div class=\"preview-media\"><{tag} controls preload=\"metadata\" src=\"{src}\" style=\"max-width:100%;\">Your browser does not support the <code>{tag}</code> element — <a href=\"{src}\">download {title_esc}</a>.</{tag}></div>",
+        tag = tag,
+        src = src,
+        title_esc = title_esc,
+    )
+}
+
+fn render_viewer(format: ViewerFormat, raw_url: &str, title: &str) -> String {
+    // `name` doubles as the data-viewer plugin id: app.js loads
+    // `/plugins/{name}.js` which registers a renderer for it.
+    let (name, label) = match format {
+        ViewerFormat::Docx => ("docx", "Word document"),
+        ViewerFormat::Pptx => ("pptx", "PowerPoint deck"),
+    };
+    let src = html_escape::encode_double_quoted_attribute(raw_url);
+    let title_esc = html_escape::encode_double_quoted_attribute(title);
+    format!(
+        "<div class=\"preview-viewer\" data-viewer=\"{name}\" data-src=\"{src}\" data-state=\"idle\"><p class=\"mono-sm dim\">Loading {label}…</p><p><a class=\"spine-action\" href=\"{src}\" target=\"_blank\">📥 Open {label} ({title_esc})</a></p></div>",
+        name = name,
+        label = label,
+        src = src,
+        title_esc = title_esc,
+    )
+}
+
+fn edit_form(encoded: &str, locator: &str, revision: &str) -> String {
+    let action_path = format!("/replace/{encoded}");
+    let action = html_escape::encode_double_quoted_attribute(&action_path);
+    let loc = html_escape::encode_double_quoted_attribute(locator);
+    let rev = html_escape::encode_double_quoted_attribute(revision);
+    format!(
+        "<form class=\"preview-edit\" method=\"post\" enctype=\"multipart/form-data\" action=\"{action}\"><input type=\"hidden\" name=\"locator\" value=\"{loc}\"><input type=\"hidden\" name=\"revision\" value=\"{rev}\"><label class=\"mono-sm\" for=\"preview-edit-file\">edit · replace file:</label><input id=\"preview-edit-file\" type=\"file\" name=\"file\" required><button type=\"submit\" class=\"btn\">Save</button></form>",
+        action = action,
+        loc = loc,
+        rev = rev,
+    )
 }
 
 fn render_zip(entries: &[notez_preview::ZipEntry]) -> String {
@@ -312,29 +363,6 @@ fn render_zip(entries: &[notez_preview::ZipEntry]) -> String {
     out.push_str("</ul></div>");
     out
 }
-
-fn render_docx(paragraphs: &[notez_preview::DocxParagraph]) -> String {
-    if paragraphs.is_empty() {
-        return "<div class=\"preview-docx\"><p class=\"mono-sm\">Empty document.</p></div>".into();
-    }
-    let mut out = String::from("<div class=\"preview-docx\">");
-    for p in paragraphs {
-        let text = html_escape::encode_safe(&p.text);
-        if p.level == 0 {
-            // Body paragraph: preserve newlines from `<w:br/>` runs.
-            let formatted = text.replace('\n', "<br>");
-            out.push_str(&format!("<p>{formatted}</p>"));
-        } else {
-            let level = (p.level as usize).clamp(1, 6);
-            out.push_str(&format!(
-                "<h{level} class=\"docx-heading docx-h{level}\">{text}</h{level}>"
-            ));
-        }
-    }
-    out.push_str("</div>");
-    out
-}
-
 
 fn render_table(table: &notez_preview::Table) -> String {
     let mut out = String::from("<div class=\"preview-table-wrap\"><table class=\"preview-table\" style=\"border-collapse:collapse;width:100%;\">");
@@ -604,5 +632,90 @@ mod tests {
         assert!(html.contains("body"));
         assert_eq!(outline.len(), 1);
         assert_eq!(outline[0].anchor, "title");
+    }
+
+    #[test]
+    fn render_mp4_attachment_uses_video_tag() {
+        // A `.mp4` must go through the new MediaPreviewer and emit a
+        // native `<video>` element bound to the raw URL — not the
+        // previous fallback download link.
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("clip.mp4");
+        std::fs::write(&file, [0u8; 8]).unwrap();
+        let html = render_path(&file, "clip.mp4", dir.path());
+        assert!(html.contains("<video"), "expected <video>: {html}");
+        assert!(html.contains("controls"), "expected controls attr: {html}");
+        assert!(
+            html.contains("src=\"") && html.contains("/clip.mp4"),
+            "expected raw URL src: {html}"
+        );
+    }
+
+    #[test]
+    fn render_mp3_attachment_uses_audio_tag() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("track.mp3");
+        std::fs::write(&file, [0u8; 4]).unwrap();
+        let html = render_path(&file, "track.mp3", dir.path());
+        assert!(html.contains("<audio"), "expected <audio>: {html}");
+        assert!(html.contains("controls"));
+    }
+
+    #[test]
+    fn render_docx_attachment_uses_viewer_shell_with_edit_form() {
+        // docx preview is now a client-side viewer shell plus the
+        // generic replace-file edit affordance.
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("paper.docx");
+        std::fs::write(&file, [0u8; 8]).unwrap();
+        let row = row_with_kind_locator("attachment", "paper.docx");
+        let body = render_body(&row, dir.path());
+        assert!(
+            body.contains(r#"data-viewer="docx""#),
+            "expected docx viewer shell: {body}"
+        );
+        assert!(
+            body.contains(r#"data-src=""#),
+            "expected data-src attribute: {body}"
+        );
+        // can_edit → replace form
+        assert!(
+            body.contains("preview-edit"),
+            "expected replace edit affordance: {body}"
+        );
+        assert!(
+            body.contains("/replace/") && body.contains(r#"name="file""#),
+            "expected multipart replace form: {body}"
+        );
+    }
+
+    #[test]
+    fn render_pptx_attachment_uses_pptx_viewer_shell() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("deck.pptx");
+        std::fs::write(&file, [0u8; 8]).unwrap();
+        let row = row_with_kind_locator("attachment", "deck.pptx");
+        let body = render_body(&row, dir.path());
+        assert!(
+            body.contains(r#"data-viewer="pptx""#),
+            "expected pptx viewer shell: {body}"
+        );
+        assert!(body.contains("preview-edit"));
+    }
+
+    #[test]
+    fn markdown_attachment_has_no_replace_form() {
+        // Markdown has its own textarea editor path; the previewer
+        // must NOT advertise can_edit or the page would render the
+        // upload-replace form alongside the textarea.
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("page.md");
+        std::fs::write(&file, "# title\n").unwrap();
+        let row = row_with_kind_locator("document", "page.md");
+        let body = render_body(&row, dir.path());
+        assert!(
+            !body.contains("preview-edit"),
+            "markdown documents must not show replace-file form: {body}"
+        );
     }
 }

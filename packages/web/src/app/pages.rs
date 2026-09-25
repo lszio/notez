@@ -2,12 +2,12 @@
 
 use dioxus::prelude::*;
 
-use crate::app::edit::{restore_notice, save_notice, Editor};
+use crate::app::edit::{error_notice, restore_notice, save_notice, Editor};
 use crate::app::route::DocQuery;
 use crate::app::shell::{topbar_doc, topbar_space, Shell};
 use crate::data::space::{self, Entry, Space};
 use crate::data::urls;
-use ui::NzDocBody;
+use ui::{NzDocBody, NzShell};
 
 /// Shared error rendering (a failed space open, missing file, …).
 fn error_body(message: &str) -> Element {
@@ -141,6 +141,7 @@ pub fn DocPage(encoded: String, locator: Vec<String>, query: DocQuery) -> Elemen
                 current: Some(locator.clone()),
                 return_to: view_url,
                 topbar: topbar_doc(&space, &locator, &title, false, false),
+                {error_notice(&query)}
                 NzDocBody { html }
             }
         };
@@ -196,12 +197,47 @@ pub fn DocPage(encoded: String, locator: Vec<String>, query: DocQuery) -> Elemen
             return_to: view_url,
             topbar: topbar_doc(&space, &locator, &title, false, true),
             {save_notice(&query)}
+            {error_notice(&query)}
             NzDocBody { html }
             hr {}
             p { class: "edit-hint",
                 a { href: "{urls::raw_url(&encoded, &locator)}", "raw source" }
                 " · "
                 a { href: "{urls::edit_url(&encoded, &locator)}", "edit" }
+            }
+        }
+    }
+}
+
+/// Any path outside the page routes — rendered, not panicked.
+///
+/// Without this route `Router::<Route>` panics on an unmatched URL
+/// ("Route did not match"), which reached the user as a 500 whose log
+/// line reads `Encountered panic`.
+#[component]
+pub fn NotFoundPage(segments: Vec<String>) -> Element {
+    let path = format!("/{}", segments.join("/"));
+    dioxus::fullstack::FullstackContext::commit_http_status(
+        dioxus::fullstack::StatusCode::NOT_FOUND,
+        Some(format!("no page at {path}")),
+    );
+    rsx! {
+        document::Title { "404 · notez" }
+        NzShell {
+            space: String::new(),
+            topbar: rsx! { span { class: "title", "404 — not found" } },
+            sidebar: rsx! {
+                div { class: "brand", a { href: "/", "notez" } }
+                div { class: "sb-foot",
+                    a { class: "btn ghost", href: "/", "spaces" }
+                }
+            },
+            article { class: "doc",
+                h1 { "404 — not found" }
+                p { "No page is served at " code { "{path}" } "." }
+                p { class: "edit-hint",
+                    a { href: "/", "back to the space picker" }
+                }
             }
         }
     }

@@ -1,0 +1,154 @@
+# Preview 适配器与扩展契约
+
+Notez 的附件预览通过 `notez-preview` crate 的 `Previewer` 目录实现。本文档
+描述当前 17 个内置适配器的边界、渲染模型与扩展接入点。
+
+## 1. 形态
+
+```
+Resource  ─►  PreviewContext  ─►  PreviewerCatalog.resolve()
+                                          │
+                                          ▼
+                                   Previewer::render()
+                                          │
+                                          ▼
+                                    PreviewModel
+                                          │
+                                          ▼
+                          web/src/body.rs::model_to_html
+```
+
+`Previewer` 决定一段附件如何被看到，`PreviewModel` 是 Rust 层与 web/HTML 层之
+间的稳定视图协议；模型可扩展，HTML 转换在 web 包集中处理，避免每加一个预
+览器都改 web 包。
+
+## 2. 内置适配器
+
+| id        | 匹配                                          | 模型                       | 备注                                 |
+|-----------|-----------------------------------------------|----------------------------|--------------------------------------|
+| markdown  | `.md` / `text/markdown`                       | `Markdown { html }`        | pulldown-cmark                       |
+| mermaid   | `body` 含 `mermaid`                           | `Mermaid { source }`       | 内置 `<pre class=mermaid>`          |
+| d2        | `body` 含 `d2`                                | `D2 { source }`            | 内置 `<pre class=d2>`                |
+| iframe    | `body` 以 `[[iframe:` 开头                    | `Iframe { src, sandbox }`  | URL 重写为 `/raw/...`                |
+| block_embed| `body` 以 `[[block:` 开头                    | `BlockEmbed { html }`      | HTML 由调用方转义                    |
+| query_embed| `body` 含 `#+BEGIN_SRC query`               | `QueryEmbed { ... }`       | server 端求值后嵌入                  |
+| pdf       | `.pdf` / `application/pdf`                    | `Pdf { pages, text }`      | `<iframe>` + 提取文本                |
+| xlsx      | `.xlsx`                                       | `Xlsx { sheets }`         | 内联 `<table>`                       |
+| pptx      | `.pptx`                                       | `Viewer { format: Pptx }`  | 客户端 viewer 插件渲染                |
+| zip       | `.zip`                                        | `Zip { entries }`          | 入口列表                              |
+| docx      | `.docx`                                       | `Viewer { format: Docx }`  | 客户端 viewer 插件渲染                |
+| csv_tsv   | `.csv` / `.tsv`                               | `Table { headers, rows }`  | 内联表格                              |
+| media     | `audio/*` / `video/*` / 常见媒体扩展名         | `Media { media }`          | 原生 `<audio>` / `<video controls>` |
+| image     | `image/*`                                     | `Image { ... }`            | `<img>`                              |
+| org       | Document / Heading / Block                    | `Org { html, outline }`    | org_html 渲染                        |
+| link_embed| override-only                                 | `LinkEmbed { child }`      | 递归子模型                            |
+| fallback  | always                                        | `Fallback { message }`     | 下载链接 / 文本预览                  |
+
+注册顺序在 `default_catalog()` 中有意排列：抽象预览器（Mermaid/D2/Iframe/
+Block/Query）先于 `org` 注册，否则 Org 会拿走所有文档资源；`fallback` 永远
+最后。
+
+## 3. 适配器扩展接口
+
+```rust
+pub trait Previewer: Send + Sync {
+    fn id(&self) -> &'static str;
+    fn matches(&self, ctx: &PreviewContext) -> bool;
+    fn render(&self, ctx: &PreviewContext) -> Result<PreviewModel, PreviewError>;
+
+    /// UI-facing capabilities. Defaults to no extra affordance.
+    fn capabilities(&self) -> PreviewCapabilities {
+        PreviewCapabilities::default()
+    }
+}
+
+pub struct PreviewCapabilities { pub can_edit: bool }
+```
+
+* `PreviewerCatalog::register` 把任何实现 `Previewer` 的类型塞进目录。
+* `default_catalog` 内置 17 项；扩展 crate 通过同一接口在装配阶段追加，再
+  追加 `FallbackPreviewer`。
+* `PreviewModel` 三个新增变体提供扩展点：
+  - `Media { media: MediaKind }` —— 原生媒体元素（音频/视频）。
+  - `Viewer { format: ViewerFormat }` —— 客户端 viewer 插件，按
+    `data-viewer="<previewer_id>"` 装载 `/plugins/<id>.js`。
+  - `Html { html }` —— 扩展预览器直接产出 HTML（提供者必须转义；与
+    `BlockEmbed` 同样的信任契约）。
+
+## 4. 客户端 viewer 插件协议
+
+`packages/web/public/app.js` 中的 `initViewers()` 启动时遍历所有
+`[data-viewer]` 元素：
+
+1. 若 `window.notezViewers[name]` 已注册（已有插件），直接调用。
+2. 否则动态注入 `<script src="/plugins/{name}.js">`；脚本注册后再调用。
+3. 失败时把 `data-state="failed"`，仍保留 "Open in new tab" 跳转。
+
+插件契约（每个 `plugins/<name>.js`）：
+
+```js
+window.notezViewers = window.notezViewers || {};
+window.notezViewers.<name> = async function (el, src) {
+  // el: 已清空子节点的宿主 <div class="viewer-host">
+  // src: /raw/... URL，同源可拉取
+  // 拉取后调用 vendor 库渲染进 el，并 await 渲染完成
+};
+```
+
+内置实现：
+
+- `plugins/docx.js` → vendored `vendor/docx-preview.min.js` 的 UMD 包。
+- `plugins/pptx.js` → vendored `vendor/pptx-preview.umd.js` 的 UMD 包（`mode: "list"`）。
+
+新 viewer 插件只需要把脚本放到 `packages/web/public/plugins/` 下，注册
+`window.notezViewers[name]`；server 端在 `Previewer::capabilities` 里把
+`can_edit` 设为 `true`，或在自定义渲染里贴一个编辑入口即可。`PreviewModel`
+里的 `Viewer { format }` 让 UI 把 `<div data-viewer="<id>">` 锚到对应的插件
+id。
+
+## 5. 编辑能力（编辑扩展）
+
+`Previewer::capabilities()` 返回 `PreviewCapabilities::can_edit = true` 时，
+附件页面会渲染一个通用 "replace file" 表单：
+
+```
+<form method="post" enctype="multipart/form-data" action="/replace/{encoded}">
+  <input type="hidden" name="locator" value="...">
+  <input type="hidden" name="revision" value="<sha256>">
+  <input type="file" name="file" required>
+  <button type="submit" class="btn">Save</button>
+</form>
+```
+
+服务端 `POST /replace/{encoded}` 处理 multipart，按 SHA-256 revision 预
+条件原子替换文件并 rescan。当前实现保证：
+
+* 文件改动 → stale revision → 重定向回视图 + `?error=...` + 顶部 error banner。
+* 替换成功 → 重定向 + `?saved=<new revision>` + 顶部 saved banner。
+
+这一条写路径目前只覆盖"替换整个二进制附件"。富文本 in-place 编辑（例如
+docx/PDF 内嵌编辑器）属于 viewer 插件的扩展责任；可以在 viewer 插件内
+挂一个 contenteditable / save 按钮，POST 到 `/replace/{encoded}`。
+
+## 6. 添加新适配器的最小步骤
+
+1. 在 `crates/preview/src/builders/<name>.rs` 实现 `Previewer`。
+2. `mod.rs` 注册模块。
+3. 如需要客户端 viewer：在 `public/vendor/` 引入渲染库 + `public/plugins/<id>.js`
+   写插件脚手架（参考 `docx.js`/`pptx.js`）。
+4. 视情况覆盖 `capabilities()` 启用 `can_edit`。
+5. 在 `default_catalog()` 把新预览器按匹配优先级插在合适位置，验证
+   `crates/preview/tests/preview_decoupling.rs` 的扩展注册契约测试。
+6. 在 `crates/preview/src/lib.rs` 的 `PreviewModel` 增加对应变体；若新增
+   变体则 `packages/web/src/body.rs::model_to_html` 的穷尽匹配会编译失败
+   —— 加上对应 HTML 渲染分支（这是新接入点的可见信号）。
+
+## 7. 安全与边界
+
+* `PreviewModel::Html` 是信任契约：扩展预览器负责转义；UI 直接 emit。
+* 媒体走 `<video>/<audio>` 原生元素 + raw URL，浏览器按 HTTP Range 解码；
+  无字节重处理。
+* 文件保存走 `replace_attachment` 的 revision 预条件 + 临时文件 + rename，
+  避免并发覆盖。
+* viewer 插件与 vendor JS 仅在 web 进程加载；Dioxus SSR 与 axe / 隔离与
+  web 服务器同源，访问 `/raw/...` 不需要二次鉴权（沿用 raw_get 的语义）。

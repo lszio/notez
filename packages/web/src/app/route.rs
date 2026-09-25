@@ -6,7 +6,7 @@
 
 use dioxus::prelude::*;
 
-use crate::app::pages::{DocPage, NewPage, SpaceIndexPage};
+use crate::app::pages::{DocPage, NewPage, NotFoundPage, SpaceIndexPage};
 
 /// Query string carried by a document URL.
 ///
@@ -18,6 +18,9 @@ pub struct DocQuery {
     pub saved: Option<String>,
     /// One-shot token for a failed save whose text must be restored.
     pub restore: Option<String>,
+    /// Failure message from a non-text write path (e.g. attachment
+    /// replace). Surfaced as an inline error banner on the page.
+    pub error: Option<String>,
 }
 
 impl std::fmt::Display for DocQuery {
@@ -27,6 +30,7 @@ impl std::fmt::Display for DocQuery {
             ("edit", &self.edit),
             ("saved", &self.saved),
             ("restore", &self.restore),
+            ("error", &self.error),
         ] {
             if let Some(v) = value {
                 if !v.is_empty() {
@@ -56,6 +60,7 @@ impl From<&str> for DocQuery {
                 "edit" => out.edit = Some(value),
                 "saved" => out.saved = Some(value),
                 "restore" => out.restore = Some(value),
+                "error" => out.error = Some(value),
                 _ => {}
             }
         }
@@ -72,11 +77,16 @@ pub enum Route {
     SpaceIndexPage { encoded: String },
     #[route("/s/:encoded/:..locator?:..query")]
     DocPage { encoded: String, locator: Vec<String>, query: DocQuery },
+    /// Everything else — anything outside the page routes above, so an
+    /// unknown URL renders a 404 instead of making the router panic.
+    #[route("/:..segments")]
+    NotFoundPage { segments: Vec<String> },
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::str::FromStr;
 
     #[test]
     fn query_round_trips() {
@@ -84,9 +94,11 @@ mod tests {
             edit: Some("1".into()),
             saved: Some("abc def".into()),
             restore: None,
+            error: Some("boom".into()),
         };
         let rendered = q.to_string();
         assert!(rendered.starts_with("?edit=1&saved=abc%20def"), "{rendered}");
+        assert!(rendered.contains("error=boom"), "{rendered}");
         let back = DocQuery::from(rendered.as_str());
         assert_eq!(back, q);
     }
@@ -94,5 +106,28 @@ mod tests {
     #[test]
     fn empty_query_renders_nothing() {
         assert_eq!(DocQuery::default().to_string(), "");
+    }
+
+    /// A URL outside the page routes must parse to the 404 page: the
+    /// router panics on an unmatched path, which surfaced as a
+    /// `Encountered panic` 500 for `/robots.txt`, `/s/`, and typos.
+    #[test]
+    fn unknown_paths_parse_as_not_found() {
+        assert!(matches!(
+            Route::from_str("/robots.txt"),
+            Ok(Route::NotFoundPage { .. })
+        ));
+        assert!(matches!(
+            Route::from_str("/s/"),
+            Ok(Route::NotFoundPage { .. })
+        ));
+        assert!(matches!(
+            Route::from_str("/s/abc"),
+            Ok(Route::SpaceIndexPage { .. })
+        ));
+        assert!(matches!(
+            Route::from_str("/s/abc/new"),
+            Ok(Route::NewPage { .. })
+        ));
     }
 }

@@ -100,6 +100,17 @@ pub fn save_notice(query: &crate::app::route::DocQuery) -> Element {
         let short = &revision[..revision.len().min(12)];
         return rsx! { div { class: "banner ok", "Saved · {short}" } };
     }
+        rsx! {}
+}
+
+/// Inline error banner for write-path failures that arrive via
+/// `?error=…` on a read URL (e.g. attachment replace: stale revision).
+pub fn error_notice(query: &crate::app::route::DocQuery) -> Element {
+    if let Some(msg) = &query.error {
+        if !msg.is_empty() {
+            return rsx! { div { class: "banner err", "{msg}" } };
+        }
+    }
     rsx! {}
 }
 

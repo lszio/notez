@@ -22,7 +22,7 @@ pub mod urls;
 
 pub use space::{Entry, Space, UiError};
 
-use axum::extract::{Form, Path, Query};
+use axum::extract::{Form, Multipart, Path, Query};
 use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
@@ -55,6 +55,7 @@ pub fn router() -> Router {
         .route("/raw/{encoded}/{*locator}", get(raw_get))
         .route("/register", post(register_post))
         .route("/save/{encoded}", post(save_post))
+        .route("/replace/{encoded}", post(replace_post))
         .route("/scan/{encoded}", post(scan_post))
         .route("/new/{encoded}", post(new_post))
         .route("/api/render", post(render_post))
@@ -226,6 +227,72 @@ async fn save_post(
 struct ScanForm {
     #[serde(default)]
     next: Option<String>,
+}
+
+/// `POST /replace/{encoded}` — multipart upload that replaces an
+/// attachment's bytes behind a content-hash revision precondition.
+/// Used by the generic "edit · replace file" affordance that
+/// `PreviewCapabilities::can_edit` enables.
+async fn replace_post(
+    Path(encoded): Path<String>,
+    mut multipart: Multipart,
+) -> Result<Response, UiError> {
+    let space = space::open(&encoded)?;
+    let mut locator: Option<String> = None;
+    let mut revision: Option<String> = None;
+    let mut payload: Vec<u8> = Vec::new();
+    while let Some(field) = multipart
+        .next_field()
+        .await
+        .map_err(|e| UiError::BadRequest(format!("multipart: {e}")))?
+    {
+        match field.name().unwrap_or_default() {
+            "locator" => {
+                locator = Some(
+                    field
+                        .text()
+                        .await
+                        .map_err(|e| UiError::BadRequest(format!("locator: {e}")))?,
+                );
+            }
+            "revision" => {
+                revision = Some(
+                    field
+                        .text()
+                        .await
+                        .map_err(|e| UiError::BadRequest(format!("revision: {e}")))?,
+                );
+            }
+            "file" => {
+                payload = field
+                    .bytes()
+                    .await
+                    .map_err(|e| UiError::BadRequest(format!("file: {e}")))?
+                    .to_vec();
+            }
+            _ => {}
+        }
+    }
+    let locator = locator.ok_or_else(|| UiError::BadRequest("missing locator field".into()))?;
+    let revision = revision.unwrap_or_default();
+    if payload.is_empty() {
+        return Err(UiError::BadRequest("missing or empty file field".into()));
+    }
+    match space::replace_attachment(&space.root, &locator, &revision, &payload)? {
+        space::ReplaceOutcome::Saved { revision } => Ok(redirect(&format!(
+            "{}?saved={}",
+            urls::view_url(&encoded, &locator),
+            urlencoding::encode(&revision)
+        ))),
+        space::ReplaceOutcome::Failed(failure) => {
+            let message = space::save_failure_text(&failure);
+            Ok(redirect(&format!(
+                "{}?error={}",
+                urls::view_url(&encoded, &locator),
+                urlencoding::encode(&message)
+            )))
+        }
+    }
 }
 
 async fn scan_post(

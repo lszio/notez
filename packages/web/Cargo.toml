@@ -27,7 +27,7 @@ markdown = { path = "../../crates/adapters/markdown" }
 dioxus = { workspace = true, features = ["router", "fullstack", "server"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
-axum = { version = "0.8", features = ["form"] }
+axum = { version = "0.8", features = ["form", "multipart"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net"] }
 anyhow = "1"
 toml = "0.8"

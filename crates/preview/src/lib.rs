@@ -28,6 +28,13 @@ pub trait Previewer: Send + Sync {
     fn id(&self) -> &'static str;
     fn matches(&self, ctx: &PreviewContext) -> bool;
     fn render(&self, ctx: &PreviewContext) -> Result<PreviewModel, PreviewError>;
+
+    /// UI-facing capabilities the previewer declares for the resources
+    /// it claims. Extension previewers can override this to enable an
+    /// edit affordance; the built-in default is no extra capability.
+    fn capabilities(&self) -> PreviewCapabilities {
+        PreviewCapabilities::default()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -54,14 +61,8 @@ pub enum PreviewModel {
     Xlsx {
         sheets: Vec<Sheet>,
     },
-    Pptx {
-        slides: Vec<Slide>,
-    },
     Zip {
         entries: Vec<ZipEntry>,
-    },
-    Docx {
-        paragraphs: Vec<DocxParagraph>,
     },
     Table {
         table: Table,
@@ -71,6 +72,24 @@ pub enum PreviewModel {
         width: u32,
         height: u32,
         mime: String,
+    },
+    /// Direct media preview — the UI renders a native `<audio>`/`<video>`
+    /// element bound to the resource's raw-bytes URL. No text extraction.
+    Media {
+        media: MediaKind,
+    },
+    /// Client-side viewer shell — the UI mounts a browser renderer for
+    /// `format` (`data-viewer` island plugin) bound to the raw URL.
+    /// The previewer keeps its own structural extraction only when it
+    /// needs it for search/fallback; the viewer is the primary display.
+    Viewer {
+        format: ViewerFormat,
+    },
+    /// Extension-provided ready HTML (plugin/overlay previewer). The
+    /// provider is fully responsible for escaping; the UI emits it
+    /// verbatim (trusted output, same contract as `BlockEmbed`).
+    Html {
+        html: String,
     },
     Mermaid {
         source: String,
@@ -99,7 +118,21 @@ pub enum PreviewModel {
     },
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MediaKind {
+    Audio,
+    Video,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ViewerFormat {
+    Docx,
+    Pptx,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct Heading {
     pub level: u8,
     pub title: String,
@@ -119,18 +152,21 @@ pub struct Sheet {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Slide {
-    pub index: u32,
-    pub title: Option<String>,
-    pub body: Vec<String>,
-    pub notes: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ZipEntry {
     pub path: String,
     pub size: u64,
     pub is_dir: bool,
+}
+
+/// UI-facing capabilities a previewer declares for its resource shape.
+///
+/// `can_edit` drives the "edit (replace file)" affordance on the
+/// attachment page. The concrete edit implementation is extension
+/// provided (generic upload-replace today; richer per-format editors
+/// can ship with the viewer plugin later). Defaults to `false`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct PreviewCapabilities {
+    pub can_edit: bool,
 }
 
 /// Generic tabular data extracted from CSV/TSV attachments.
@@ -143,19 +179,6 @@ pub struct ZipEntry {
 pub struct Table {
     pub headers: Vec<String>,
     pub rows: Vec<Vec<String>>,
-}
-
-/// One paragraph extracted from a DOCX attachment.
-///
-/// `level` is 0 for a body paragraph and 1..=6 for a heading (`<w:pStyle
-/// w:val="HeadingN"/>`). `text` is the concatenation of every `<w:t>`
-/// run inside the paragraph; `<w:tab/>` becomes a single space and
-/// `<w:br/>` becomes a newline. `text` is always plain (no markup);
-/// rendering is the caller's responsibility.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct DocxParagraph {
-    pub level: u8,
-    pub text: String,
 }
 
 pub struct PreviewerCatalog {
@@ -215,10 +238,11 @@ impl Default for PreviewerCatalog {
 /// 10. Zip                                                          (matches: `.zip` / zip MIME)
 /// 11. Docx                                                         (matches: `.docx` / docx MIME)
 /// 12. CsvTsv                                                       (matches: `.csv` / `.tsv` / CSV+TSV MIMEs)
-/// 13. Image                                                        (matches: `image/*`)
-/// 14. Org                                                          (matches: Document / Heading / Block)
-/// 15. LinkEmbed                                                    (override-only — `matches` always false)
-/// 16. Fallback                                                     (matches: always)
+/// 13. Media                                                        (matches: `audio/*` / `video/*` MIMEs + common media extensions)
+/// 14. Image                                                        (matches: `image/*`)
+/// 15. Org                                                          (matches: Document / Heading / Block)
+/// 16. LinkEmbed                                                    (override-only — `matches` always false)
+/// 17. Fallback                                                     (matches: always)
 ///
 /// Notes:
 /// - The abstract previewers (Mermaid/D2/Iframe/BlockEmbed/QueryEmbed) are
@@ -233,8 +257,9 @@ pub fn default_catalog() -> PreviewerCatalog {
         block_embed::BlockEmbedPreviewer, csv_tsv::CsvTsvPreviewer, d2::D2Previewer,
         docx::DocxPreviewer, fallback::FallbackPreviewer, iframe::IframePreviewer,
         image::ImagePreviewer, link_embed::LinkEmbedPreviewer, markdown::MarkdownPreviewer,
-        mermaid::MermaidPreviewer, org::OrgPreviewer, pdf::PdfPreviewer, pptx::PptxPreviewer,
-        query_embed::QueryEmbedPreviewer, xlsx::XlsxPreviewer, zip::ZipPreviewer,
+        media::MediaPreviewer, mermaid::MermaidPreviewer, org::OrgPreviewer, pdf::PdfPreviewer,
+        pptx::PptxPreviewer, query_embed::QueryEmbedPreviewer, xlsx::XlsxPreviewer,
+        zip::ZipPreviewer,
     };
 
     let mut c = PreviewerCatalog::new();
@@ -250,6 +275,7 @@ pub fn default_catalog() -> PreviewerCatalog {
     c.register(ZipPreviewer);
     c.register(DocxPreviewer);
     c.register(CsvTsvPreviewer);
+    c.register(MediaPreviewer);
     c.register(ImagePreviewer);
     c.register(OrgPreviewer);
     c.register(LinkEmbedPreviewer);

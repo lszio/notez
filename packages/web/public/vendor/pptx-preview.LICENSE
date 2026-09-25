@@ -1,0 +1,5 @@
+ISC License (verbatim text omitted for brevity; see https://opensource.org/licenses/ISC)
+
+Vendored for notez; upstream: pptx-preview 1.0.7 (npm). The bundled
+dist exposes the `pptxPreview` global; entry point `pptxPreview.init(el, { mode })`
+returns a viewer whose `.preview(arrayBuffer)` renders the slides.

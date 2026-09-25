@@ -17,7 +17,7 @@ use std::path::{Path, PathBuf};
 use notez_core::application::dispatcher::{ApplicationDispatcher, Response as DispatchResponse};
 use notez_core::config::web_space::{list_sources, WebSourceError};
 use notez_core::domain::Resource;
-use notez_protocol::request::{Request, ScanNativeRequest, UpdateDocumentRequest};
+use notez_protocol::request::{Request, RevisionPrecondition, ScanNativeRequest, UpdateDocumentRequest};
 
 use crate::routes::WebState;
 use crate::server::{SaveFailure, SaveOutcome};
@@ -381,16 +381,37 @@ pub fn read_doc(root: &Path, locator: &str) -> Result<(String, String), UiError>
 pub fn render_document(space: &Space, locator: &str, content: &str) -> Result<String, UiError> {
     let full = safe_join(&space.root, locator)?;
     let title = doc_title(&space.root, locator, content);
-    let row = document_row(locator, &title);
-    // `render_body` reads the on-disk bytes for the previewer context;
-    // for the live preview we want the *edited* text, so seed the body
-    // property explicitly.
-    let mut row = row;
-    row.properties.insert("body".to_string(), content.to_string());
-    let html = crate::body::render_body(&row, &space.root);
+    let mut row = document_row(locator, &title);
+    let resources = crate::server::dispatch_query(&space.root).map_err(UiError::Internal)?;
+    let objects = serde_json::to_value(&resources).unwrap_or_else(|_| serde_json::json!([]));
+    let context = crate::janet::JanetQueryContext { objects: objects.clone(), search: objects, ..Default::default() };
+    let dynamic_body = crate::janet::render_dynamic_blocks_with_context(content, &context);
+    let (body_with_slots, cards) = extract_card_slots(&dynamic_body);
+    row.properties.insert("body".to_string(), body_with_slots);
+    let mut html = crate::body::render_body(&row, &space.root);
+    for (slot, card) in cards { html = html.replace(html_escape::encode_text(&slot).as_ref(), &card); }
     let dir = crate::data::urls::split_locator(locator).0;
     let _ = full;
     Ok(crate::data::html::rewrite_local_urls(&html, &space.encoded, dir))
+}
+
+fn extract_card_slots(body: &str) -> (String, Vec<(String, String)>) {
+    let mut out = body.to_string();
+    let mut cards = Vec::new();
+    let mut search_from = 0usize;
+    let mut ordinal = 0usize;
+    while let Some(relative) = out[search_from..].find("<section class=\"notez-card") {
+        let start = search_from + relative;
+        let Some(end_relative) = out[start..].find("</section>") else { break; };
+        let end = start + end_relative + "</section>".len();
+        let card = out[start..end].to_string();
+        let slot = format!("NOTEZ_CARD_SLOT_{ordinal}");
+        out.replace_range(start..end, &slot);
+        cards.push((slot, card));
+        search_from = start + 1;
+        ordinal += 1;
+    }
+    (out, cards)
 }
 
 /// Build the `ResourceRow` the previewer needs for `locator`.
@@ -483,9 +504,11 @@ pub fn save_doc(
         source_id: resource.source_id.clone(),
         locator: locator.to_string(),
         content: content.to_string(),
-        base_revision: Some(expected_revision.to_string()),
         format: None,
-        expected_revision: Some(expected_revision.to_string()),
+        precondition: RevisionPrecondition::MustMatch {
+            revision: notez_protocol::request::NonEmptyRevision::new(expected_revision)
+                .map_err(|e| UiError::Internal(format!("invalid expected revision: {e}")))?,
+        },
     }));
     match response {
         Ok(DispatchResponse::DocumentUpdated(report)) => Ok(SaveOutcome::Saved {
@@ -518,6 +541,64 @@ pub fn save_failure_text(failure: &SaveFailure) -> String {
         SaveFailure::Unsupported { reason } => format!("Cannot edit this file: {reason}"),
         SaveFailure::Internal { message } => format!("Save failed: {message}"),
     }
+}
+
+/// Result of replacing an attachment's bytes.
+#[derive(Debug)]
+pub enum ReplaceOutcome {
+    Saved {
+        revision: String,
+    },
+    Failed(SaveFailure),
+}
+
+/// Replace the bytes of an attachment file, guarded by a content-hash
+/// revision precondition.
+///
+/// Attachments are binary and have no document write-spine update path
+/// in the protocol, so this performs an atomic on-disk replace (temp
+/// sibling + rename) and rescans the space — consistent with the
+/// "local files are the source of truth" principle. When the current
+/// content hash no longer matches `expected_revision` nothing is
+/// written and `ReplaceOutcome::Failed(SaveFailure::StaleRevision)` is
+/// returned.
+pub fn replace_attachment(
+    root: &Path,
+    locator: &str,
+    expected_revision: &str,
+    bytes: &[u8],
+) -> Result<ReplaceOutcome, UiError> {
+    let full = safe_join(root, locator)?;
+    if !full.is_file() {
+        return Err(UiError::NotFound(format!("not found: {locator}")));
+    }
+    let current = std::fs::read(&full)
+        .map_err(|e| UiError::Internal(format!("read {}: {e}", full.display())))?;
+    let actual = crate::server::sha256_hex(&current);
+    if !actual.eq_ignore_ascii_case(expected_revision.trim()) {
+        return Ok(ReplaceOutcome::Failed(SaveFailure::StaleRevision {
+            expected: expected_revision.to_string(),
+            actual,
+        }));
+    }
+    let parent = full
+        .parent()
+        .ok_or_else(|| UiError::Internal(format!("no parent for {}", full.display())))?;
+    let tmp = parent.join(format!(
+        ".{}.nztmp-{}",
+        full.file_name().map(|n| n.to_string_lossy()).unwrap_or_default(),
+        std::process::id()
+    ));
+    std::fs::write(&tmp, bytes)
+        .map_err(|e| UiError::Internal(format!("write {}: {e}", tmp.display())))?;
+    if let Err(e) = std::fs::rename(&tmp, &full) {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(UiError::Internal(format!("replace {}: {e}", full.display())));
+    }
+    let _ = scan(root);
+    Ok(ReplaceOutcome::Saved {
+        revision: crate::server::sha256_hex(bytes),
+    })
 }
 
 /// Rescan the space (index new/changed files). Returns the number of
@@ -678,6 +759,54 @@ mod tests {
         assert!(is_doc_locator("a/B.ORG"));
         assert!(!is_doc_locator("a/b.pdf"));
         assert!(!is_doc_locator("noext"));
+    }
+
+    #[test]
+    fn replace_attachment_writes_new_bytes_and_bumps_revision() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("blob.bin");
+        std::fs::write(&file, b"v1").unwrap();
+        let v1 = crate::server::sha256_hex(b"v1");
+        let v2 = crate::server::sha256_hex(b"v2");
+        match replace_attachment(dir.path(), "blob.bin", &v1, b"v2").unwrap() {
+            ReplaceOutcome::Saved { revision } => assert_eq!(revision, v2),
+            other => panic!("expected Saved, got {other:?}"),
+        }
+        let current = std::fs::read(&file).unwrap();
+        assert_eq!(current, b"v2");
+    }
+
+    #[test]
+    fn replace_attachment_rejects_stale_revision() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("blob.bin");
+        std::fs::write(&file, b"v1").unwrap();
+        let actual = crate::server::sha256_hex(b"v1");
+        // caller thinks the current revision is `actual + "x"`; server
+        // recomputes from disk and detects the mismatch.
+        let stale = format!("{actual}x");
+        match replace_attachment(dir.path(), "blob.bin", &stale, b"v2").unwrap() {
+            ReplaceOutcome::Saved { .. } => panic!("stale revision must fail"),
+            ReplaceOutcome::Failed(failure) => match failure {
+                SaveFailure::StaleRevision { expected, actual: a } => {
+                    assert_eq!(expected, stale);
+                    assert_eq!(a, actual);
+                }
+                other => panic!("expected StaleRevision, got {other:?}"),
+            },
+        }
+        // file untouched
+        assert_eq!(std::fs::read(&file).unwrap(), b"v1");
+    }
+
+    #[test]
+    fn replace_attachment_returns_not_found_for_missing_locator() {
+        let dir = tempfile::tempdir().unwrap();
+        let err = replace_attachment(dir.path(), "nope.bin", "", b"x").unwrap_err();
+        assert!(
+            matches!(err, UiError::NotFound(_)),
+            "expected NotFound, got {err:?}"
+        );
     }
 
     #[test]

@@ -267,6 +267,72 @@
     }
   }
 
+  /* ------------------------------------------------------------ 4. attachment viewers */
+
+  // The previewer for `docx` / `pptx` (and any extension that emits a
+  // viewer shell) renders <div class="preview-viewer"
+  // data-viewer="docx" data-src="/raw/..." data-state="idle">. The
+  // matching plugin lives at `/plugins/{name}.js` and must register a
+  // renderer by assigning to `window.notezViewers[name]` an async
+  // `(el, src) => void` function that renders into `el` and replaces
+  // its content.
+  function initViewers() {
+    var els = $$("[data-viewer]");
+    if (!els.length) return;
+    var pending = {}; // name -> [el, ...]
+    els.forEach(function (el) {
+      var name = el.getAttribute("data-viewer");
+      if (!name) return;
+      if (window.notezViewers && typeof window.notezViewers[name] === "function") {
+        runViewer(name, el);
+      } else {
+        (pending[name] = pending[name] || []).push(el);
+      }
+    });
+    Object.keys(pending).forEach(function (name) {
+      var s = document.createElement("script");
+      s.src = "/plugins/" + encodeURIComponent(name) + ".js";
+      s.onload = function () {
+        (pending[name] || []).forEach(function (el) {
+          if (window.notezViewers && typeof window.notezViewers[name] === "function") {
+            runViewer(name, el);
+          } else {
+            failViewer(el, "plugin loaded without registering a renderer");
+          }
+        });
+      };
+      s.onerror = function () {
+        (pending[name] || []).forEach(function (el) { failViewer(el, "plugin failed to load"); });
+      };
+      document.head.appendChild(s);
+    });
+  }
+
+  function runViewer(name, el) {
+    if (el.getAttribute("data-state") === "ready" || el.getAttribute("data-state") === "loading") return;
+    el.setAttribute("data-state", "loading");
+    var src = el.getAttribute("data-src");
+    var host = document.createElement("div");
+    host.className = "viewer-host";
+    // Keep the "Open in new tab" fallback as the always-visible last
+    // child so failed renders still let the user reach the raw file.
+    var fallback = el.querySelector("a.spine-action");
+    el.replaceChildren(host);
+    if (fallback) el.appendChild(fallback);
+    Promise.resolve()
+      .then(function () { return window.notezViewers[name](host, src); })
+      .then(function () { el.setAttribute("data-state", "ready"); })
+      .catch(function (err) { failViewer(el, err && err.message ? err.message : "renderer error"); });
+  }
+
+  function failViewer(el, msg) {
+    el.setAttribute("data-state", "failed");
+    var note = document.createElement("p");
+    note.className = "mono-sm dim";
+    note.textContent = "Viewer unavailable" + (msg ? " — " + msg : "") + ".";
+    el.insertBefore(note, el.firstChild);
+  }
+
   /* ---------------------------------------------------------------- 3. watch pill */
 
   function initStatus() {
@@ -301,6 +367,7 @@
   function boot() {
     initSidebar();
     initEditor();
+    initViewers();
     initStatus();
   }
 

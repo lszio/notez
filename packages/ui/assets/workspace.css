@@ -295,6 +295,38 @@ a:hover { text-decoration: underline; }
 .doc .spine-action { font-size: 0.9rem; }
 .doc .block-embed { background: var(--code-bg); padding: 0.8rem; border-radius: var(--radius); }
 
+/* ---------- attachment previews: media / viewer / edit ---------- */
+
+.doc .preview-media { margin: 1em 0; }
+.doc .preview-media video,
+.doc .preview-media audio { width: 100%; max-width: 100%; border-radius: var(--radius); background: var(--code-bg); }
+
+.doc .preview-viewer {
+  margin: 1em 0;
+  padding: 0.6rem 0.8rem;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  background: var(--bg-1);
+}
+.doc .preview-viewer[data-state="loading"] .viewer-host { min-height: 4rem; opacity: 0.6; }
+.doc .preview-viewer[data-state="failed"] { border-color: var(--danger); }
+.doc .preview-viewer .viewer-host { overflow: auto; max-height: 70vh; }
+.doc .preview-docx-render { padding: 0.5rem 0; }
+.doc .preview-docx-render img { max-width: 100%; height: auto; }
+
+.doc .preview-edit {
+  display: flex;
+  gap: 0.6rem;
+  align-items: center;
+  flex-wrap: wrap;
+  margin: 0.7rem 0 0;
+  padding: 0.5rem 0.7rem;
+  border-top: 1px dashed var(--rule);
+  color: var(--dim);
+  font-size: 0.86rem;
+}
+.doc .preview-edit input[type="file"] { color: var(--ink); font: inherit; }
+
 /* ---------- editor ---------- */
 
 .editor {

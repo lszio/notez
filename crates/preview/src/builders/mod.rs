@@ -7,6 +7,7 @@ pub mod iframe;
 pub mod image;
 pub mod link_embed;
 pub mod markdown;
+pub mod media;
 pub mod mermaid;
 pub mod org;
 pub mod org_html;
