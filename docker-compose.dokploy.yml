@@ -1,12 +1,12 @@
 # Dokploy deployment: notez web SSR behind Traefik with authentik
-# forward-auth (proxy provider) guarding every browser route.
+# forward-auth guarding every browser route.
 #
-# Deploy in dokploy as a "Compose" service with:
-#   * compose path: docker-compose.dokploy.yml
+# Deploy in dokploy as a Compose service (git source, this file):
+#   * middleware `authentik-auth@file` is already defined in dokploy's
+#     global Traefik config (forwardAuth -> authentik embedded outpost);
+#     attach it to the notez domain via the dokploy domain settings.
 #   * environment (Service > Environment):
-#       NOTEZ_DOMAIN            public hostname, e.g. notez.example.com
-#       AUTHENTIK_OUTPOST_URL   outpost base, e.g. https://auth.example.com/outpost.goauthentik.io
-#       NOTEZ_API_OIDC_ISSUER   https://<authentik-host>/application/o/<provider-slug>/
+#       NOTEZ_API_OIDC_ISSUER   https://auth.lszio.space/application/o/<provider-slug>/
 #       NOTEZ_API_OIDC_AUDIENCE authentik provider client id
 #
 # Browser traffic: Traefik forward-auth redirects unauthenticated users
@@ -35,18 +35,6 @@ services:
     volumes:
       - notez-data:/data
     restart: unless-stopped
-    labels:
-      - traefik.enable=true
-      - traefik.http.routers.notez.rule=Host(`${NOTEZ_DOMAIN:?set NOTEZ_DOMAIN}`)
-      - traefik.http.routers.notez.entrypoints=websecure
-      - traefik.http.routers.notez.tls.certResolver=letsencrypt
-      - traefik.http.services.notez.loadbalancer.server.port=3030
-      # authentik embedded outpost forward-auth. The outpost must be
-      # routed under AUTHENTIK_OUTPOST_URL (host or embedded mode).
-      - traefik.http.middlewares.notez-auth.forwardauth.address=${AUTHENTIK_OUTPOST_URL:?set AUTHENTIK_OUTPOST_URL}/auth/traefik
-      - traefik.http.middlewares.notez-auth.forwardauth.trustForwardHeader=true
-      - traefik.http.middlewares.notez-auth.forwardauth.authResponseHeaders=X-authentik-username,X-authentik-groups,X-authentik-email,X-authentik-name,X-authentik-uid
-      - traefik.http.routers.notez.middlewares=notez-auth@docker
 
 networks:
   dokploy-network:
