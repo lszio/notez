@@ -719,9 +719,10 @@ where
         r_ref: &ResourceRef,
         to_state: &str,
         timestamp: &str,
+        precondition: notez_protocol::request::RevisionPrecondition,
     ) -> Result<crate::document::StateTransition, ApplicationError> {
         <Self as crate::application::use_cases::TaskUseCase>::transition_task(
-            self, r_ref, to_state, timestamp,
+            self, r_ref, to_state, timestamp, precondition,
         )
     }
 
@@ -846,6 +847,7 @@ where
         source_id: &str,
         target_ref: &str,
         payload: &str,
+        precondition: notez_protocol::request::RevisionPrecondition,
     ) -> Result<crate::application::writeback::WritebackReport, ApplicationError> {
         let source = self.source.as_ref().ok_or_else(|| {
             ApplicationError::Storage {
@@ -882,13 +884,14 @@ where
                 source_id: source_id.to_string(),
             });
         }
-        let prep =
-            adapter
-                .prepare_write(target_ref, payload)
-                .map_err(|e| ApplicationError::Storage {
-                    kind: StorageErrorKind::InvalidState,
-                    message: e.to_string(),
-                })?;
+        if matches!(precondition, notez_protocol::request::RevisionPrecondition::MustNotExist) {
+            return Err(ApplicationError::InvalidRequest { message: "writeback_resource requires MustMatch precondition".into() });
+        }
+        let target = ResourceRef::parse(target_ref).map_err(|e| ApplicationError::InvalidRequest { message: e.to_string() })?;
+        crate::application::write_check::check_precondition(self, &target, &precondition)?;
+        let prep = adapter
+            .prepare_write(target_ref, payload)
+            .map_err(|e| ApplicationError::Storage { kind: StorageErrorKind::InvalidState, message: e.to_string() })?;
         let commit_res = adapter
             .commit_write(&prep)
             .map_err(|e| ApplicationError::Storage {
@@ -903,22 +906,22 @@ where
     }
 
     /// Unified write pipe for whole-document content updates.
-    ///
-    /// Resolves the target row by `source_id` + `locator` (document
-    /// kind only), enforces the expected-revision guard (content hash
-    /// of the raw bytes, empty/None = no precondition), journals a
-    /// [`ChangeOp::Writeback`](crate::domain::change::ChangeOp) Change,
-    /// performs an atomic tmp+rename filesystem write, and refreshes
-    /// the projection with a full native rescan (which journals its
-    /// own Scan Changes).
     pub fn update_document(
         &mut self,
         source_id: &str,
         locator: &str,
         content: &str,
-        expected_revision: Option<&str>,
+        precondition: notez_protocol::request::RevisionPrecondition,
     ) -> Result<DocumentUpdateReport, ApplicationError> {
         use crate::application::use_cases::{ResourceUseCase, ScanUseCase};
+        let expected_revision = match &precondition {
+            notez_protocol::request::RevisionPrecondition::MustMatch { revision } => Some(revision.as_str()),
+            notez_protocol::request::RevisionPrecondition::MustNotExist => {
+                return Err(ApplicationError::InvalidRequest {
+                    message: "update_document requires MustMatch precondition".to_string(),
+                });
+            }
+        };
 
         let space_root = self.require_space_root()?;
         let page = <Self as ResourceUseCase>::query(
@@ -969,10 +972,11 @@ where
             .record_writeback(
                 source_id,
                 res.r#ref,
-                expected_revision.map(str::to_string),
+                crate::domain::change::ChangePrecondition::Revision(precondition),
                 serde_json::json!({
                     "locator": locator,
                     "new_content_bytes": content.len(),
+                    "post_write_revision": sha256_hex(content.as_bytes()),
                 }),
             )
             .map_err(|e| ApplicationError::Storage {
@@ -1017,11 +1021,11 @@ where
         <Self as crate::application::use_cases::SyncUseCase>::relay_sync(self)
     }
 
-    pub fn upsert_resource(&mut self, resource: Resource) -> Result<(), ApplicationError> {
-        <Self as crate::application::use_cases::ResourceUseCase>::upsert_resource(self, resource)
+    pub fn upsert_resource(&mut self, resource: Resource, precondition: notez_protocol::request::RevisionPrecondition) -> Result<(), ApplicationError> {
+        <Self as crate::application::use_cases::ResourceUseCase>::upsert_resource(self, resource, precondition)
     }
-    pub fn delete_resource(&mut self, r_ref: &ResourceRef) -> Result<(), ApplicationError> {
-        <Self as crate::application::use_cases::ResourceUseCase>::delete_resource(self, r_ref)
+    pub fn delete_resource(&mut self, r_ref: &ResourceRef, precondition: notez_protocol::request::RevisionPrecondition) -> Result<(), ApplicationError> {
+        <Self as crate::application::use_cases::ResourceUseCase>::delete_resource(self, r_ref, precondition)
     }
     pub fn query(&self, selector: &Selector) -> Result<QueryPage, ApplicationError> {
         <Self as crate::application::use_cases::ResourceUseCase>::query(self, selector)

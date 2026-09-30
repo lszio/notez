@@ -25,6 +25,73 @@ fn warm_space(space: &std::path::Path) {
 }
 
 #[test]
+fn mutation_help_requires_revision_preconditions() {
+    notez_cmd()
+        .args(["resource", "upsert", "--help"])
+        .assert()
+        .success()
+        .stdout(predicates::str::contains("--create"))
+        .stdout(predicates::str::contains("--expected-revision"));
+    notez_cmd()
+        .args(["resource", "delete", "--help"])
+        .assert()
+        .success()
+        .stdout(predicates::str::contains("--expected-revision"));
+    notez_cmd()
+        .args(["task", "transition", "--help"])
+        .assert()
+        .success()
+        .stdout(predicates::str::contains("--expected-revision"));
+    notez_cmd()
+        .args(["source", "writeback", "--help"])
+        .assert()
+        .success()
+        .stdout(predicates::str::contains("--expected-revision"));
+}
+
+#[test]
+fn upsert_create_requires_the_create_flag() {
+    let temp = tempdir().unwrap();
+    let payload = temp.path().join("resource.json");
+    fs::write(
+        &payload,
+        r#"{
+            "ref": "heading:01J00000000000000000000E01",
+            "kind": "heading",
+            "title": "Injected Heading",
+            "revision": "rev1",
+            "source_id": "native",
+            "locator": "/injected.org",
+            "properties": {}
+        }"#,
+    )
+    .unwrap();
+
+    notez_cmd()
+        .arg("resource")
+        .arg("upsert")
+        .arg("--from")
+        .arg(&payload)
+        .assert()
+        .code(2)
+        .stderr(predicates::str::contains("expected revision"));
+    let create_space = tempdir().unwrap();
+    let create_payload = temp.path().join("create-resource.json");
+    fs::write(&create_payload, fs::read_to_string(&payload).unwrap().replace("01J00000000000000000000E01", "01J00000000000000000000E02")).unwrap();
+    notez_cmd()
+        .arg("--space")
+        .arg(create_space.path())
+        .arg("resource")
+        .arg("upsert")
+        .arg("--from")
+        .arg(&create_payload)
+        .arg("--create")
+        .assert()
+        .success()
+        .stdout(predicates::str::contains("heading:01J00000000000000000000E02"));
+}
+
+#[test]
 fn resolve_missing_is_exit_3_not_found() {
     let temp = tempdir().unwrap();
     let space = temp.path();
@@ -95,6 +162,8 @@ fn source_writeback_unknown_source_is_exit_5_no_source_registered() {
         .arg("heading:01J00000000000000000000E02")
         .arg("--payload")
         .arg("payload")
+        .arg("--expected-revision")
+        .arg("stale")
         .assert()
         .code(5);
 }
@@ -113,6 +182,27 @@ fn task_transition_missing_resource_is_exit_3() {
         .arg("heading:01J00000000000000000000E99")
         .arg("--to")
         .arg("DONE")
+        .arg("--expected-revision")
+        .arg("stale")
         .assert()
-        .code(3);
+        .code(9);
+}
+
+#[test]
+fn delete_stale_revision_is_exit_9() {
+    let temp = tempdir().unwrap();
+    let space = temp.path();
+    warm_space(space);
+
+    notez_cmd()
+        .arg("--space")
+        .arg(space)
+        .arg("--json")
+        .arg("resource")
+        .arg("delete")
+        .arg("document:01J00000000000000000000E01")
+        .arg("--expected-revision")
+        .arg("stale")
+        .assert()
+        .code(9);
 }

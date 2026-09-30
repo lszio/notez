@@ -1,6 +1,7 @@
 use crate::application::Engine;
 use std::fs;
 use crate::storage::SqliteProjection;
+use notez_protocol::request::{NonEmptyRevision, RevisionPrecondition};
 
 /// `writeback_resource` without an explicit `SourceContext` must refuse;
 /// it must never fall back to the process working directory.
@@ -20,6 +21,7 @@ fn writeback_resource_requires_source_context() {
             "anytype_src",
             "heading:01J00000000000000000000033",
             "updated_title",
+            RevisionPrecondition::MustMatch { revision: NonEmptyRevision::new("missing").unwrap() },
         )
         .expect_err("writeback requires an explicit SourceContext");
     assert!(

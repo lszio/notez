@@ -2,6 +2,7 @@ use crate::application::Engine;
 use crate::domain::ResourceRef;
 use std::fs;
 use crate::storage::SqliteProjection;
+use notez_protocol::request::{NonEmptyRevision, RevisionPrecondition};
 
 #[test]
 fn agenda_views_task_transitions_and_para_overview() {
@@ -36,7 +37,7 @@ fn agenda_views_task_transitions_and_para_overview() {
 
     let r_ref = ResourceRef::parse("heading:01J00000000000000000000601").unwrap();
     let transition_res = service
-        .transition_task(&r_ref, "DONE", "2026-07-22 Wed 16:00")
+        .transition_task(&r_ref, "DONE", "2026-07-22 Wed 16:00", RevisionPrecondition::MustMatch { revision: NonEmptyRevision::new("1").unwrap() })
         .unwrap();
 
     assert_eq!(transition_res.to_state, "DONE");

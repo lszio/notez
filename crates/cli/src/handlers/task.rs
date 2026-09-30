@@ -13,8 +13,8 @@ use crate::commands;
 use notez_core::application::dispatcher::{ApplicationDispatcher, Response};
 use notez_protocol::response::{AgendaItem, ParaNode, ResourceKind};
 use notez_protocol::request::{
-    AgendaRequest, ListJobsRequest, ParaOverviewRequest, ReadResourceRequest,
-    Request, TransitionTaskRequest,
+    AgendaRequest, ListJobsRequest, ParaOverviewRequest, ReadResourceRequest, Request,
+    RevisionPrecondition, TransitionTaskRequest,
 };
 
 pub fn run_agenda(json: bool, service: &mut Service) {
@@ -50,12 +50,17 @@ pub fn run_task(
             r_ref,
             to,
             timestamp,
+            expected_revision,
         } => {
+            let revision = match notez_protocol::request::NonEmptyRevision::new(expected_revision) {
+                Ok(revision) => revision,
+                Err(message) => { eprintln!("invalid expected revision: {message}"); exit(2); }
+            };
             let dispatched = dispatcher.dispatch(Request::TransitionTask(TransitionTaskRequest {
                 r_ref: r_ref.clone(),
                 to_state: to,
                 timestamp,
-                expected_revision: None,
+                precondition: RevisionPrecondition::MustMatch { revision },
             }));
             match dispatched {
                 Ok(Response::Transition(transition)) => {

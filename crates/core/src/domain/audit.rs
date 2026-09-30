@@ -6,7 +6,7 @@
 //! resulting outcome — enough to answer "who did what when" without
 //! needing to replay the journal itself.
 
-use super::change::Change;
+use super::change::{Change, ChangePrecondition};
 use crate::domain::resource::ResourceRef;
 use serde::{Deserialize, Serialize};
 
@@ -16,6 +16,7 @@ pub struct AuditRecord {
     pub principal: String,
     pub action: String,
     pub target: ResourceRef,
+    pub precondition: ChangePrecondition,
     pub outcome: AuditOutcome,
     pub recorded_at_unix_millis: i64,
 }
@@ -39,6 +40,7 @@ impl AuditRecord {
             principal: change.actor.principal.clone(),
             action: format!("{:?}", change.op),
             target,
+            precondition: change.precondition.clone(),
             outcome: AuditOutcome::Success,
             recorded_at_unix_millis: change.at_unix_millis,
         }

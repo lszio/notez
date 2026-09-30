@@ -2,6 +2,7 @@ use crate::application::Engine;
 use crate::domain::{Resource, ResourceKind, ResourceRef};
 use std::collections::BTreeMap;
 use crate::storage::SqliteProjection;
+use notez_protocol::request::{NonEmptyRevision, RevisionPrecondition};
 
 fn fixture(kind: ResourceKind, ulid_str: &str, title: &str, source_id: &str) -> Resource {
     Resource {
@@ -41,9 +42,9 @@ fn upsert_then_list_recent_then_delete() {
         "native",
     );
 
-    service.upsert_resource(r1.clone()).unwrap();
-    service.upsert_resource(r2.clone()).unwrap();
-    service.upsert_resource(r3.clone()).unwrap();
+    service.upsert_resource(r1.clone(), RevisionPrecondition::MustNotExist).unwrap();
+    service.upsert_resource(r2.clone(), RevisionPrecondition::MustNotExist).unwrap();
+    service.upsert_resource(r3.clone(), RevisionPrecondition::MustNotExist).unwrap();
 
     // list_recent should return all three, ordered by revision desc.
     let recent = service.list_recent(10).unwrap();
@@ -61,7 +62,7 @@ fn upsert_then_list_recent_then_delete() {
     assert_eq!(native.len(), 2);
 
     // Delete one and confirm it vanishes from listings.
-    service.delete_resource(&r2.r#ref).unwrap();
+    service.delete_resource(&r2.r#ref, RevisionPrecondition::MustMatch { revision: NonEmptyRevision::new("rev1").unwrap() }).unwrap();
     let apple_after = service.list_by_source("apple_notes", 100).unwrap();
     assert_eq!(apple_after.len(), 0);
     let recent_after = service.list_recent(10).unwrap();
@@ -80,13 +81,13 @@ fn upsert_then_update_is_visible_via_query() {
         "draft",
         "native",
     );
-    service.upsert_resource(r.clone()).unwrap();
+    service.upsert_resource(r.clone(), RevisionPrecondition::MustNotExist).unwrap();
 
     r.title = "polished".to_string();
     r.revision = "rev2".to_string();
     r.properties
         .insert("TODO".to_string(), "DONE".to_string());
-    service.upsert_resource(r.clone()).unwrap();
+    service.upsert_resource(r.clone(), RevisionPrecondition::MustMatch { revision: NonEmptyRevision::new("rev1").unwrap() }).unwrap();
 
     let got = service.read(&r.r#ref).unwrap().expect("present");
     assert_eq!(got.title, "polished");
@@ -105,9 +106,9 @@ fn delete_is_idempotent() {
         "transient",
         "native",
     );
-    service.upsert_resource(r.clone()).unwrap();
-    service.delete_resource(&r.r#ref).unwrap();
-    // Second delete must not error and must leave the projection clean.
-    service.delete_resource(&r.r#ref).unwrap();
+    service.upsert_resource(r.clone(), RevisionPrecondition::MustNotExist).unwrap();
+    service.delete_resource(&r.r#ref, RevisionPrecondition::MustMatch { revision: NonEmptyRevision::new("rev1").unwrap() }).unwrap();
+    // Second delete must NOT error and must leave the projection clean.
+    service.delete_resource(&r.r#ref, RevisionPrecondition::MustNotExist).unwrap();
     assert!(service.read(&r.r#ref).unwrap().is_none());
 }

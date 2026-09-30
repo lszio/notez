@@ -1,15 +1,9 @@
-//! TaskUseCase implementation for `Engine`.
-//!
-//! Method bodies were previously inlined in `service.rs`; this file
-//! is part of the 0.5.x-A1+A3 use-case impl split.
-
-use crate::application::service::{
-    ApplicationError, Engine, DocumentErrorKind, StorageErrorKind,
-};
-use crate::domain::{ProjectionReader, ProjectionWrite};
-use crate::application::use_cases::TaskUseCase;
+use sha2::Digest;
+use crate::application::service::{DocumentErrorKind, Engine, StorageErrorKind};
+use crate::application::ApplicationError;
 use crate::application::write_check;
-use crate::domain::{ProjectionStore, ResourceRef, Selector};
+use crate::application::use_cases::TaskUseCase;
+use crate::domain::{ProjectionReader, ProjectionStore, ProjectionWrite, ResourceRef, Selector};
 
 impl<S> TaskUseCase for Engine<S>
 where
@@ -50,8 +44,10 @@ where
         r_ref: &ResourceRef,
         to_state: &str,
         timestamp: &str,
+        precondition: notez_protocol::request::RevisionPrecondition,
     ) -> Result<crate::document::StateTransition, ApplicationError> {
         write_check::check_capability(self, "task")?;
+        write_check::check_precondition(self, r_ref, &precondition)?;
         let mut res = <Self as crate::application::use_cases::ResourceUseCase>::read(self, r_ref)?
             .ok_or_else(|| ApplicationError::NotFound { kind: r_ref.kind(), r_ref: r_ref.clone() })?;
 
@@ -91,6 +87,12 @@ where
                     source: e.kind(),
                 }
             })?;
+            let disk_revision = format!("{:x}", sha2::Sha256::digest(content.as_bytes()));
+            if let notez_protocol::request::RevisionPrecondition::MustMatch { revision } = &precondition {
+                if revision.as_str() != disk_revision {
+                    return Err(ApplicationError::RevisionConflict { expected: revision.as_str().to_string(), actual: disk_revision });
+                }
+            }
             let file_lines: Vec<String> = content.lines().map(str::to_string).collect();
             let found = crate::source::writer::find_heading_line(&file_lines, &res.title, 1)
                 .ok_or_else(|| ApplicationError::NotFound {
@@ -122,7 +124,7 @@ where
                 "closed_timestamp": transition.closed_timestamp
             })
             .to_string();
-            self.writeback_resource(&source_id, &res.locator, &payload)?;
+            self.writeback_resource(&source_id, &res.locator, &payload, precondition.clone())?;
         }
 
         // Then update the local projection through the event spine: one

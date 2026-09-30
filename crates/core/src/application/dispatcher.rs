@@ -43,18 +43,6 @@ fn parse_kind(s: &str) -> Result<ResourceKind, ApplicationError> {
     }
 }
 
-/// Effective revision precondition for a request carrying both the
-/// uniform guard and an operation-specific alias (`base_revision`).
-/// The uniform field wins; the alias is a fallback for web parity.
-fn effective_expected<'a>(
-    expected: &'a Option<String>,
-    base: &'a Option<String>,
-) -> Option<&'a str> {
-    expected
-        .as_deref()
-        .filter(|s| !s.is_empty())
-        .or_else(|| base.as_deref().filter(|s| !s.is_empty()))
-}
 
 /// Org-format timestamp for "now", e.g. `2026-08-25 Mon 14:30`.
 /// Dependency-free civil-date conversion (Hinnant's algorithm);
@@ -102,7 +90,6 @@ where
 
     /// Evaluate one protocol request against the bound facade.
     pub fn dispatch(&mut self, req: Request) -> Result<Response, ApplicationError> {
-        use crate::application::write_check;
         let f = &mut *self.facade;
         match req {
             Request::ScanNative(_) => Ok(Response::Scan(wire::scan_report(
@@ -141,10 +128,7 @@ where
             }
             Request::DeleteResource(r) => {
                 let rf = parse_ref(&r.r_ref)?;
-                if let Some(expected) = effective_expected(&r.expected_revision, &None) {
-                    write_check::check_revision(f, &rf, expected)?;
-                }
-                <Engine<S> as ResourceUseCase>::delete_resource(f, &rf)?;
+                <Engine<S> as ResourceUseCase>::delete_resource(f, &rf, r.precondition)?;
                 Ok(Response::Done)
             }
             Request::ListRecent(r) => Ok(Response::Resources(
@@ -189,10 +173,7 @@ where
                     object_id,
                     primary_source_id: p.primary_source_id,
                 };
-                if let Some(expected) = effective_expected(&r.expected_revision, &None) {
-                    write_check::check_revision(f, &resource.r#ref, expected)?;
-                }
-                <Engine<S> as ResourceUseCase>::upsert_resource(f, resource)?;
+                <Engine<S> as ResourceUseCase>::upsert_resource(f, resource, r.precondition)?;
                 Ok(Response::Done)
             }
             Request::LinkOccurrences(r) => {
@@ -236,19 +217,13 @@ where
             ))),
             Request::TransitionTask(r) => {
                 let rf = parse_ref(&r.r_ref)?;
-                if let Some(expected) = effective_expected(&r.expected_revision, &None) {
-                    write_check::check_revision(f, &rf, expected)?;
-                }
                 let timestamp = match r.timestamp.as_deref() {
                     Some(ts) => ts.to_owned(),
                     None => org_now(),
                 };
                 Ok(Response::Transition(wire::state_transition(
                     &<Engine<S> as TaskUseCase>::transition_task(
-                        f,
-                        &rf,
-                        &r.to_state,
-                        &timestamp,
+                        f, &rf, &r.to_state, &timestamp, r.precondition,
                     )?,
                 )))
             }
@@ -352,24 +327,13 @@ where
                 &<Engine<S> as SyncUseCase>::list_conflicts(f)?,
             ))),
             Request::WritebackResource(r) => {
-                let rf = parse_ref(&r.r_ref)?;
-                if let Some(expected) = effective_expected(&r.expected_revision, &None) {
-                    write_check::check_revision(f, &rf, expected)?;
-                }
-                // Inherent writeback (source-aware); not part of the
-                // nine traits because it needs the bound SourceContext.
                 Ok(Response::Writeback(wire::writeback_report(
-                    &f.writeback_resource(&r.source_id, &r.r_ref, &r.payload)?,
+                    &f.writeback_resource(&r.source_id, &r.r_ref, &r.payload, r.precondition)?,
                 )))
             }
             Request::UpdateDocument(r) => {
-                let expected =
-                    effective_expected(&r.expected_revision, &r.base_revision).map(str::to_string);
                 let report = f.update_document(
-                    &r.source_id,
-                    &r.locator,
-                    &r.content,
-                    expected.as_deref(),
+                    &r.source_id, &r.locator, &r.content, r.precondition,
                 )?;
                 Ok(Response::DocumentUpdated(wire::document_update_report(&report)))
             }
@@ -708,17 +672,4 @@ mod tests {
         ));
     }
 
-    #[test]
-    fn effective_expected_prefers_uniform_field_and_skips_empty() {
-        let exp = Some("e1".to_string());
-        let base = Some("b1".to_string());
-        assert_eq!(effective_expected(&exp, &base), Some("e1"));
-        let none: Option<String> = None;
-        assert_eq!(effective_expected(&none, &base), Some("b1"));
-        assert_eq!(effective_expected(&exp, &none), Some("e1"));
-        assert_eq!(effective_expected(&none, &none), None);
-        let empty = Some(String::new());
-        assert_eq!(effective_expected(&empty, &base), Some("b1"));
-        assert_eq!(effective_expected(&empty, &none), None);
-    }
 }

@@ -4,6 +4,7 @@ use crate::application::ApplicationError;
 use crate::application::task_para::{AgendaView, ParaOverview};
 use crate::document::StateTransition;
 use crate::domain::ResourceRef;
+use notez_protocol::request::RevisionPrecondition;
 
 pub trait TaskUseCase {
     fn agenda(&self) -> Result<AgendaView, ApplicationError>;
@@ -13,5 +14,6 @@ pub trait TaskUseCase {
         r_ref: &ResourceRef,
         to_state: &str,
         timestamp: &str,
+        precondition: RevisionPrecondition,
     ) -> Result<StateTransition, ApplicationError>;
 }

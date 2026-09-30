@@ -9,8 +9,8 @@ use notez_core::application::{ApplicationError, Engine};
 use notez_core::config::model::{SourceConfig, SourceIdentity};
 use notez_core::storage::SqliteProjection;
 use notez_protocol::request::{
-    ListBySourceRequest, QueryResourcesRequest, ReadResourceRequest, Request,
-    ResourcePayload, UpdateDocumentRequest, UpsertResourceRequest,
+    ListBySourceRequest, NonEmptyRevision, QueryResourcesRequest, ReadResourceRequest, Request,
+    ResourcePayload, RevisionPrecondition, UpdateDocumentRequest, UpsertResourceRequest,
 };
 use std::path::PathBuf;
 
@@ -149,9 +149,10 @@ fn typed_update_response_is_equivalent_for_identical_temp_sources() {
         source_id: "native".into(),
         locator: "alpha.md".into(),
         content: "# Alpha Note\n\nupdated body\n".into(),
-        base_revision: None,
         format: Some("markdown".into()),
-        expected_revision: Some(revision),
+        precondition: RevisionPrecondition::MustMatch {
+            revision: NonEmptyRevision::new(revision).unwrap(),
+        },
     });
     let left_update = dispatch(&mut left, update(left_row.revision.clone())).expect("left update");
     let right_update = dispatch(&mut right, update(right_row.revision.clone())).expect("right update");
@@ -179,14 +180,16 @@ fn typed_error_classification_is_equivalent_for_stale_revision_and_invalid_ref()
     for target in [&mut left, &mut right] {
         dispatch(target, Request::UpsertResource(UpsertResourceRequest {
             resource: payload.clone(),
-            expected_revision: None,
+            precondition: RevisionPrecondition::MustNotExist,
         }))
         .expect("seed resource");
     }
 
     let stale = |expected: &str| Request::UpsertResource(UpsertResourceRequest {
         resource: payload.clone(),
-        expected_revision: Some(expected.into()),
+        precondition: RevisionPrecondition::MustMatch {
+            revision: NonEmptyRevision::new(expected).unwrap(),
+        },
     });
     let left_stale = dispatch(&mut left, stale("stale-revision")).expect_err("left stale error");
     let right_stale = dispatch(&mut right, stale("stale-revision")).expect_err("right stale error");

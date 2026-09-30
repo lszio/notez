@@ -105,6 +105,48 @@ where
     })
 }
 
+/// Enforce the operation's explicit revision contract against the projection.
+/// `MustMatch` requires an existing row with the supplied revision; `MustNotExist`
+/// requires that no row is currently bound to the reference.
+pub fn check_precondition<S>(
+    facade: &Engine<S>,
+    r_ref: &ResourceRef,
+    precondition: &notez_protocol::request::RevisionPrecondition,
+) -> Result<(), ApplicationError>
+where
+    S: ProjectionStore,
+    S: ProjectionReader<Error = crate::storage::StorageError>
+        + ProjectionWrite<Error = crate::storage::StorageError>,
+{
+    let current = facade.store.get(r_ref).map_err(|e| ApplicationError::Storage {
+        kind: crate::application::service::StorageErrorKind::Sqlite,
+        message: e.to_string(),
+    })?;
+    match precondition {
+        notez_protocol::request::RevisionPrecondition::MustNotExist => {
+            if current.is_some() {
+                Err(ApplicationError::RevisionConflict {
+                    expected: "<absent>".into(),
+                    actual: current.map(|r| r.revision).unwrap_or_default(),
+                })
+            } else {
+                Ok(())
+            }
+        }
+        notez_protocol::request::RevisionPrecondition::MustMatch { revision } => {
+            let actual = current.map(|r| r.revision).unwrap_or_default();
+            if actual == revision.as_str() {
+                Ok(())
+            } else {
+                Err(ApplicationError::RevisionConflict {
+                    expected: revision.as_str().to_string(),
+                    actual,
+                })
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -178,7 +220,7 @@ mod tests {
     fn check_revision_matches_persisted() {
         let mut facade = facade_with_builtins();
         let r = make_resource("rev-7");
-        <Engine<_> as ResourceUseCase>::upsert_resource(&mut facade, r.clone()).unwrap();
+        <Engine<_> as ResourceUseCase>::upsert_resource(&mut facade, r.clone(), notez_protocol::request::RevisionPrecondition::MustNotExist).unwrap();
         assert!(check_revision(&facade, &r.r#ref, "rev-7").is_ok());
     }
 
@@ -186,7 +228,7 @@ mod tests {
     fn check_revision_mismatch_raises_conflict() {
         let mut facade = facade_with_builtins();
         let r = make_resource("rev-7");
-        <Engine<_> as ResourceUseCase>::upsert_resource(&mut facade, r.clone()).unwrap();
+        <Engine<_> as ResourceUseCase>::upsert_resource(&mut facade, r.clone(), notez_protocol::request::RevisionPrecondition::MustNotExist).unwrap();
         let err = check_revision(&facade, &r.r#ref, "rev-9").unwrap_err();
         assert!(matches!(
             err,

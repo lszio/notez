@@ -23,7 +23,7 @@ async fn mcp_rules_agenda_and_task_transition() {
         initialize_request(1).to_string(),
         json!({"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "agenda", "arguments": {}}}).to_string(),
         json!({"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {"name": "inspect_rules", "arguments": {"ref": "heading:01J00000000000000000000801"}}}).to_string(),
-        json!({"jsonrpc": "2.0", "id": 4, "method": "tools/call", "params": {"name": "task_transition", "arguments": {"ref": "heading:01J00000000000000000000801", "to": "DONE"}}}).to_string(),
+        json!({"jsonrpc": "2.0", "id": 4, "method": "tools/call", "params": {"name": "task_transition", "arguments": {"ref": "heading:01J00000000000000000000801", "to": "DONE", "precondition": {"kind": "must_match", "revision": "ba4730fc8fbb3e0b668dc17547a3d6ece2ad9fc3ee29346e7585113b095c01b8"}}}}).to_string(),
     ];
 
     let responses = run_session(service, requests).await;

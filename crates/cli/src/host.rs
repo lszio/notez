@@ -26,6 +26,11 @@ use notez_core::application::WatchService;
 use notez_core::config::model::SourceConfig;
 use notez_core::config::discovery::SelectedSource;
 use notez_protocol::request::{Request, SyncPushRequest};
+/// Assemble the host's composition runtime around its process-global watcher.
+/// Keeping this constructor public lets integration tests verify identity.
+pub fn host_runtime(watch: Arc<WatchService>) -> notez_composition::native::Runtime {
+    notez_composition::native::Runtime::with_watch(watch)
+}
 
 use crate::commands::{HostCommands, HostSubcommand};
 
@@ -183,7 +188,7 @@ where
 pub fn run_host(
     sub: HostSubcommand,
     source_root: &Path,
-    _selected: &SelectedSource,
+    selected: &SelectedSource,
     _r_config: &SourceConfig,
 ) {
     match sub.command {
@@ -193,7 +198,7 @@ pub fn run_host(
             folder,
             api_bind,
             mcp_bind,
-        } => cmd_start(space, actor, folder, api_bind, mcp_bind, source_root),
+        } => cmd_start(space, actor, folder, api_bind, mcp_bind, source_root, selected),
         HostCommands::Status => cmd_status(source_root),
         HostCommands::Logs { lines } => cmd_logs(lines),
         HostCommands::Stop => cmd_stop(),
@@ -241,6 +246,7 @@ fn cmd_start(
     api_bind: Option<String>,
     mcp_bind: Option<String>,
     source_root: &Path,
+    selected: &SelectedSource,
 ) {
     // Reject a second start.
     if let Ok(Some(p)) = read_pid() {
@@ -281,7 +287,7 @@ fn cmd_start(
         // Foreground: the parent already wrote the pid; we run the loop
         // here and remove the pid file on exit.
         let _ = append_log(&log, "foreground supervisor starting", pid);
-        run_supervisor_loop(target_space, actor, folder, api_bind, mcp_bind, pid);
+        run_supervisor_loop(target_space, actor, folder, api_bind, mcp_bind, pid, selected.clone());
         clear_pid_file_if_ours();
         return;
     }
@@ -418,10 +424,8 @@ fn cmd_stop() {
 
 /// Foreground supervisor loop: open a watch + run a 1s tick that drains
 /// watch events and dispatches a sync push per batch. When `api_bind`
-/// (or `mcp_bind`) is supplied, a background thread runs a dedicated
-/// tokio runtime hosting `notez_api::build_router` and the
-/// `notez_mcp::http::router` so a headless host can also serve the
-/// protocol API and streamable-HTTP MCP without the Dioxus shell.
+/// (or `mcp_bind`) is supplied, a background thread runs the protocol
+/// servers against the same composition runtime as the supervisor.
 fn run_supervisor_loop(
     source_root: PathBuf,
     actor: Option<String>,
@@ -429,55 +433,42 @@ fn run_supervisor_loop(
     api_bind: Option<String>,
     mcp_bind: Option<String>,
     pid: i32,
+    selected: SelectedSource,
 ) {
-    // Mount the optional HTTP API + MCP servers on a dedicated tokio
-    // runtime in a background thread. The supervisor loop itself stays
-    // synchronous (std::thread::sleep), so this is the only place the
-    // async stack is needed.
+    let watch = WatchService::new();
+    let runtime = host_runtime(watch.clone());
+    let engine = match runtime.open(&selected) {
+        Ok(engine) => engine,
+        Err(e) => { eprintln!("notez host: cannot open runtime: {e}"); std::process::exit(1); }
+    };
     if api_bind.is_some() || mcp_bind.is_some() {
         let api_bind = api_bind.clone();
         let mcp_bind = mcp_bind.clone();
-        let source_root_for_api = source_root.clone();
+        let runtime_for_api = runtime.clone();
+        let selected_for_api = selected.clone();
         let pid_for_api = pid;
         std::thread::Builder::new()
             .name("notez-host-services".into())
             .spawn(move || {
                 if let Err(e) = run_api_mcp_servers(
-                    &source_root_for_api, api_bind.as_deref(), mcp_bind.as_deref(), pid_for_api,
+                    runtime_for_api,
+                    &selected_for_api,
+                    api_bind.as_deref(),
+                    mcp_bind.as_deref(),
+                    pid_for_api,
                 ) {
                     eprintln!("notez host: api/mcp servers exited with error: {e}");
                 }
             })
             .expect("spawn api/mcp thread");
     }
-
-    // Set up a watch service. Reuse the CLI's WatchService so a
-    // process restart picks up without dropping buffered events.
-    let watch = WatchService::new();
-    if let Err(e) = watch.start(&source_root) {
-        eprintln!("notez host: cannot start watch on {}: {e}", source_root.display());
-        std::process::exit(1);
-    }
     let log_path = log_file();
     let _ = append_log(
         &log_path,
-        &format!(
-            "supervisor online: pid={pid}, space={}, folder={:?}",
-            source_root.display(),
-            folder
-        ),
+        &format!("supervisor online: pid={pid}, space={}, folder={folder:?}", source_root.display()),
         pid,
     );
-
-    // Build a runtime-bound SyncEngine per tick by re-opening the
-    // composition engine (cheap, one Engine per space per process).
-    // For now we dispatch through the same engine the CLI built —
-    // that's the only Engine this process owns. If the user wants a
-    // dedicated runtime, the embedded `web` binary already exposes
-    // NOTEZ_DATA_BACKEND=http to talk to one.
     let mut last_log = Instant::now() - Duration::from_secs(60);
-
-    // Map a CLI alias for the actor name (fallback: a hostname tag).
     let actor_id = actor
         .or_else(|| std::env::var("NOTEZ_DEFAULT_ACTOR").ok())
         .unwrap_or_else(|| {
@@ -486,57 +477,31 @@ fn run_supervisor_loop(
                 .unwrap_or_else(|_| "host".to_string())
         });
     install_sigterm();
-
-
-    // Trap SIGTERM so the supervisor returns from `run_supervisor_loop`
-    // and the main thread can clean up the pid file.
-    install_sigterm();
-
     let tick = Duration::from_secs(1);
     loop {
         if shutdown_requested() {
-            let _ = append_log(
-                &log_path,
-                "supervisor received SIGTERM, exiting",
-                pid,
-            );
+            let _ = append_log(&log_path, "supervisor received SIGTERM, exiting", pid);
             break;
         }
-
-        // Drain watch events; on each non-empty batch, dispatch sync push.
         if let Some(folder) = folder.as_ref() {
             let res = drain_watch(&watch, &source_root, |n| {
-                push_via_engine(&source_root, folder, &actor_id, n)
+                push_via_engine(&engine, folder, &actor_id, n)
             });
             if let Err(e) = res {
                 eprintln!("notez host: sync push failed: {e}");
-                let _ = append_log(
-                    &log_path,
-                    &format!("sync push error: {e}"),
-                    pid,
-                );
+                let _ = append_log(&log_path, &format!("sync push error: {e}"), pid);
             }
         }
-
-        // Heartbeat every 60s so users running `tail -f host.log` see
-        // something alive.
         if last_log.elapsed() > Duration::from_secs(60) {
             let _ = append_log(
                 &log_path,
-                &format!(
-                    "heartbeat: pid={} watch_active={} folder={}",
-                    watch.active_count(),
-                    pid,
-                    folder.as_ref().map(|p| p.display().to_string()).unwrap_or_default(),
-                ),
+                &format!("heartbeat: pid={} watch_active={} folder={}", watch.active_count(), pid, folder.as_ref().map(|p| p.display().to_string()).unwrap_or_default()),
                 pid,
             );
             last_log = Instant::now();
         }
-
         std::thread::sleep(tick);
     }
-
     let _ = watch.stop(&source_root);
     let _ = append_log(&log_path, "supervisor exiting, clearing pid file", pid);
     clear_pid_file_if_ours();
@@ -546,143 +511,75 @@ fn run_supervisor_loop(
 /// streamable-HTTP endpoint (`/mcp`) on one tokio runtime. Each bind
 /// address gets its own listener; if both point at the same port the
 /// routers merge onto a single listener instead.
+/// Mount the HTTP protocol API and/or MCP endpoint using one shared runtime.
 fn run_api_mcp_servers(
-    _source_root: &Path,
+    runtime: notez_composition::native::Runtime,
+    selected: &SelectedSource,
     api_bind: Option<&str>,
     mcp_bind: Option<&str>,
     pid: i32,
 ) -> Result<(), String> {
     use notez_api::ServerConfig;
-
-    let runtime = tokio::runtime::Builder::new_multi_thread()
+    let tokio_runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
         .map_err(|e| format!("tokio runtime: {e}"))?;
-
-    runtime.block_on(async move {
-        // The API router needs the auth config resolved from env; reuse
-        // ServerConfig::from_env so NOTEZ_API_TOKEN / OIDC work the same
-        // way as `notez serve`.
-        let server_config = ServerConfig::from_env(api_bind.map(|s| s.to_string()), None)
+    let selected = selected.clone();
+    tokio_runtime.block_on(async move {
+        let server_config = ServerConfig::from_env(api_bind.map(str::to_string), None)
             .map_err(|e| format!("server config: {e}"))?;
         let api_state = notez_api::ApiState::with_runtime(
             server_config.default_source.clone(),
             server_config.auth.mode_label(),
-            notez_composition::native::Runtime::new(),
-        )
-        .map_err(|e| format!("api state: {e}"))?;
+            runtime.clone(),
+        ).map_err(|e| format!("api state: {e}"))?;
         let api_router = notez_api::build_router(server_config.auth.clone(), api_state);
-
-        // MCP engine: open a dedicated engine on the default source.
-        let mcp_router = match notez_api::transport::resolve_selection(
-            server_config.default_source.as_deref(),
-        ) {
-            Ok(selected) => {
-                match notez_composition::native::open_space(
-                    notez_core::config::discovery::SourceSelector::Path(selected.root.as_path()),
-                    None,
-                ) {
-                    Ok(handle) => {
-                        let engine = Arc::new(std::sync::Mutex::new(handle.engine));
-                        let watch = WatchService::new();
-                        let router = notez_mcp::http::router(engine, watch.clone());
-                        let auth_layer =
-                            axum::middleware::from_fn_with_state(server_config.auth.clone(), notez_api::auth_middleware);
-                        Some(router.route_layer(auth_layer))
-                    }
-                    Err(e) => {
-                        eprintln!("notez host: skipping /mcp — open engine failed: {e}");
-                        None
-                    }
-                }
-            }
-            Err(err) => {
-                eprintln!("notez host: skipping /mcp — no default source resolved: {err}");
-                None
-            }
+        let mcp_router = if mcp_bind.is_some() {
+            Some(notez_mcp::http::router(runtime.open(&selected).map_err(|e| format!("open runtime: {e}"))?, runtime.watch()))
+        } else {
+            None
         };
-
-        // Merge onto one listener when the addresses agree; otherwise
-        // two listeners, one per surface.
         let api_addr: std::net::SocketAddr = server_config.bind;
-        let mcp_addr: Option<std::net::SocketAddr> = mcp_bind
-            .map(|s| s.parse::<std::net::SocketAddr>())
-            .transpose()
+        let mcp_addr = mcp_bind.map(str::parse::<std::net::SocketAddr>).transpose()
             .map_err(|e| format!("invalid mcp bind: {e}"))?;
-
         match mcp_addr {
-            Some(mcp_addr) if mcp_addr == api_addr => {
+            Some(addr) if addr == api_addr => {
                 let router = api_router.merge(mcp_router.unwrap_or_default());
-                let listener = tokio::net::TcpListener::bind(api_addr)
-                    .await
-                    .map_err(|e| format!("cannot bind {api_addr}: {e}"))?;
-                let _ = append_log(
-                    &log_file(),
-                    &format!("api+mcp serving on {api_addr}"),
-                    pid,
-                );
-                axum::serve(listener, router)
-                    .await
-                    .map_err(|e| format!("server error: {e}"))
+                let listener = tokio::net::TcpListener::bind(api_addr).await.map_err(|e| format!("cannot bind {api_addr}: {e}"))?;
+                let _ = append_log(&log_file(), &format!("api+mcp serving on {api_addr}"), pid);
+                axum::serve(listener, router).await.map_err(|e| format!("server error: {e}"))
             }
-            Some(mcp_addr) => {
-                let api_listener = tokio::net::TcpListener::bind(api_addr)
-                    .await
-                    .map_err(|e| format!("cannot bind {api_addr}: {e}"))?;
-                let mcp_listener = tokio::net::TcpListener::bind(mcp_addr)
-                    .await
-                    .map_err(|e| format!("cannot bind {mcp_addr}: {e}"))?;
-                let _ = append_log(
-                    &log_file(),
-                    &format!("api on {api_addr}, mcp on {mcp_addr}"),
-                    pid,
-                );
+            Some(addr) => {
+                let api_listener = tokio::net::TcpListener::bind(api_addr).await.map_err(|e| format!("cannot bind {api_addr}: {e}"))?;
+                let mcp_listener = tokio::net::TcpListener::bind(addr).await.map_err(|e| format!("cannot bind {addr}: {e}"))?;
+                let _ = append_log(&log_file(), &format!("api on {api_addr}, mcp on {addr}"), pid);
                 tokio::try_join!(
                     async { axum::serve(api_listener, api_router).await.map_err(|e| anyhow::anyhow!("api server error: {e}")) },
                     async { axum::serve(mcp_listener, mcp_router.unwrap_or_default()).await.map_err(|e| anyhow::anyhow!("mcp server error: {e}")) }
-                )
-                .map(|_| ())   // discard the ((), ()) tuple
-                .map_err(|e| e.to_string())
+                ).map(|_| ()).map_err(|e| e.to_string())
             }
             None => {
-                let listener = tokio::net::TcpListener::bind(api_addr)
-                    .await
-                    .map_err(|e| format!("cannot bind {api_addr}: {e}"))?;
+                let listener = tokio::net::TcpListener::bind(api_addr).await.map_err(|e| format!("cannot bind {api_addr}: {e}"))?;
                 let _ = append_log(&log_file(), &format!("api serving on {api_addr}"), pid);
-                axum::serve(listener, api_router)
-                    .await
-                    .map_err(|e| format!("server error: {e}"))
+                axum::serve(listener, api_router).await.map_err(|e| format!("server error: {e}"))
             }
         }
     })
 }
 fn push_via_engine(
-    source_root: &Path,
+    engine: &Arc<std::sync::Mutex<notez_core::application::Engine<notez_core::storage::SqliteProjection>>>,
     folder: &Path,
     actor_id: &str,
     batch_size: usize,
 ) -> Result<(), String> {
-    // reuses) the in-process cache; cheap because the underlying
-    // SqliteProjection is cached by canonical source root.
-    let handle = notez_composition::native::open_space(
-        notez_core::config::discovery::SourceSelector::Path(source_root),
-        None,
-    )
-    .map_err(|e| format!("open engine: {e}"))?;
-    let engine = std::sync::Arc::new(std::sync::Mutex::new(handle.engine));
     let mut guard = engine.lock().map_err(|e| format!("engine lock: {e}"))?;
     let mut dispatcher = ApplicationDispatcher::new(&mut *guard);
-    let report = dispatcher
-        .dispatch(Request::SyncPush(SyncPushRequest {
-            actor_id: actor_id.to_string(),
-            folder: folder.display().to_string(),
-        }))
-        .map_err(|e| format!("dispatch sync push: {e}"))?;
+    let report = dispatcher.dispatch(Request::SyncPush(SyncPushRequest {
+        actor_id: actor_id.to_string(),
+        folder: folder.display().to_string(),
+    })).map_err(|e| format!("dispatch sync push: {e}"))?;
     if let notez_protocol::Response::Pushed(p) = report {
-        eprintln!(
-            "notez host: pushed {} files (batch={batch_size})",
-            p.pushed_files
-        );
+        eprintln!("notez host: pushed {} files (batch={batch_size})", p.pushed_files);
         Ok(())
     } else {
         Err(format!("unexpected sync push response: {report:?}"))

@@ -49,7 +49,7 @@ impl crate::application::ports::ExtensionRuntime for NativeJanetExecutor {
         let snapshot = JanetQuerySnapshot { search: input.clone(), ..Default::default() };
         let request = ExecuteJanetRequest {
             script: script.to_string(), source_id: None, document_ref: None,
-            actor_id: "extension".into(), expected_revision: None, trace_id: None,
+            actor_id: "extension".into(), trace_id: None,
             timeout_ms: DEFAULT_TIMEOUT_MS, result_limit: DEFAULT_RESULT_LIMIT,
         };
         let mut executor = *self;
@@ -142,4 +142,4 @@ const FORBIDDEN_EXACT: &[&str] = &["os","io","net","ffi","dyn","setdyn","dynamic
 const FORBIDDEN_PREFIXES: &[&str] = &["os/","io/","file/","net/","ffi","ev/","debug/","module/","thread/","bundle/"];
 
 #[cfg(test)]
-mod tests { use super::*; #[test] fn arithmetic_works(){assert_eq!(eval_janet_checked("(+ 1 2)").unwrap(),serde_json::json!(3));} #[test] fn dangerous_api_rejected(){assert_eq!(eval_janet_checked("(os/exit)").unwrap_err().kind(),"forbidden-api");} #[test] fn executor_reads_snapshot(){let snapshot=JanetQuerySnapshot{sources:serde_json::json!([{"id":"native"}]),..Default::default()};let request=ExecuteJanetRequest{script:"(notez/sources)".into(),source_id:None,document_ref:None,actor_id:"test".into(),expected_revision:None,trace_id:None,timeout_ms:DEFAULT_TIMEOUT_MS,result_limit:DEFAULT_RESULT_LIMIT};let mut executor=NativeJanetExecutor;assert_eq!(executor.execute(&request,&snapshot).unwrap(),serde_json::json!([{"id":"native"}]));} }
+mod tests { use super::*; #[test] fn arithmetic_works(){assert_eq!(eval_janet_checked("(+ 1 2)").unwrap(),serde_json::json!(3));} #[test] fn dangerous_api_rejected(){assert_eq!(eval_janet_checked("(os/exit)").unwrap_err().kind(),"forbidden-api");} #[test] fn executor_reads_snapshot(){let snapshot=JanetQuerySnapshot{sources:serde_json::json!([{"id":"native"}]),..Default::default()};let request=ExecuteJanetRequest{script:"(notez/sources)".into(),source_id:None,document_ref:None,actor_id:"test".into(),trace_id:None,timeout_ms:DEFAULT_TIMEOUT_MS,result_limit:DEFAULT_RESULT_LIMIT};let mut executor=NativeJanetExecutor;assert_eq!(executor.execute(&request,&snapshot).unwrap(),serde_json::json!([{"id":"native"}]));} }

@@ -60,6 +60,22 @@ fn cli_rules_task_transition_and_agenda() {
         .arg(space)
         .assert()
         .success();
+    let task_revision = notez_cmd()
+        .arg("--space")
+        .arg(space)
+        .arg("--json")
+        .arg("query")
+        .arg("--exact-ref")
+        .arg("heading:01J00000000000000000000701")
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .iter()
+        .copied()
+        .collect::<Vec<_>>();
+    let task_revision: serde_json::Value = serde_json::from_slice(&task_revision).unwrap();
+    let task_revision = task_revision[0]["revision"].as_str().unwrap();
 
     // 5. Task transition on a native source succeeds via the M4
     // surgical span writer: the heading line is patched in place and
@@ -73,6 +89,8 @@ fn cli_rules_task_transition_and_agenda() {
         .arg("heading:01J00000000000000000000701")
         .arg("--to")
         .arg("DONE")
+        .arg("--expected-revision")
+        .arg(task_revision)
         .assert()
         .success();
 }

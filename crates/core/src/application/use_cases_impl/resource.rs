@@ -3,6 +3,7 @@
 //! Method bodies were previously inlined in `service.rs`; this file
 //! is part of the 0.5.x-A1+A3 use-case impl split.
 
+use crate::application::projector::Projector;
 use crate::application::service::{
     ApplicationError, Engine, ResolveResult, StorageErrorKind,
 };
@@ -19,67 +20,39 @@ where
     S: ProjectionReader<Error = crate::storage::StorageError>
         + ProjectionWrite<Error = crate::storage::StorageError>,
 {
-    fn upsert_resource(&mut self, resource: Resource) -> Result<(), ApplicationError> {
+    fn upsert_resource(&mut self, resource: Resource, precondition: notez_protocol::request::RevisionPrecondition) -> Result<(), ApplicationError> {
         write_check::check_capability(self, "resource")?;
+        write_check::check_precondition(self, &resource.r#ref, &precondition)?;
         write_check::check_address_uniqueness(
             self,
-            &crate::domain::ResourceAddress::Ref {
-                r#ref: resource.r#ref,
-            },
+            &crate::domain::ResourceAddress::Ref { r#ref: resource.r#ref },
             &resource.r#ref,
         )?;
-        // M3 event spine: journal before mutating, audit after.
         let journaling = crate::application::projector::Journaling::from_parts(
-            self.journal.as_ref(),
-            self.audit.as_ref(),
-            self.actor_principal(),
-            self.now_unix_millis(),
+            self.journal.as_ref(), self.audit.as_ref(), self.actor_principal(), self.now_unix_millis(),
         );
-        let mut projector =
-            crate::application::projector::Projector::new(&mut self.store, &journaling);
-        projector
-            .upsert_resource(&resource)
-            .map_err(|e| ApplicationError::Storage {
-                kind: StorageErrorKind::Sqlite,
-                message: e.to_string(),
-            })?;
+        let mut projector = crate::application::projector::Projector::new(&mut self.store, &journaling);
+        projector.upsert_resource(&resource, precondition).map_err(|e| ApplicationError::Storage {
+            kind: StorageErrorKind::Sqlite, message: e.to_string(),
+        })?;
         Ok(())
     }
-
-    fn delete_resource(&mut self, r_ref: &ResourceRef) -> Result<(), ApplicationError> {
-        write_check::check_address_uniqueness(
-            self,
-            &crate::domain::ResourceAddress::Ref { r#ref: *r_ref },
-            &r_ref,
-        )?;
+    fn delete_resource(&mut self, r_ref: &ResourceRef, precondition: notez_protocol::request::RevisionPrecondition) -> Result<(), ApplicationError> {
         write_check::check_capability(self, "resource")?;
-
+        write_check::check_precondition(self, r_ref, &precondition)?;
         let journaling = crate::application::projector::Journaling::from_parts(
-            self.journal.as_ref(),
-            self.audit.as_ref(),
-            self.actor_principal(),
-            self.now_unix_millis(),
+            self.journal.as_ref(), self.audit.as_ref(), self.actor_principal(), self.now_unix_millis(),
         );
-        let mut projector = crate::application::projector::Projector::new(
-            &mut self.store,
-            &journaling,
-        );
-        projector
-            .delete_resource(r_ref)
-            .map_err(|e| ApplicationError::Storage {
-                kind: StorageErrorKind::Sqlite,
-                message: e.to_string(),
-            })?;
+        let mut projector = Projector::new(&mut self.store, &journaling);
+        projector.delete_resource(r_ref, precondition).map_err(|e| ApplicationError::Storage {
+            kind: StorageErrorKind::Sqlite, message: e.to_string(),
+        })?;
         Ok(())
     }
-
     fn query(&self, selector: &Selector) -> Result<QueryPage, ApplicationError> {
-        self.store
-            .query(selector)
-            .map_err(|e| ApplicationError::Storage {
-                kind: StorageErrorKind::Sqlite,
-                message: e.to_string(),
-            })
+        self.store.query(selector).map_err(|e| ApplicationError::Storage {
+            kind: StorageErrorKind::Sqlite, message: e.to_string(),
+        })
     }
 
     fn read(&self, r_ref: &ResourceRef) -> Result<Option<Resource>, ApplicationError> {

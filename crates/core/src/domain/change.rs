@@ -1,26 +1,15 @@
 //! Change events — the spine of the event-sourced write pipeline.
 //!
-//! A [`Change`] is the single durable record of an attempted write.
-//! It captures the actor, the affected resources, the operation kind,
-//! an optional expected revision, and the payload. Every write goes
-//! through the same pipeline:
-//!
-//! 1. the caller constructs a [`Change`];
-//! 2. the journal appends it (fail-fast on journal failure);
-//! 3. the projector applies the corresponding mutation to the
-//!    projection;
-//! 4. an audit record is appended.
-//!
-//! `expected_revision` is mandatory: writes that omit it are rejected
-//! with `ApplicationError::RevisionConflict` rather than silently
-//! overwriting concurrent updates.
+//! A [`Change`] is the single durable record of an attempted write. It
+//! captures the actor, operation, targets, explicit revision precondition,
+//! and payload so journals preserve the concurrency contract.
 
 use crate::domain::resource::ResourceRef;
+use notez_protocol::request::RevisionPrecondition;
 use serde::{Deserialize, Serialize};
 use ulid::Ulid;
 
-/// Who triggered the change. The model is intentionally coarse —
-/// richer identity is an extension field.
+/// Who triggered the change. The model is intentionally coarse.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Actor {
     pub principal: String,
@@ -30,18 +19,28 @@ pub struct Actor {
     pub source: Option<String>,
 }
 
+/// Revision contract recorded for a durable change.
+///
+/// Resource mutations carry the protocol's strict precondition. Projection
+/// maintenance (scan, relation replacement, and other bulk observations)
+/// is explicitly marked rather than pretending to create a resource.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ChangePrecondition {
+    Revision(RevisionPrecondition),
+    UnconditionalObservation,
+}
+
+impl From<RevisionPrecondition> for ChangePrecondition {
+    fn from(precondition: RevisionPrecondition) -> Self { Self::Revision(precondition) }
+}
+
 impl Actor {
     pub fn new(principal: impl Into<String>) -> Self {
-        Self {
-            principal: principal.into(),
-            space: None,
-            source: None,
-        }
+        Self { principal: principal.into(), space: None, source: None }
     }
 }
 
-/// Operation kinds. Each maps to exactly one [`Change`] payload
-/// shape below.
+/// Operation kinds. Each maps to exactly one Change payload shape.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case")]
 pub enum ChangeOp {
@@ -52,13 +51,7 @@ pub enum ChangeOp {
     ReplaceResolvedRelations,
     WriteLinkDiagnostics,
     ReplaceConflicts,
-    TransitionTask {
-        from_state: String,
-        to_state: String,
-        timestamp: String,
-        closed_timestamp: Option<String>,
-        logbook_entry: String,
-    },
+    TransitionTask { from_state: String, to_state: String, timestamp: String, closed_timestamp: Option<String>, logbook_entry: String },
     Writeback,
     Scan,
     Rebuilt,
@@ -73,19 +66,11 @@ pub struct Change {
     pub source_id: String,
     pub op: ChangeOp,
     pub targets: Vec<ResourceRef>,
-    /// Expected revision of the head resource, if the operation
-    /// affects one. `None` only for operations that explicitly do
-    /// not target a specific head (e.g. bulk replace).
-    #[serde(default)]
-    pub expected_revision: Option<String>,
-    /// Operation-specific payload. Always serialized so journals can
-    /// reconstruct projection state from the log alone.
+    pub precondition: ChangePrecondition,
     #[serde(default)]
     pub payload: serde_json::Value,
 }
 
 impl Change {
-    pub fn now_id() -> Ulid {
-        Ulid::new()
-    }
+    pub fn now_id() -> Ulid { Ulid::new() }
 }

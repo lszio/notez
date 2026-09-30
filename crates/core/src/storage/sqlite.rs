@@ -137,6 +137,15 @@ impl SqliteProjection {
         self.migrate_to_v3()?;
         self.migrate_to_v4()?;
         self.migrate_to_v5()?;
+        self.migrate_to_v6()?;
+        Ok(())
+    }
+    fn migrate_to_v6(&mut self) -> Result<(), StorageError> {
+        if self.user_version()? >= 6 {
+            return Ok(());
+        }
+        self.add_column_tolerating_duplicate("ALTER TABLE audit_records ADD COLUMN precondition_json TEXT")?;
+        self.conn.execute_batch("PRAGMA user_version = 6")?;
         Ok(())
     }
 
@@ -175,16 +184,8 @@ impl SqliteProjection {
         if self.user_version()? >= 2 {
             return Ok(());
         }
-
-        // Add new columns idempotently. SQLite has no `IF NOT EXISTS` for
-        // ALTER TABLE ADD COLUMN, so only the "duplicate column" error is
-        // tolerated; every other failure aborts the migration before the
-        // version counter advances. Opening a freshly-built DB (v0→v2 in
-        // one shot) is covered because init_schema already created those
-        // columns and user_version starts at 0.
         self.add_column_tolerating_duplicate("ALTER TABLE resources ADD COLUMN object_id TEXT")?;
         self.add_column_tolerating_duplicate("ALTER TABLE resources ADD COLUMN content_hash TEXT")?;
-
         for ddl in [
             "ALTER TABLE relations ADD COLUMN relation_type TEXT NOT NULL DEFAULT 'references'",
             "ALTER TABLE relations ADD COLUMN direction TEXT NOT NULL DEFAULT 'unknown'",
@@ -199,16 +200,8 @@ impl SqliteProjection {
         ] {
             self.add_column_tolerating_duplicate(ddl)?;
         }
-
-        self.conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_resources_object ON resources(object_id)",
-            [],
-        )?;
-        self.conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_relations_target ON relations(target_ref)",
-            [],
-        )?;
-
+        self.conn.execute("CREATE INDEX IF NOT EXISTS idx_resources_object ON resources(object_id)", [])?;
+        self.conn.execute("CREATE INDEX IF NOT EXISTS idx_relations_target ON relations(target_ref)", [])?;
         self.conn.execute_batch("PRAGMA user_version = 2")?;
         Ok(())
     }
@@ -260,6 +253,7 @@ impl SqliteProjection {
                 principal TEXT NOT NULL,
                 action TEXT NOT NULL,
                 target_ref TEXT NOT NULL,
+                precondition_json TEXT,
                 outcome_json TEXT NOT NULL,
                 recorded_at_unix_millis INTEGER NOT NULL
             );

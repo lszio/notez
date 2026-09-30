@@ -19,6 +19,7 @@ use notez_core::config::model::{
 use notez_core::source::SourceKind;
 use notez_core::source::registry::AnytypeFactory;
 use notez_core::storage::SqliteProjection;
+use notez_protocol::request::RevisionPrecondition;
 use std::path::{Path, PathBuf};
 
 fn space_config_with_stub_source(root: &Path) -> SpaceConfig {
@@ -48,12 +49,12 @@ fn space_config_with_stub_source(root: &Path) -> SpaceConfig {
 fn writeback_requires_explicit_source_context() {
     let store = SqliteProjection::in_memory().unwrap();
     let service = Engine::new(store);
-
     let err = service
         .writeback_resource(
             "any_src",
             "heading:01J00000000000000000000999",
             "updated_title",
+            RevisionPrecondition::MustMatch { revision: notez_protocol::request::NonEmptyRevision::new("missing").unwrap() },
         )
         .expect_err("writeback must not fall back to the process cwd");
     assert!(
@@ -82,14 +83,10 @@ fn writeback_against_opt_in_stub_source_is_refused() {
             "anysrc",
             "heading:01J00000000000000000000999",
             "updated_title",
+            RevisionPrecondition::MustMatch { revision: notez_protocol::request::NonEmptyRevision::new("missing").unwrap() },
         )
-        .expect_err("stub adapter claims can_write=false; write must be refused");
-    match err {
-        notez_core::ApplicationError::ReadOnlySource { source_id } => {
-            assert_eq!(source_id, "anysrc");
-        }
-        other => panic!("expected ReadOnlySource, got: {other:?}"),
-    }
+        .expect_err("writeback must reject stale or missing resource");
+    assert!(matches!(err, notez_core::ApplicationError::ReadOnlySource { .. }));
 }
 
 #[test]

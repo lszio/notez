@@ -248,6 +248,7 @@ fn smoke_resource_upsert_then_delete_via_json_file() {
         .arg("upsert")
         .arg("--from")
         .arg(&payload_path)
+        .arg("--create")
         .assert()
         .success()
         .stdout(str::contains("heading:01J000000000000000000000D1"));
@@ -272,10 +273,13 @@ fn smoke_resource_upsert_then_delete_via_json_file() {
         .arg("resource")
         .arg("delete")
         .arg("heading:01J000000000000000000000D1")
+        .arg("--expected-revision")
+        .arg("rev1")
         .assert()
         .success();
 
     // Deleting a missing ref is an idempotent no-op (no failure expected).
+    // A missing ref cannot satisfy a non-empty revision precondition.
     notez()
         .arg("--space")
         .arg(tmp.path())
@@ -283,8 +287,11 @@ fn smoke_resource_upsert_then_delete_via_json_file() {
         .arg("resource")
         .arg("delete")
         .arg("heading:01J000000000000000000000D1")
+        .arg("--expected-revision")
+        .arg("rev1")
         .assert()
-        .success();
+        .code(9)
+        .stderr(str::contains("revision conflict"));
 }
 
 #[test]
@@ -959,6 +966,8 @@ fn smoke_source_writeback_rejects_unregistered_source() {
         .arg("heading:01J000000000000000000000A2")
         .arg("--payload")
         .arg("Updated title")
+        .arg("--expected-revision")
+        .arg("stale")
         .assert()
         .failure()
         .stderr(str::contains("no sources registered"));

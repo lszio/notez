@@ -23,8 +23,8 @@
 //! row stands and replay semantics apply
 //! ([`ProjectorError::Store`]).
 
-use crate::domain::audit::{AuditOutcome, AuditRecord};
-use crate::domain::change::{Actor, Change, ChangeOp};
+use crate::domain::audit::AuditRecord;
+use crate::domain::change::{Actor, Change, ChangeOp, ChangePrecondition};
 use crate::domain::journal::EventJournal;
 use crate::domain::query::ProjectionWrite;
 use crate::domain::resource::{ResourceRef, SegmentRecord};
@@ -32,6 +32,7 @@ use crate::domain::{
     ConflictRecord, LinkOccurrence, ResolvedRelation, ResolutionStatus, Resource,
 };
 
+use notez_protocol::request::RevisionPrecondition;
 /// Error from a projected write.
 #[derive(Debug)]
 pub enum ProjectorError<E> {
@@ -80,13 +81,12 @@ impl<'j> Journaling<'j> {
             now_unix_millis,
         }
     }
-
     fn record(
         &self,
         op: ChangeOp,
         source_id: String,
         targets: Vec<ResourceRef>,
-        expected_revision: Option<String>,
+        precondition: ChangePrecondition,
         payload: serde_json::Value,
     ) -> Result<(Change, u64), JournalBuildError> {
         let change = Change {
@@ -96,7 +96,7 @@ impl<'j> Journaling<'j> {
             source_id,
             op,
             targets,
-            expected_revision,
+            precondition,
             payload,
         };
         let seq = self.journal.append(&change)?;
@@ -112,14 +112,14 @@ impl<'j> Journaling<'j> {
         &self,
         source_id: &str,
         target: ResourceRef,
-        expected_revision: Option<String>,
+        precondition: ChangePrecondition,
         payload: serde_json::Value,
     ) -> Result<u64, JournalBuildError> {
         let (change, seq) = self.record(
             ChangeOp::Writeback,
             source_id.to_string(),
             vec![target],
-            expected_revision,
+            precondition,
             payload,
         )?;
         self.audit_success(&change, change.targets.first().cloned().unwrap_or(
@@ -129,14 +129,7 @@ impl<'j> Journaling<'j> {
     }
 
     fn audit_success(&self, change: &Change, target: ResourceRef) {
-        let record = AuditRecord {
-            change_id: change.id,
-            principal: change.actor.principal.clone(),
-            action: format!("{:?}", change.op),
-            target,
-            outcome: AuditOutcome::Success,
-            recorded_at_unix_millis: change.at_unix_millis,
-        };
+        let record = AuditRecord::success(change, target);
         let _ = self.audit.append(record);
     }
 }
@@ -231,7 +224,7 @@ impl<'a, 'j, S: ProjectionWrite> Projector<'a, 'j, S> {
             payload["detail"] = detail;
         }
         let (change, seq) =
-            self.j.record(op, source_id.to_string(), targets.clone(), None, payload)?;
+            self.j.record(op, source_id.to_string(), targets.clone(), ChangePrecondition::UnconditionalObservation, payload)?;
         self.store
             .replace_source(source_id, resources, relations, occurrences)
             .map_err(ProjectorError::Store)?;
@@ -247,12 +240,13 @@ impl<'a, 'j, S: ProjectionWrite> Projector<'a, 'j, S> {
     pub fn upsert_resource(
         &mut self,
         resource: &Resource,
+        precondition: RevisionPrecondition,
     ) -> Result<WriteOutcome, ProjectorError<S::Error>> {
         let (change, seq) = self.j.record(
             ChangeOp::UpsertResource,
             resource.source_id.clone(),
             vec![resource.r#ref.clone()],
-            Some(resource.revision.clone()),
+            ChangePrecondition::from(precondition),
             serde_json::to_value(resource).unwrap_or(serde_json::Value::Null),
         )?;
         self.store
@@ -265,150 +259,45 @@ impl<'a, 'j, S: ProjectionWrite> Projector<'a, 'j, S> {
         })
     }
 
-    pub fn delete_resource(
-        &mut self,
-        r_ref: &ResourceRef,
-    ) -> Result<WriteOutcome, ProjectorError<S::Error>> {
-        let (change, seq) = self.j.record(
-            ChangeOp::DeleteResource,
-            String::new(),
-            vec![r_ref.clone()],
-            None,
-            serde_json::Value::Null,
-        )?;
-        self.store
-            .delete_resource(r_ref)
-            .map_err(ProjectorError::Store)?;
+    pub fn delete_resource(&mut self, r_ref: &ResourceRef, precondition: RevisionPrecondition) -> Result<WriteOutcome, ProjectorError<S::Error>> {
+        let (change, seq) = self.j.record(ChangeOp::DeleteResource, String::new(), vec![r_ref.clone()], ChangePrecondition::from(precondition), serde_json::Value::Null)?;
+        self.store.delete_resource(r_ref).map_err(ProjectorError::Store)?;
         self.j.audit_success(&change, r_ref.clone());
-        Ok(WriteOutcome {
-            sequence: Some(seq),
-            audited: true,
-        })
+        Ok(WriteOutcome { sequence: Some(seq), audited: true })
     }
 
-    pub fn insert_segments(
-        &mut self,
-        segments: &[SegmentRecord],
-    ) -> Result<WriteOutcome, ProjectorError<S::Error>> {
-        let (_change, seq) = self.j.record(
-            ChangeOp::InsertSegments,
-            String::new(),
-            vec![],
-            None,
-            serde_json::json!(segments.len()),
-        )?;
-        self.store
-            .insert_segments(segments)
-            .map_err(ProjectorError::Store)?;
-        Ok(WriteOutcome {
-            sequence: Some(seq),
-            audited: false,
-        })
+    pub fn insert_segments(&mut self, segments: &[SegmentRecord]) -> Result<WriteOutcome, ProjectorError<S::Error>> {
+        let (_change, seq) = self.j.record(ChangeOp::InsertSegments, String::new(), vec![], ChangePrecondition::UnconditionalObservation, serde_json::json!(segments.len()))?;
+        self.store.insert_segments(segments).map_err(ProjectorError::Store)?;
+        Ok(WriteOutcome { sequence: Some(seq), audited: false })
     }
 
-    pub fn replace_link_occurrences(
-        &mut self,
-        source_id: &str,
-        occurrences: Vec<LinkOccurrence>,
-    ) -> Result<WriteOutcome, ProjectorError<S::Error>> {
-        let (_change, seq) = self.j.record(
-            ChangeOp::ReplaceLinkOccurrences,
-            source_id.to_string(),
-            vec![],
-            None,
-            serde_json::json!(occurrences.len()),
-        )?;
-        self.store
-            .replace_link_occurrences(source_id, occurrences)
-            .map_err(ProjectorError::Store)?;
-        Ok(WriteOutcome {
-            sequence: Some(seq),
-            audited: false,
-        })
+    pub fn replace_link_occurrences(&mut self, source_id: &str, occurrences: Vec<LinkOccurrence>) -> Result<WriteOutcome, ProjectorError<S::Error>> {
+        let (_change, seq) = self.j.record(ChangeOp::ReplaceLinkOccurrences, source_id.to_string(), vec![], ChangePrecondition::UnconditionalObservation, serde_json::json!(occurrences.len()))?;
+        self.store.replace_link_occurrences(source_id, occurrences).map_err(ProjectorError::Store)?;
+        Ok(WriteOutcome { sequence: Some(seq), audited: false })
     }
 
-    pub fn replace_resolved_relations(
-        &mut self,
-        source_id: &str,
-        relations: Vec<ResolvedRelation>,
-    ) -> Result<WriteOutcome, ProjectorError<S::Error>> {
-        let (_change, seq) = self.j.record(
-            ChangeOp::ReplaceResolvedRelations,
-            source_id.to_string(),
-            vec![],
-            None,
-            serde_json::json!(relations.len()),
-        )?;
-        self.store
-            .replace_resolved_relations(source_id, relations)
-            .map_err(ProjectorError::Store)?;
-        Ok(WriteOutcome {
-            sequence: Some(seq),
-            audited: false,
-        })
+    pub fn replace_resolved_relations(&mut self, source_id: &str, relations: Vec<ResolvedRelation>) -> Result<WriteOutcome, ProjectorError<S::Error>> {
+        let (_change, seq) = self.j.record(ChangeOp::ReplaceResolvedRelations, source_id.to_string(), vec![], ChangePrecondition::UnconditionalObservation, serde_json::json!(relations.len()))?;
+        self.store.replace_resolved_relations(source_id, relations).map_err(ProjectorError::Store)?;
+        Ok(WriteOutcome { sequence: Some(seq), audited: false })
     }
 
-    pub fn write_link_diagnostics(
-        &mut self,
-        source_id: &str,
-        diagnostics: &[(LinkOccurrence, ResolutionStatus, Vec<ResourceRef>)],
-    ) -> Result<WriteOutcome, ProjectorError<S::Error>> {
-        let (_change, seq) = self.j.record(
-            ChangeOp::WriteLinkDiagnostics,
-            source_id.to_string(),
-            vec![],
-            None,
-            serde_json::json!(diagnostics.len()),
-        )?;
-        self.store
-            .write_link_diagnostics(source_id, diagnostics)
-            .map_err(ProjectorError::Store)?;
-        Ok(WriteOutcome {
-            sequence: Some(seq),
-            audited: false,
-        })
+    pub fn write_link_diagnostics(&mut self, source_id: &str, diagnostics: &[(LinkOccurrence, ResolutionStatus, Vec<ResourceRef>)]) -> Result<WriteOutcome, ProjectorError<S::Error>> {
+        let (_change, seq) = self.j.record(ChangeOp::WriteLinkDiagnostics, source_id.to_string(), vec![], ChangePrecondition::UnconditionalObservation, serde_json::json!(diagnostics.len()))?;
+        self.store.write_link_diagnostics(source_id, diagnostics).map_err(ProjectorError::Store)?;
+        Ok(WriteOutcome { sequence: Some(seq), audited: false })
     }
 
-    pub fn replace_conflicts(
-        &mut self,
-        records: &[ConflictRecord],
-    ) -> Result<WriteOutcome, ProjectorError<S::Error>> {
-        let (_change, seq) = self.j.record(
-            ChangeOp::ReplaceConflicts,
-            String::new(),
-            vec![],
-            None,
-            serde_json::json!(records.len()),
-        )?;
-        self.store
-            .replace_conflicts(records)
-            .map_err(ProjectorError::Store)?;
-        Ok(WriteOutcome {
-            sequence: Some(seq),
-            audited: false,
-        })
+    pub fn replace_conflicts(&mut self, records: &[ConflictRecord]) -> Result<WriteOutcome, ProjectorError<S::Error>> {
+        let (_change, seq) = self.j.record(ChangeOp::ReplaceConflicts, String::new(), vec![], ChangePrecondition::UnconditionalObservation, serde_json::json!(records.len()))?;
+        self.store.replace_conflicts(records).map_err(ProjectorError::Store)?;
+        Ok(WriteOutcome { sequence: Some(seq), audited: false })
     }
-    /// Remove adjudicated conflict records while preserving the journal spine.
-    pub fn remove_conflicts(
-        &mut self,
-        logical_paths: &[String],
-    ) -> Result<WriteOutcome, ProjectorError<S::Error>> {
-        let (_change, seq) = self.j.record(
-            ChangeOp::ReplaceConflicts,
-            String::new(),
-            vec![],
-            None,
-            serde_json::json!({
-                "operation": "remove",
-                "logical_paths": logical_paths,
-            }),
-        )?;
-        self.store
-            .remove_conflicts(logical_paths)
-            .map_err(ProjectorError::Store)?;
-        Ok(WriteOutcome {
-            sequence: Some(seq),
-            audited: false,
-        })
+    pub fn remove_conflicts(&mut self, logical_paths: &[String]) -> Result<WriteOutcome, ProjectorError<S::Error>> {
+        let (_change, seq) = self.j.record(ChangeOp::ReplaceConflicts, String::new(), vec![], ChangePrecondition::UnconditionalObservation, serde_json::json!({"operation":"remove", "logical_paths": logical_paths}))?;
+        self.store.remove_conflicts(logical_paths).map_err(ProjectorError::Store)?;
+        Ok(WriteOutcome { sequence: Some(seq), audited: false })
     }
 }

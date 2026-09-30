@@ -4,6 +4,7 @@ use notez_core::application::Engine;
 use notez_core::application::use_cases::TaskUseCase;
 use notez_core::domain::ResourceRef;
 use notez_core::storage::SqliteProjection;
+use notez_protocol::request::RevisionPrecondition;
 
 fn make_facade() -> (tempfile::TempDir, Engine<SqliteProjection>) {
     let dir = tempfile::tempdir().unwrap();
@@ -38,6 +39,7 @@ fn transition_task_on_missing_resource_returns_not_found() {
         &r_ref,
         "DONE",
         "2026-08-02",
+        RevisionPrecondition::MustNotExist,
     )
     .expect_err("transition on missing resource must fail");
     assert!(

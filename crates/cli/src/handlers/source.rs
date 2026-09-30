@@ -12,7 +12,7 @@ use std::process::exit;
 use super::{Service, exit_code_for};
 use crate::commands::{SourceCommands, SourceSubcommand};
 use notez_core::application::dispatcher::{ApplicationDispatcher, Response};
-use notez_protocol::request::{Request, ScanFederationRequest, WritebackResourceRequest};
+use notez_protocol::request::{Request, RevisionPrecondition, ScanFederationRequest, WritebackResourceRequest};
 
 pub fn run_source(json: bool, service: &mut Service, sub: SourceSubcommand) {
     let mut dispatcher = ApplicationDispatcher::new(service);
@@ -94,12 +94,16 @@ pub fn run_source(json: bool, service: &mut Service, sub: SourceSubcommand) {
             }
         }
 
-        SourceCommands::Writeback { id, r_ref, payload } => {
+        SourceCommands::Writeback { id, r_ref, payload, expected_revision } => {
+            let revision = match notez_protocol::request::NonEmptyRevision::new(expected_revision) {
+                Ok(revision) => revision,
+                Err(message) => { eprintln!("invalid expected revision: {message}"); exit(2); }
+            };
             match dispatcher.dispatch(Request::WritebackResource(WritebackResourceRequest {
                 source_id: id,
                 r_ref,
                 payload,
-                expected_revision: None,
+                precondition: RevisionPrecondition::MustMatch { revision },
             })) {
                 Ok(Response::Writeback(report)) => {
                     if json {

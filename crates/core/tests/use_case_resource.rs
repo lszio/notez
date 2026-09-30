@@ -5,6 +5,7 @@ use notez_core::application::ResolveResult;
 use notez_core::application::use_cases::ResourceUseCase;
 use notez_core::domain::{ProjectionStore, Resource, ResourceKind, ResourceRef, Selector, ProjectionReader, ProjectionWrite};
 use notez_core::storage::SqliteProjection;
+use notez_protocol::request::{NonEmptyRevision, RevisionPrecondition};
 
 fn make_facade() -> (tempfile::TempDir, Engine<SqliteProjection>) {
     let dir = tempfile::tempdir().unwrap();
@@ -31,7 +32,7 @@ fn upsert_then_read_round_trip_via_traits() {
         object_id: notez_core::domain::ObjectIdentity::default(),
         primary_source_id: String::new(),
     };
-    <Engine<_> as ResourceUseCase>::upsert_resource(&mut facade, res).unwrap();
+    <Engine<_> as ResourceUseCase>::upsert_resource(&mut facade, res, RevisionPrecondition::MustNotExist).unwrap();
     let got = <Engine<_> as ResourceUseCase>::read(&facade, &r_ref).unwrap();
     assert!(got.is_some());
 }
@@ -51,7 +52,7 @@ fn resolve_and_resolve_address_share_lookup() {
         object_id: notez_core::domain::ObjectIdentity::default(),
         primary_source_id: String::new(),
     };
-    <Engine<_> as ResourceUseCase>::upsert_resource(&mut facade, res).unwrap();
+    <Engine<_> as ResourceUseCase>::upsert_resource(&mut facade, res, RevisionPrecondition::MustNotExist).unwrap();
     let r =
         <Engine<_> as ResourceUseCase>::resolve(&facade, "01J000000000000000000000C1")
             .unwrap();
@@ -80,8 +81,8 @@ fn delete_via_trait_removes_resource() {
         object_id: notez_core::domain::ObjectIdentity::default(),
         primary_source_id: String::new(),
     };
-    <Engine<_> as ResourceUseCase>::upsert_resource(&mut facade, res).unwrap();
-    <Engine<_> as ResourceUseCase>::delete_resource(&mut facade, &r_ref).unwrap();
+    <Engine<_> as ResourceUseCase>::upsert_resource(&mut facade, res, RevisionPrecondition::MustNotExist).unwrap();
+    <Engine<_> as ResourceUseCase>::delete_resource(&mut facade, &r_ref, RevisionPrecondition::MustMatch { revision: NonEmptyRevision::new("r1").unwrap() }).unwrap();
     let got = <Engine<_> as ResourceUseCase>::read(&facade, &r_ref).unwrap();
     assert!(got.is_none());
 }

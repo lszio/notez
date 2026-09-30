@@ -32,6 +32,8 @@ fn cli_source_writeback_fails_when_source_missing() {
         .arg("heading:01J00000000000000000000033")
         .arg("--payload")
         .arg("Updated Title")
+        .arg("--expected-revision")
+        .arg("stale")
         .assert()
         .failure()
         .stderr(predicates::str::contains("registered"));

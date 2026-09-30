@@ -17,7 +17,8 @@ use notez_core::domain::{Resource, ResourceRef};
 use notez_protocol::response::ResolveResult;
 use notez_protocol::request::{
     DeleteResourceRequest, InspectRulesRequest, ListBySourceRequest, ListRecentRequest,
-    ReadResourceRequest, Request, ResolveRequest, ResourcePayload, UpsertResourceRequest,
+    ReadResourceRequest, Request, ResolveRequest, ResourcePayload, RevisionPrecondition,
+    UpsertResourceRequest,
 };
 
 pub fn run_resolve(json: bool, service: &mut Service, query: &str) {
@@ -146,7 +147,7 @@ pub fn run_recent(json: bool, service: &mut Service, limit: usize) {
 pub fn run_resource(json: bool, service: &mut Service, sub: ResourceSubcommand) {
     let mut dispatcher = ApplicationDispatcher::new(service);
     match sub.command {
-        ResourceCommands::Upsert { from } => {
+        ResourceCommands::Upsert { from, create, expected_revision } => {
             let bytes = match std::fs::read(&from) {
                 Ok(b) => b,
                 Err(e) => {
@@ -172,9 +173,25 @@ pub fn run_resource(json: bool, service: &mut Service, sub: ResourceSubcommand) 
                 object_id: Some(res.object_id.to_string()),
                 primary_source_id: res.primary_source_id.clone(),
             };
+            let precondition = if create {
+                RevisionPrecondition::MustNotExist
+            } else {
+                let Some(revision) = expected_revision else {
+                    eprintln!("expected revision is required unless --create");
+                    exit(2);
+                };
+                let revision = match notez_protocol::request::NonEmptyRevision::new(revision) {
+                    Ok(revision) => revision,
+                    Err(message) => {
+                        eprintln!("invalid expected revision: {message}");
+                        exit(2);
+                    }
+                };
+                RevisionPrecondition::MustMatch { revision }
+            };
             match dispatcher.dispatch(Request::UpsertResource(UpsertResourceRequest {
                 resource: payload,
-                expected_revision: None,
+                precondition,
             })) {
                 Ok(Response::Done) => {
                     if json {
@@ -190,10 +207,14 @@ pub fn run_resource(json: bool, service: &mut Service, sub: ResourceSubcommand) 
                 other => unreachable!("unexpected dispatcher response: {other:?}"),
             }
         }
-        ResourceCommands::Delete { r_ref } => {
+        ResourceCommands::Delete { r_ref, expected_revision } => {
+            let revision = match notez_protocol::request::NonEmptyRevision::new(expected_revision) {
+                Ok(revision) => revision,
+                Err(message) => { eprintln!("invalid expected revision: {message}"); exit(2); }
+            };
             match dispatcher.dispatch(Request::DeleteResource(DeleteResourceRequest {
                 r_ref: r_ref.clone(),
-                expected_revision: None,
+                precondition: RevisionPrecondition::MustMatch { revision },
             })) {
                 Ok(Response::Done) => {
                     // The engine validated and deleted the ref; recover

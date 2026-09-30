@@ -223,11 +223,20 @@ pub enum ResourceCommands {
         /// Path to a JSON file containing a `Resource`
         #[arg(long)]
         from: PathBuf,
+        /// Create only; fails when the resource already exists.
+        #[arg(long, conflicts_with = "expected_revision")]
+        create: bool,
+        /// Expected current revision for an update.
+        #[arg(long, conflicts_with = "create")]
+        expected_revision: Option<String>,
     },
     /// Delete a resource by its `ResourceRef`
     Delete {
         /// `kind:ULID` reference, e.g. `heading:01J...`
         r_ref: String,
+        /// Expected current revision.
+        #[arg(long)]
+        expected_revision: String,
     },
     /// List resources from a single source adapter
     Ls {
@@ -296,6 +305,7 @@ pub enum McpCommands {
     /// Start MCP stdio server
     Serve,
 }
+
 #[derive(Args, Debug)]
 pub struct TaskSubcommand {
     #[command(subcommand)]
@@ -312,20 +322,18 @@ pub enum TaskCommands {
         /// Org-format timestamp; omitted = stamp current time.
         #[arg(long)]
         timestamp: Option<String>,
+        /// Expected current revision.
+        #[arg(long)]
+        expected_revision: String,
     },
-
     /// List all tasks grouped by status
     List,
-
     /// Query complete record and content of a task
     Detail { r_ref: String },
-
     /// Agenda view of scheduled, deadline, or actionable items
     Agenda,
-
     /// Overview of PARA (Projects, Areas, Resources, Archives) structures
     Para,
-
     /// List background system tasks/jobs
     Jobs,
 }
@@ -511,43 +519,24 @@ pub enum SkillCommands {
 pub enum SourceCommands {
     /// Add an external source
     Add {
-        #[arg(long)]
-        id: String,
-
-        #[arg(long)]
-        kind: CliSourceKind,
-
-        #[arg(long)]
-        path: PathBuf,
-
-        #[arg(long, default_value_t = false)]
-        read_only: bool,
-
-        /// Paths to scan; when set, files outside these are skipped.
-        #[arg(long, value_delimiter = ',', num_args = 0..)]
-        include: Vec<PathBuf>,
-
-        /// Paths to skip during scan; matched as prefix.
-        #[arg(long, value_delimiter = ',', num_args = 0..)]
-        exclude: Vec<PathBuf>,
+        #[arg(long)] id: String,
+        #[arg(long)] kind: CliSourceKind,
+        #[arg(long)] path: PathBuf,
+        #[arg(long, default_value_t = false)] read_only: bool,
+        #[arg(long, value_delimiter = ',', num_args = 0..)] include: Vec<PathBuf>,
+        #[arg(long, value_delimiter = ',', num_args = 0..)] exclude: Vec<PathBuf>,
     },
-
     /// List configured sources
     List,
-
     /// Sync / scan federated sources
     Sync,
-
     /// Trigger writeback mutation to a writable external source
     Writeback {
-        #[arg(long)]
-        id: String,
-
-        #[arg(long)]
-        r_ref: String,
-
-        #[arg(long)]
-        payload: String,
+        #[arg(long)] id: String,
+        #[arg(long)] r_ref: String,
+        #[arg(long)] payload: String,
+        /// Expected current revision.
+        #[arg(long)] expected_revision: String,
     },
 }
 

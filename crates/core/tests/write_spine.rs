@@ -16,9 +16,9 @@ use notez_core::domain::journal::{EventJournal, JournalEntry, JournalError};
 use notez_core::domain::{ResourceRef, Selector};
 use notez_core::storage::SqliteProjection;
 use notez_protocol::request::{
-    DeleteResourceRequest, ExtractAttachmentRequest, AddAttachmentRequest, QueryResourcesRequest,
-    Request, ResolveLinksRequest, ScanFederationRequest, ScanNativeRequest,
-    TransitionTaskRequest, UpdateDocumentRequest, UpsertResourceRequest,
+    DeleteResourceRequest, ExtractAttachmentRequest, AddAttachmentRequest, NonEmptyRevision,
+    QueryResourcesRequest, Request, ResolveLinksRequest, RevisionPrecondition, ScanFederationRequest,
+    ScanNativeRequest, TransitionTaskRequest, UpdateDocumentRequest, UpsertResourceRequest,
 };
 use sha2::{Digest, Sha256};
 use std::path::Path;
@@ -178,7 +178,7 @@ fn stale_revision_rejects_upsert_delete_transition_update_document() {
     let r_ref = ResourceRef::parse("heading:01J000000000000000000000F1").unwrap();
     sp.dispatch(Request::UpsertResource(UpsertResourceRequest {
         resource: resource_payload(&r_ref.to_string(), "heading", "r1"),
-        expected_revision: None,
+        precondition: RevisionPrecondition::MustNotExist,
     }))
     .unwrap();
 
@@ -186,7 +186,7 @@ fn stale_revision_rejects_upsert_delete_transition_update_document() {
     let err = sp
         .dispatch(Request::UpsertResource(UpsertResourceRequest {
             resource: resource_payload(&r_ref.to_string(), "heading", "r1"),
-            expected_revision: Some("stale2".to_string()),
+            precondition: RevisionPrecondition::MustMatch { revision: NonEmptyRevision::new("stale2").unwrap() },
         }))
         .err()
         .expect("stale upsert must fail");
@@ -204,13 +204,13 @@ fn stale_revision_rejects_upsert_delete_transition_update_document() {
     assert!(matches!(
         sp.dispatch(Request::DeleteResource(DeleteResourceRequest {
             r_ref: r_ref.to_string(),
-            expected_revision: Some("nope".to_string()),
+            precondition: RevisionPrecondition::MustMatch { revision: NonEmptyRevision::new("nope").unwrap() },
         })),
         Err(ApplicationError::RevisionConflict { .. })
     ));
     sp.dispatch(Request::DeleteResource(DeleteResourceRequest {
         r_ref: r_ref.to_string(),
-        expected_revision: None,
+        precondition: RevisionPrecondition::MustMatch { revision: NonEmptyRevision::new("r1").unwrap() },
     }))
     .unwrap();
 
@@ -230,7 +230,7 @@ fn stale_revision_rejects_upsert_delete_transition_update_document() {
             r_ref: task_ref.clone(),
             to_state: "DONE".to_string(),
             timestamp: Some("[2026-08-26 Wed 10:00]".to_string()),
-            expected_revision: Some("not-the-revision".to_string()),
+            precondition: RevisionPrecondition::MustMatch { revision: NonEmptyRevision::new("not-the-revision").unwrap() },
         })),
         Err(ApplicationError::RevisionConflict { ref expected, ref actual })
             if expected == "not-the-revision" && *actual == task_rev
@@ -245,9 +245,8 @@ fn stale_revision_rejects_upsert_delete_transition_update_document() {
             source_id: "native".to_string(),
             locator: "hello.md".to_string(),
             content: "# Hello\n\nsecond\n".to_string(),
-            base_revision: Some("deadbeef".to_string()),
             format: None,
-            expected_revision: None,
+            precondition: RevisionPrecondition::MustMatch { revision: NonEmptyRevision::new("deadbeef").unwrap() },
         }))
         .err()
         .expect("stale update must fail");
@@ -278,9 +277,8 @@ fn markdown_update_through_dispatcher_commits_revision_and_journal_metadata() {
         source_id: "native".to_string(),
         locator: "acceptance.md".to_string(),
         content: new_content.to_string(),
-        base_revision: None,
         format: None,
-        expected_revision: Some(old_revision.clone()),
+        precondition: RevisionPrecondition::MustMatch { revision: NonEmptyRevision::new(old_revision.clone()).unwrap() },
     })).expect("matching revision must permit writeback");
     let Response::DocumentUpdated(report) = response else { panic!("expected DocumentUpdated response"); };
     assert_eq!(std::fs::read_to_string(sp.root().join("acceptance.md")).unwrap(), new_content);
@@ -288,7 +286,7 @@ fn markdown_update_through_dispatcher_commits_revision_and_journal_metadata() {
     assert_ne!(report.revision, old_revision);
 
     let writeback = sp.journal.changes().into_iter().find(|change| matches!(change.op, ChangeOp::Writeback)).expect("writeback journal entry");
-    assert_eq!(writeback.expected_revision.as_deref(), Some(old_revision.as_str()));
+    assert!(matches!(writeback.precondition, notez_core::domain::change::ChangePrecondition::Revision(RevisionPrecondition::MustMatch { ref revision }) if revision.as_str() == old_revision));
     assert_eq!(writeback.payload["locator"], "acceptance.md");
 }
 
@@ -312,12 +310,29 @@ fn markdown_external_change_rejects_stale_dispatcher_write_without_overwrite() {
         source_id: "native".to_string(),
         locator: "external.md".to_string(),
         content: "# External\n\nNotez attempted overwrite\n".to_string(),
-        base_revision: None,
         format: None,
-        expected_revision: Some(indexed_revision),
+        precondition: RevisionPrecondition::MustMatch { revision: NonEmptyRevision::new(indexed_revision).unwrap() },
     })).expect_err("stale revision must reject external-change overwrite");
     assert!(matches!(err, ApplicationError::RevisionConflict { .. }));
     assert_eq!(std::fs::read_to_string(sp.root().join("external.md")).unwrap(), external);
+}
+
+#[test]
+fn transition_rejects_external_disk_edit_before_span_write() {
+    let mut sp = space_with(&[("tasks.org", "#+title: Tasks\n\n* TODO external transition\n")]);
+    sp.dispatch(Request::ScanNative(ScanNativeRequest {})).unwrap();
+    let page = expect_page(sp.dispatch(Request::QueryResources(QueryResourcesRequest {
+        kind: None, title_contains: None, exact_ref: None, source_id: Some("native".into()), limit: None,
+    })).unwrap());
+    let row = page.items.into_iter().find(|r| r.properties.contains_key("TODO")).unwrap();
+    let indexed = row.revision.clone();
+    std::fs::write(sp.root().join("tasks.org"), "#+title: Tasks\n\n* TODO changed externally\n").unwrap();
+    let err = sp.dispatch(Request::TransitionTask(TransitionTaskRequest {
+        r_ref: row.ref_.to_string(), to_state: "DONE".into(), timestamp: None,
+        precondition: RevisionPrecondition::MustMatch { revision: NonEmptyRevision::new(indexed).unwrap() },
+    })).expect_err("external disk edit must reject transition");
+    assert!(matches!(err, ApplicationError::RevisionConflict { .. }));
+    assert_eq!(std::fs::read_to_string(sp.root().join("tasks.org")).unwrap(), "#+title: Tasks\n\n* TODO changed externally\n");
 }
 
 #[test]
@@ -361,9 +376,8 @@ fn update_document_journals_writeback_and_rescan() {
             source_id: "native".to_string(),
             locator: "a.md".to_string(),
             content: "# A\n\nbody a edited\n".to_string(),
-            base_revision: None,
             format: None,
-            expected_revision: None,
+            precondition: RevisionPrecondition::MustMatch { revision: NonEmptyRevision::new(sha256_hex(b"# A\n\nbody a\n")).unwrap() },
         }))
         .unwrap();
     let Response::DocumentUpdated(report) = resp else {
@@ -403,13 +417,13 @@ fn transition_task_journals_transition_op() {
         &Selector::new().with_title_contains("spine transition"),
     )
     .unwrap();
-    let task_ref = page
+    let task = page
         .items
         .iter()
         .find(|r| r.properties.contains_key("TODO"))
-        .expect("task heading")
-        .r#ref
-        .to_string();
+        .expect("task heading");
+    let task_ref = task.r#ref.to_string();
+    let task_revision = task.revision.clone();
 
     sp.journal.clear();
     let resp = sp
@@ -417,7 +431,7 @@ fn transition_task_journals_transition_op() {
             r_ref: task_ref,
             to_state: "DONE".to_string(),
             timestamp: Some("[2026-08-26 Wed 10:00]".to_string()),
-            expected_revision: None,
+            precondition: RevisionPrecondition::MustMatch { revision: NonEmptyRevision::new(task_revision).unwrap() },
         }))
         .expect("transition must succeed");
     assert!(matches!(resp, Response::Transition(_)));
@@ -586,7 +600,7 @@ fn query_resources_limit_is_pushed_down() {
         let r_ref = ResourceRef::parse(&format!("heading:01J000000000000000000000F{i}")).unwrap();
         sp.dispatch(Request::UpsertResource(UpsertResourceRequest {
             resource: resource_payload(&r_ref.to_string(), "heading", &format!("r{i}")),
-            expected_revision: None,
+            precondition: RevisionPrecondition::MustNotExist,
         }))
         .unwrap();
     }

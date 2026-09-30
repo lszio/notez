@@ -12,6 +12,7 @@ use notez_core::domain::{
 use notez_core::source::{FormatParser, ParsedEntity, ParserError, RawEntity};
 use notez_core::storage::SqliteProjection;
 use std::collections::BTreeMap;
+use notez_protocol::request::{NonEmptyRevision, RevisionPrecondition};
 use std::error::Error;
 use std::fmt;
 use std::fs;
@@ -606,8 +607,8 @@ fn application_mutation_listing_inspection_agenda_and_para_happy_paths() {
         ("PARENT_REF".into(), project.r#ref.to_string()),
     ]);
 
-    service.upsert_resource(project.clone()).unwrap();
-    service.upsert_resource(task.clone()).unwrap();
+    service.upsert_resource(project.clone(), RevisionPrecondition::MustNotExist).unwrap();
+    service.upsert_resource(task.clone(), RevisionPrecondition::MustNotExist).unwrap();
     // `upsert_resource` materializes the implicit "self is primary" rule on
     // persist: a Resource whose `primary_source_id` is empty is stored as
     // `primary_source_id == source_id`, which is what the round trip returns.
@@ -646,8 +647,8 @@ fn application_mutation_listing_inspection_agenda_and_para_happy_paths() {
     assert_eq!(para.projects.len(), 1);
     assert_eq!(para.projects[0].tasks.len(), 1);
 
-    service.delete_resource(&task.r#ref).unwrap();
-    service.delete_resource(&task.r#ref).unwrap();
+    service.delete_resource(&task.r#ref, RevisionPrecondition::MustMatch { revision: NonEmptyRevision::new("2026-02-01").unwrap() }).unwrap();
+    service.delete_resource(&task.r#ref, RevisionPrecondition::MustNotExist).unwrap();
     assert!(service.read(&task.r#ref).unwrap().is_none());
 }
 
@@ -656,8 +657,8 @@ fn application_main_paths_surface_storage_errors() {
     let mut service = Engine::new(FailingStore);
     let doc = resource(ResourceKind::Document, DOC_ID, "Doc", "native", "1");
     for err in [
-        service.upsert_resource(doc.clone()).unwrap_err(),
-        service.delete_resource(&doc.r#ref).unwrap_err(),
+        service.upsert_resource(doc.clone(), RevisionPrecondition::MustNotExist).unwrap_err(),
+        service.delete_resource(&doc.r#ref, RevisionPrecondition::MustNotExist).unwrap_err(),
     ] {
         assert!(
             matches!(err, ApplicationError::Storage { kind: _, ref message } if message.contains("contract failure"))

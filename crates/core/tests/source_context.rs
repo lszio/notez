@@ -14,6 +14,7 @@ use tempfile::tempdir;
 use notez_core::application::Engine;
 use notez_core::storage::SqliteProjection;
 
+use notez_protocol::request::RevisionPrecondition;
 #[test]
 fn service_construction_does_not_require_current_working_directory() {
     // Build a temp space and open SqliteProjection there. Constructing the
@@ -100,7 +101,7 @@ fn writeback_does_not_fall_back_to_dot_for_source_config() {
     let r_ref =
         notez_core::domain::ResourceRef::parse("heading:01J00000000000000000000999").unwrap();
     let err = service
-        .transition_task(&r_ref, "DONE", "2026-08-01")
+        .transition_task(&r_ref, "DONE", "2026-08-01", RevisionPrecondition::MustNotExist)
         .expect_err("transition_task on missing resource must error");
     let msg = err.to_string();
     assert!(

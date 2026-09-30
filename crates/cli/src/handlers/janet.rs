@@ -23,7 +23,6 @@ pub fn run_janet(
         source_id,
         document_ref,
         actor_id: "cli".to_string(),
-        expected_revision: None,
         trace_id: None,
         timeout_ms,
         result_limit,
