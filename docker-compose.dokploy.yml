@@ -36,8 +36,7 @@ services:
       NOTEZ_API_OIDC_AUDIENCE: ${NOTEZ_API_OIDC_AUDIENCE:-}
       # Optional: pin the default space root (persisted in the volume).
       NOTEZ_SPACE_ROOT: ${NOTEZ_SPACE_ROOT:-/data/space}
-    # dokploy derives the Traefik router's backend port from this
-    # declaration; without it the domain router is silently skipped.
+    # Expose the port dokploy's Traefik router targets (web:3030).
     expose:
       - "3030"
     # Path-scoped routers layered over the dokploy-generated domain
