@@ -40,6 +40,26 @@ services:
     # declaration; without it the domain router is silently skipped.
     expose:
       - "3030"
+    # Path-scoped routers layered over the dokploy-generated domain
+    # router (which carries authentik-auth@file for browser routes):
+    #   * /api/v1 + /mcp bypass forward-auth — the app itself enforces
+    #     bearer auth (JWKS/iss/aud), so machine clients work.
+    #   * /outpost.goauthentik.io must reach the authentik outpost for
+    #     the login callback (mirrors the helloworld-callback router).
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.notez-api.rule=Host(`notez.lszio.space`) && (PathPrefix(`/api/v1`) || PathPrefix(`/mcp`))
+      - traefik.http.routers.notez-api.entrypoints=websecure
+      - traefik.http.routers.notez-api.tls.certResolver=letsencrypt
+      - traefik.http.routers.notez-api.priority=100
+      - traefik.http.routers.notez-api.service=notez-api-svc
+      - traefik.http.services.notez-api-svc.loadbalancer.server.port=3030
+      - traefik.http.routers.notez-outpost.rule=Host(`notez.lszio.space`) && PathPrefix(`/outpost.goauthentik.io/`)
+      - traefik.http.routers.notez-outpost.entrypoints=websecure
+      - traefik.http.routers.notez-outpost.tls.certResolver=letsencrypt
+      - traefik.http.routers.notez-outpost.priority=15
+      - traefik.http.routers.notez-outpost.service=notez-outpost-svc
+      - traefik.http.services.notez-outpost-svc.loadbalancer.server.url=http://infra-authentik-kzthsk-server-1:9000
     volumes:
       - notez-data:/data
     restart: unless-stopped
