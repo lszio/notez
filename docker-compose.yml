@@ -3,9 +3,11 @@
 #   docker compose up -d
 #   open http://localhost:3030
 #
-# The default mapping is loopback-only. To expose publicly, explicitly set
-# NOTEZ_IP=0.0.0.0 and NOTEZ_WEB_TOKEN to a strong secret before starting.
-# Public mutation routes reject requests without that token.
+# The default mapping is loopback-only (auth = anonymous). To expose
+# publicly, set IP=0.0.0.0 plus NOTEZ_API_TOKEN or
+# NOTEZ_API_OIDC_ISSUER + NOTEZ_API_OIDC_AUDIENCE — the server refuses
+# public binds without auth (see crates/api/src/config.rs). For the
+# dokploy/Traefik deployment with authentik see docker-compose.dokploy.yml.
 services:
   web:
     build: .
@@ -14,11 +16,10 @@ services:
     ports:
       - "127.0.0.1:3030:3030"
     environment:
-      IP: "${NOTEZ_IP:-127.0.0.1}"
+      IP: "${IP:-127.0.0.1}"
       PORT: "3030"
-      # Required by the middleware for non-loopback requests; optional for
-      # the default loopback-only deployment.
-      NOTEZ_WEB_TOKEN: "${NOTEZ_WEB_TOKEN:-}"
+      # Public binds require auth: set NOTEZ_API_TOKEN, or
+      # NOTEZ_API_OIDC_ISSUER + NOTEZ_API_OIDC_AUDIENCE together.
       # NOTEZ_SPACE_ROOT: /data/space
     volumes:
       - notez-data:/data

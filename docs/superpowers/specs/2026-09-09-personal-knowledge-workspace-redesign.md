@@ -79,7 +79,7 @@ View
 CLI / MCP / HTTP / Web / Desktop / Mobile
   → protocol Request
   → Dispatcher
-  → authorization + expected_revision + domain validation
+  → authorization + revision precondition + domain validation
   → Change append
   → source writeback
   → projection update
@@ -89,9 +89,9 @@ CLI / MCP / HTTP / Web / Desktop / Mobile
 
 ### 3.1 不变量
 
-1. 每个可写请求必须携带非空 `expected_revision`；没有 revision 不是“强制覆盖”，而是 `InvalidRequest`。
+1. 每个可写请求必须携带显式 `RevisionPrecondition`：`MustMatch { revision }` 用于更新、删除、状态迁移和写回；`MustNotExist` 用于创建。二者都不是隐式覆盖；空 revision、缺失前置条件和强制覆盖都是 `InvalidRequest`。
 2. 写回成功之前，projection 不能报告成功；projection 失败后，journal 保留可恢复状态。
-3. `Change` 和 audit 都记录 principal、目标、预期 revision、结果及 trace id。
+3. `Change` 和 audit 都记录 principal、目标、revision precondition、结果及 trace id。
 4. 所有 surface 对相同 Request 返回同一 typed Response / Error；不允许 Web 专有写入绕过 protocol。
 5. 每个进程只有一个 `composition::native::Runtime`：一个 Engine cache 和一组 watcher，供 web/API/MCP/host supervisor 共用。
 6. Journal 的 accepted Change 是唯一领域写入记录；扫描外部文件变化产生 `SourceObservation` / `ImportChange`，不能只清表重扫而没有解释。
@@ -99,9 +99,9 @@ CLI / MCP / HTTP / Web / Desktop / Mobile
 ### 3.2 首期核心命令
 
 - `ReadObject`、`QueryObjects`、`ReadDirectory`；
-- `UpdateDocument`：仅 `.md` / `.org` / `.txt`，全文件源编辑，必须 revision guard；
-- `CreateDocument`：在 Directory Object 下创建文件并建立 contains relation；
-- `SetClassification`：更新 `project/area/resource/archive/unmanaged`；
+- `CreateDocument`：在 Directory Object 下创建文件并建立 contains relation，使用 `MustNotExist`；
+- `UpdateDocument`：仅 `.md` / `.org` / `.txt`，全文件源编辑，使用 `MustMatch { revision }`；
+- `SetClassification`：更新 `project/area/resource/archive/unmanaged`，使用 `MustMatch { revision }`；
 - `ScanSource`、`ListRelations`、`ListActivity`、`ListSyncStatus`；
 - `ExecuteDisplayBlock`：只读运行 `notez` block。
 

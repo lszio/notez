@@ -1,0 +1,64 @@
+#+title: Dokploy 部署 + authentik 认证 runbook
+
+#+begin_quote
+文件分工：=docker-compose.yml= 本地开发（loopback）；=docker-compose.dokploy.yml= dokploy 部署（Traefik + authentik forward-auth）。本文是控制台操作步骤，仓库内改不了的部分都在这里。
+#+end_quote
+
+* 认证模型（两层，互不依赖）
+
+| 层 | 保护对象 | 机制 | 配置来源 |
+|---+---------+------+---------|
+| 代理层 | 浏览器访问的全部路由（SSR UI + 静态资源） | Traefik forward-auth，未登录 302 到 authentik | =AUTHENTIK_OUTPOST_URL= |
+| 应用层 | =/api/v1/*= 与 =/mcp= | 应用内 OIDC bearer 校验（JWKS、iss/aud/exp） | =NOTEZ_API_OIDC_ISSUER= / =NOTEZ_API_OIDC_AUDIENCE= |
+
+浏览器 UI 不直接调 =/api/v1=（数据走 SSR server functions），所以两层各管各的；机器客户端（CLI/MCP）用同一个 provider 签发的 access token 走 bearer。
+
+应用侧的公开 bind 拒绝规则（=crates/api/src/config.rs=）由 OIDC 环境变量满足，容器才能启动。
+
+* authentik 控制台
+
+1. *Provider*：Directory → Providers → Create → =Proxy Provider=。
+   - Authorization flow: =implicit-consent=。
+   - Type: =forward_auth (single application)=。
+   - External host: =https://<NOTEZ_DOMAIN>=（notez 的公网地址）。
+   - 记下 slug（下称 =<provider-slug>=）与 client id（=<client-id>=）。
+2. *Application*：绑到上面的 provider，slug 建议 =notez=。
+3. *Outpost*：Applications → Outposts。用 embedded outpost（默认）即可；确认 Outpost 的 "Application" 含 notez。embedded 模式下 outpost 基址是 =https://<authentik-host>/outpost.goauthentik.io=。
+4. 用户/组授权在 Application 的 Policy / Group 绑定上做。
+
+* dokploy 控制台
+
+1. Project → Create Service → *Compose*，Git source 指向本仓库，compose path 填 =docker-compose.dokploy.yml=。
+2. Environment 填四个变量（缺一 compose 直接起不来，fail-closed）：
+   #+begin_example
+   NOTEZ_DOMAIN=notez.example.com
+   AUTHENTIK_OUTPOST_URL=https://auth.example.com/outpost.goauthentik.io
+   NOTEZ_API_OIDC_ISSUER=https://auth.example.com/application/o/<provider-slug>/
+   NOTEZ_API_OIDC_AUDIENCE=<client-id>
+   #+end_example
+   - issuer *必须带尾部斜杠*（与 authentik discovery 的 =issuer= 一致，校验是尾斜杠不敏感但配平最稳）。
+3. Domain：在 dokploy 服务里绑 =NOTEZ_DOMAIN=，HTTPS + 证书。注意 dokploy 会生成自己的 router，与 compose 里 =notez= router 并存时以 Domain 面板生成的为准——若用 Domain 面板，把 =notez-auth= 中间件挂到它生成的 router 上（Advanced 里加 middleware 引用）。
+4. Deploy。构建约 10 分钟（Rust release 全量编译，首次无缓存）。
+
+* 验证
+
+#+begin_example
+# 未登录浏览器访问 → 应 302 到 authentik 登录页
+curl -si https://<NOTEZ_DOMAIN>/ | head -3
+
+# healthz 双层公开，IdP 挂了也要 200
+curl -s https://<NOTEZ_DOMAIN>/api/v1/healthz
+
+# 应用层 bearer 校验：无 token 应 401
+curl -s -o /dev/null -w '%{http_code}\n' https://<NOTEZ_DOMAIN>/api/v1/dispatch -X POST
+#+end_example
+
+机器客户端：用 provider 的 client-credentials（或用户登录后的 access token）请求 =POST /api/v1/dispatch=，带 =Authorization: Bearer <jwt>= 与 =X-Notez-Source=。
+
+* 故障速查
+
+- *起不来：=set NOTEZ_API_OIDC_ISSUER= 之类* → compose 的 =:?= 变量没配。
+- *起不来：refusing to serve without authentication* → OIDC 两个变量没进容器（检查 Environment 作用域）。
+- *302 循环 / 403* → Proxy Provider 的 External host 与实际域名不一致，或 outpost 未含该 application。
+- *forward-auth 502* → =AUTHENTIK_OUTPOST_URL= 从 Traefik 所在网络不可达。
+- *API 401 但浏览器正常* → audience 不配：=NOTEZ_API_OIDC_AUDIENCE= 必须 = provider client id。

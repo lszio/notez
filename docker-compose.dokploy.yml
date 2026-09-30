@@ -1,0 +1,56 @@
+# Dokploy deployment: notez web SSR behind Traefik with authentik
+# forward-auth (proxy provider) guarding every browser route.
+#
+# Deploy in dokploy as a "Compose" service with:
+#   * compose path: docker-compose.dokploy.yml
+#   * environment (Service > Environment):
+#       NOTEZ_DOMAIN            public hostname, e.g. notez.example.com
+#       AUTHENTIK_OUTPOST_URL   outpost base, e.g. https://auth.example.com/outpost.goauthentik.io
+#       NOTEZ_API_OIDC_ISSUER   https://<authentik-host>/application/o/<provider-slug>/
+#       NOTEZ_API_OIDC_AUDIENCE authentik provider client id
+#
+# Browser traffic: Traefik forward-auth redirects unauthenticated users
+# to authentik, then forwards identity headers. Machine clients keep
+# hitting /api/v1 and /mcp with `Authorization: Bearer <jwt>`; the app
+# validates those itself against the authentik JWKS (NOTEZ_API_OIDC_*),
+# so API auth does not depend on the proxy.
+#
+# /api/v1/healthz stays public on both layers (Traefik router + app).
+
+services:
+  web:
+    build: .
+    image: notez-web:latest
+    networks: [dokploy-network]
+    environment:
+      IP: 0.0.0.0
+      PORT: "3030"
+      NOTEZ_MODE: web
+      # Fail-closed: compose refuses to start without the auth config,
+      # mirroring the app's own public-bind rule.
+      NOTEZ_API_OIDC_ISSUER: ${NOTEZ_API_OIDC_ISSUER:?set NOTEZ_API_OIDC_ISSUER}
+      NOTEZ_API_OIDC_AUDIENCE: ${NOTEZ_API_OIDC_AUDIENCE:?set NOTEZ_API_OIDC_AUDIENCE}
+      # Optional: pin the default space root (persisted in the volume).
+      NOTEZ_SPACE_ROOT: ${NOTEZ_SPACE_ROOT:-/data/space}
+    volumes:
+      - notez-data:/data
+    restart: unless-stopped
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.notez.rule=Host(`${NOTEZ_DOMAIN:?set NOTEZ_DOMAIN}`)
+      - traefik.http.routers.notez.entrypoints=websecure
+      - traefik.http.routers.notez.tls.certResolver=letsencrypt
+      - traefik.http.services.notez.loadbalancer.server.port=3030
+      # authentik embedded outpost forward-auth. The outpost must be
+      # routed under AUTHENTIK_OUTPOST_URL (host or embedded mode).
+      - traefik.http.middlewares.notez-auth.forwardauth.address=${AUTHENTIK_OUTPOST_URL:?set AUTHENTIK_OUTPOST_URL}/auth/traefik
+      - traefik.http.middlewares.notez-auth.forwardauth.trustForwardHeader=true
+      - traefik.http.middlewares.notez-auth.forwardauth.authResponseHeaders=X-authentik-username,X-authentik-groups,X-authentik-email,X-authentik-name,X-authentik-uid
+      - traefik.http.routers.notez.middlewares=notez-auth@docker
+
+networks:
+  dokploy-network:
+    external: true
+
+volumes:
+  notez-data:
