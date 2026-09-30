@@ -8,6 +8,8 @@
 #   * environment (Service > Environment):
 #       NOTEZ_API_OIDC_ISSUER   https://auth.lszio.space/application/o/<provider-slug>/
 #       NOTEZ_API_OIDC_AUDIENCE authentik provider client id
+#     Left empty, the container crash-loops: the app refuses a public
+#     bind without auth config (crates/api/src/config.rs).
 #
 # Browser traffic: Traefik forward-auth redirects unauthenticated users
 # to authentik, then forwards identity headers. Machine clients keep
@@ -26,10 +28,12 @@ services:
       IP: 0.0.0.0
       PORT: "3030"
       NOTEZ_MODE: web
-      # Fail-closed: compose refuses to start without the auth config,
-      # mirroring the app's own public-bind rule.
-      NOTEZ_API_OIDC_ISSUER: ${NOTEZ_API_OIDC_ISSUER:?set NOTEZ_API_OIDC_ISSUER}
-      NOTEZ_API_OIDC_AUDIENCE: ${NOTEZ_API_OIDC_AUDIENCE:?set NOTEZ_API_OIDC_AUDIENCE}
+      # Auth is enforced by the app itself: ServerConfig::from_env refuses
+      # a public bind with empty issuer/audience (container crash-loops
+      # with a clear log until real values are set). Empty defaults keep
+      # dokploy's compose parsing happy before env injection exists.
+      NOTEZ_API_OIDC_ISSUER: ${NOTEZ_API_OIDC_ISSUER:-}
+      NOTEZ_API_OIDC_AUDIENCE: ${NOTEZ_API_OIDC_AUDIENCE:-}
       # Optional: pin the default space root (persisted in the volume).
       NOTEZ_SPACE_ROOT: ${NOTEZ_SPACE_ROOT:-/data/space}
     volumes:
