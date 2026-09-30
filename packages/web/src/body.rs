@@ -55,18 +55,35 @@ use crate::model::ResourceRow;
 static CATALOG: LazyLock<PreviewerCatalog> =
     LazyLock::new(notez_preview::default_catalog);
 
+/// Previewers that never touch the file bytes — the media element
+/// (and the docx/pptx viewer shell) only needs the raw URL. Reading a
+/// 90 MB mp4 into RAM just to render `<video src=...>` is what makes
+/// the attachment page hang, so those extensions skip the read.
+fn previewer_needs_bytes(ext: &str) -> bool {
+    !matches!(
+        ext,
+        "mp4" | "m4v" | "webm" | "mov" | "mkv" | "avi" | "ogv" | "mpg" | "mpeg" | "3gp"
+            | "ts" | "wmv" | "mp3" | "wav" | "ogg" | "oga" | "opus" | "flac" | "m4a"
+            | "aac" | "wma" | "mka" | "aiff" | "mid" | "midi"
+    )
+}
+
 /// Render the body of `row` for the detail page.
 pub fn render_body(row: &ResourceRow, source_root: &Path) -> String {
     let file_path = resolve_file_path(source_root, &row.locator);
-    let bytes = match std::fs::read(&file_path) {
-        Ok(b) => b,
-        Err(_) => return String::new(),
-    };
     let ext = file_path
         .extension()
         .and_then(|e| e.to_str())
         .map(|s| s.to_ascii_lowercase())
         .unwrap_or_default();
+    let bytes = if previewer_needs_bytes(&ext) {
+        match std::fs::read(&file_path) {
+            Ok(b) => b,
+            Err(_) => return String::new(),
+        }
+    } else {
+        Vec::new()
+    };
 
     let raw_url = raw_attachment_url(source_root, &row.locator);
     let encoded = crate::data::urls::encode_space(&source_root.to_string_lossy());
@@ -105,15 +122,19 @@ pub fn render_body(row: &ResourceRow, source_root: &Path) -> String {
 /// is the parent directory used to compute the `locator` portion of the
 /// raw-attachment URL.
 pub fn render_path(file_path: &Path, title: &str, source_root: &Path) -> String {
-    let bytes = match std::fs::read(file_path) {
-        Ok(b) => b,
-        Err(_) => return String::new(),
-    };
     let ext = file_path
         .extension()
         .and_then(|e| e.to_str())
         .map(|s| s.to_ascii_lowercase())
         .unwrap_or_default();
+    let bytes = if previewer_needs_bytes(&ext) {
+        match std::fs::read(file_path) {
+            Ok(b) => b,
+            Err(_) => return String::new(),
+        }
+    } else {
+        Vec::new()
+    };
     let rel_locator = file_path
         .strip_prefix(source_root)
         .ok()
@@ -265,7 +286,7 @@ fn render_pdf(
         )
     };
     format!(
-        "<div class=\"preview-pdf\"><p><a href=\"{raw_url}\" target=\"_blank\" class=\"spine-action\">📄 Open PDF in new tab ({title})</a></p>{text_block}<iframe src=\"{raw_url}\" width=\"100%\" height=\"600px\" style=\"border:1px solid var(--ink-rule);margin-top:0.5rem;\"></iframe></div>",
+        "<div class=\"preview-pdf\"><p><a href=\"{raw_url}\" target=\"_blank\" class=\"spine-action\">📄 Open PDF in new tab ({title})</a></p>{text_block}<iframe src=\"{raw_url}\" width=\"100%\" height=\"600px\" style=\"border:1px solid var(--rule);margin-top:0.5rem;\"></iframe></div>",
         raw_url = raw_url,
         title = html_escape::encode_safe(title),
     )
@@ -285,7 +306,7 @@ fn render_xlsx(sheets: &[notez_preview::Sheet]) -> String {
             out.push_str("<tr>");
             for cell in row {
                 out.push_str(&format!(
-                    "<td style=\"border:1px solid var(--ink-rule);padding:0.2rem 0.5rem;\">{}</td>",
+                    "<td style=\"border:1px solid var(--rule);padding:0.2rem 0.5rem;\">{}</td>",
                     html_escape::encode_safe(cell)
                 ));
             }
@@ -370,7 +391,7 @@ fn render_table(table: &notez_preview::Table) -> String {
         out.push_str("<thead><tr>");
         for h in &table.headers {
             out.push_str(&format!(
-                "<th style=\"border:1px solid var(--ink-rule);padding:0.3rem 0.6rem;text-align:left;background:var(--ink-2);\">{}</th>",
+                "<th style=\"border:1px solid var(--rule);padding:0.3rem 0.6rem;text-align:left;background:var(--badge);\">{}</th>",
                 html_escape::encode_safe(h)
             ));
         }
@@ -381,7 +402,7 @@ fn render_table(table: &notez_preview::Table) -> String {
         out.push_str("<tr>");
         for cell in row {
             out.push_str(&format!(
-                "<td style=\"border:1px solid var(--ink-rule);padding:0.2rem 0.5rem;\">{}</td>",
+                "<td style=\"border:1px solid var(--rule);padding:0.2rem 0.5rem;\">{}</td>",
                 html_escape::encode_safe(cell)
             ));
         }
@@ -419,7 +440,7 @@ fn render_d2(source: &str) -> String {
 
 fn render_iframe(src: &str, sandbox: &str) -> String {
     format!(
-        "<div class=\"preview-iframe\"><iframe src=\"{src}\" sandbox=\"{sandbox}\" style=\"width:100%;height:480px;border:1px solid var(--ink-rule);\" loading=\"lazy\"></iframe></div>",
+        "<div class=\"preview-iframe\"><iframe src=\"{src}\" sandbox=\"{sandbox}\" style=\"width:100%;height:480px;border:1px solid var(--rule);\" loading=\"lazy\"></iframe></div>",
         src = html_escape::encode_safe(src),
         sandbox = html_escape::encode_safe(sandbox),
     )

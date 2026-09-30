@@ -33,6 +33,12 @@ fn run_web_mode() -> Result<(), anyhow::Error> {
     let addr = host::resolve_addr().map_err(anyhow::Error::msg)?;
     let services = host::build_services().map_err(anyhow::Error::msg)?;
     let protocol = host::protocol_router(&services);
+    // `dioxus::serve` binds `addr` itself and panics when it cannot, so
+    // probe first: a taken port is an ordinary error, not a crash, and
+    // the "listening on" line below then only prints for a bound server.
+    std::net::TcpListener::bind(addr).map_err(|e| {
+        anyhow::anyhow!("cannot bind {addr}: {e} — is another `notez web` already running?")
+    })?;
     eprintln!("notez web listening on http://{addr}");
 
     dioxus::serve(move || {

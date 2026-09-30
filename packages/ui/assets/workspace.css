@@ -310,9 +310,21 @@ a:hover { text-decoration: underline; }
 }
 .doc .preview-viewer[data-state="loading"] .viewer-host { min-height: 4rem; opacity: 0.6; }
 .doc .preview-viewer[data-state="failed"] { border-color: var(--danger); }
-.doc .preview-viewer .viewer-host { overflow: auto; max-height: 70vh; }
+.doc .preview-viewer .viewer-host {
+  overflow: auto;
+  max-height: 70vh;
+  /* Document viewers (docx-preview / pptx-preview) paint black text on
+     a transparent canvas; against the dark notez theme that was black
+     on black. A fixed white canvas is the readable default for office
+     documents. */
+  background: #fff;
+  color: #1f2328;
+}
 .doc .preview-docx-render { padding: 0.5rem 0; }
 .doc .preview-docx-render img { max-width: 100%; height: auto; }
+/* pptx-preview wraps slides in a black presentation backdrop; inside a
+   note we want white gutters between slides. */
+.doc .preview-viewer .viewer-host .pptx-preview-wrapper { background: #fff !important; }
 
 .doc .preview-edit {
   display: flex;

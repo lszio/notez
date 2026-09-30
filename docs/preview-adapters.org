@@ -97,8 +97,13 @@ window.notezViewers.<name> = async function (el, src) {
 
 内置实现：
 
-- `plugins/docx.js` → vendored `vendor/docx-preview.min.js` 的 UMD 包。
+- `plugins/docx.js` → vendored `vendor/docx-preview.min.js` 的 UMD 包
+  （其 UMD 从 `window.JSZip` 读依赖，因此先加载 vendored
+  `vendor/jszip.min.js`；缺它渲染报
+  "Cannot read properties of undefined (reading 'loadAsync')"）。
 - `plugins/pptx.js` → vendored `vendor/pptx-preview.umd.js` 的 UMD 包（`mode: "list"`）。
+  注意 `init` 必须传 `width`/`height`（从宿主元素实测宽取 16:9），缺省时 slide 画布高度为 0，
+  渲染内容会被裁掉、只剩黑底。
 
 新 viewer 插件只需要把脚本放到 `packages/web/public/plugins/` 下，注册
 `window.notezViewers[name]`；server 端在 `Previewer::capabilities` 里把

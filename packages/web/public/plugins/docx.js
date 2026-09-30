@@ -6,30 +6,43 @@
  * that script on demand so a notez instance without the plugin does
  * not pay the size cost.
  *
+ * docx-preview 0.4.x's UMD build reads its only runtime dependency
+ * (jszip) from `window.JSZip`, so the vendored jszip is loaded first
+ * (`/vendor/jszip.min.js`) — without it the renderer throws
+ * "Cannot read properties of undefined (reading 'loadAsync')".
+ *
  * Contract: register an async `(el, src) => void` renderer on
  * `window.notezViewers["docx"]`. App.js calls it after the plugin
  * script is loaded.
  */
 (function () {
   "use strict";
+  var JSZIP_URL = "/vendor/jszip.min.js";
   var VENDOR_URL = "/vendor/docx-preview.min.js";
+  function loadScript(src, present) {
+    if (present()) return Promise.resolve();
+    return new Promise(function (resolve, reject) {
+      var s = document.createElement("script");
+      s.src = src;
+      s.onload = function () {
+        if (present()) resolve();
+        else reject(new Error(src + " loaded without the expected global"));
+      };
+      s.onerror = function () { reject(new Error("failed to load " + src)); };
+      document.head.appendChild(s);
+    });
+  }
   function loadVendor() {
     if (window.docx && typeof window.docx.renderAsync === "function") {
       return Promise.resolve(window.docx);
     }
-    return new Promise(function (resolve, reject) {
-      var s = document.createElement("script");
-      s.src = VENDOR_URL;
-      s.onload = function () {
-        if (window.docx && typeof window.docx.renderAsync === "function") {
-          resolve(window.docx);
-        } else {
-          reject(new Error("docx vendor script missing renderAsync"));
-        }
-      };
-      s.onerror = function () { reject(new Error("failed to load " + VENDOR_URL)); };
-      document.head.appendChild(s);
-    });
+    return loadScript(JSZIP_URL, function () { return !!window.JSZip; })
+      .then(function () {
+        return loadScript(VENDOR_URL, function () {
+          return window.docx && typeof window.docx.renderAsync === "function";
+        });
+      })
+      .then(function () { return window.docx; });
   }
 
   if (!window.notezViewers) window.notezViewers = {};

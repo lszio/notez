@@ -144,29 +144,37 @@ async fn register_post(Form(form): Form<RegisterForm>) -> Result<Response, UiErr
     Ok(redirect(&urls::space_url(&urls::encode_space(&root))))
 }
 
-async fn raw_get(Path((encoded, locator)): Path<(String, String)>) -> Result<Response, UiError> {
+async fn raw_get(
+    Path((encoded, locator)): Path<(String, String)>,
+    headers: HeaderMap,
+) -> Result<Response, UiError> {
+    use std::io::{Read, Seek, SeekFrom};
+
     let space = space::open(&encoded)?;
     let locator = urls::decode_locator(locator.trim_start_matches('/'));
     let full = space::safe_join(&space.root, &locator)?;
     if !full.is_file() {
         return Err(UiError::NotFound(format!("not found: {locator}")));
     }
-    let bytes = std::fs::read(&full)
-        .map_err(|e| UiError::Internal(format!("read {}: {e}", full.display())))?;
+    let total = std::fs::metadata(&full)
+        .map_err(|e| UiError::Internal(format!("stat {}: {e}", full.display())))?
+        .len();
     let mime = mime_guess::from_path(&full)
         .first_or_octet_stream()
         .to_string();
-    let mut headers = HeaderMap::new();
-    headers.insert(
+    let mut response = HeaderMap::new();
+    response.insert(
         header::CONTENT_TYPE,
         HeaderValue::from_str(&mime).unwrap_or(HeaderValue::from_static("application/octet-stream")),
     );
-    headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    // no-store: files change on disk and the projection's fingerprint
+    // is the source of truth; never let the browser serve stale bytes.
+    response.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
     let name = std::path::Path::new(&locator)
         .file_name()
         .and_then(|s| s.to_str())
         .unwrap_or("file");
-    headers.insert(
+    response.insert(
         header::CONTENT_DISPOSITION,
         HeaderValue::from_str(&format!(
             "inline; filename*=UTF-8''{}",
@@ -174,7 +182,85 @@ async fn raw_get(Path((encoded, locator)): Path<(String, String)>) -> Result<Res
         ))
         .unwrap_or(HeaderValue::from_static("inline")),
     );
-    Ok((headers, bytes).into_response())
+    // Range support (single byte-range only — all browsers use that for
+    // <video>/<audio>). Media playback 卡顿 was caused by the server
+    // always answering 200 + the whole 90 MB file: the player can neither
+    // seek nor start until the full download lands. A 206 slice lets the
+    // browser stream and seek; document viewers are unaffected (they
+    // fetch without Range and get the plain 200 body).
+    response.insert(header::ACCEPT_RANGES, HeaderValue::from_static("bytes"));
+    let range = if let Some(spec) = headers
+        .get(header::RANGE)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("bytes="))
+    {
+        Some(single_byte_range(spec, total))
+    } else {
+        None
+    };
+    if let Some(range) = range {
+        let (start, end) = match range {
+            Ok(r) => r,
+            Err(()) => {
+                response.insert(
+                    header::CONTENT_RANGE,
+                    HeaderValue::from_str(&format!("bytes */{total}"))
+                        .unwrap_or_else(|_| HeaderValue::from_static("bytes */0")),
+                );
+                return Ok((StatusCode::RANGE_NOT_SATISFIABLE, response).into_response());
+            }
+        };
+        let len = (end - start + 1) as usize;
+        let mut buf = vec![0u8; len];
+        let mut file = std::fs::File::open(&full)
+            .map_err(|e| UiError::Internal(format!("open {}: {e}", full.display())))?;
+        file.seek(SeekFrom::Start(start))
+            .map_err(|e| UiError::Internal(format!("seek {}: {e}", full.display())))?;
+        file.read_exact(&mut buf)
+            .map_err(|e| UiError::Internal(format!("read {}: {e}", full.display())))?;
+        response.insert(
+            header::CONTENT_RANGE,
+            HeaderValue::from_str(&format!("bytes {start}-{end}/{total}"))
+                .unwrap_or_else(|_| HeaderValue::from_static("bytes */0")),
+        );
+        return Ok((StatusCode::PARTIAL_CONTENT, response, buf).into_response());
+    }
+    let bytes = std::fs::read(&full)
+        .map_err(|e| UiError::Internal(format!("read {}: {e}", full.display())))?;
+    Ok((response, bytes).into_response())
+}
+
+/// Parse a single `bytes=` range spec (`N-`, `N-M`, `-S`) into an
+/// inclusive `(start, end)` within `[0, total)`. Returns `Err(())`
+/// for specs that are unsatisfiable (start past EOF, or empty file).
+fn single_byte_range(spec: &str, total: u64) -> Result<(u64, u64), ()> {
+    if total == 0 {
+        return Err(());
+    }
+    let (start_s, end_s) = spec.split_once('-').ok_or(())?;
+    if start_s.is_empty() {
+        // Suffix range: the last `S` bytes.
+        let suffix: u64 = end_s.parse().map_err(|_| ())?;
+        if suffix == 0 {
+            return Err(());
+        }
+        let start = total.saturating_sub(suffix);
+        return Ok((start, total - 1));
+    }
+    let start: u64 = start_s.parse().map_err(|_| ())?;
+    if start >= total {
+        return Err(());
+    }
+    let end = if end_s.is_empty() {
+        total - 1
+    } else {
+        end_s.parse::<u64>().map_err(|_| ())?.min(total - 1)
+    };
+    // end < start after clamping a spec like `5-3` against a small file.
+    if end < start {
+        return Err(());
+    }
+    Ok((start, end))
 }
 
 #[derive(Deserialize)]
@@ -399,5 +485,18 @@ mod tests {
         for class in [".shell", ".sidebar", ".tree-file", ".doc", ".toolbar", ".edit-split"] {
             assert!(STYLE.contains(class), "missing {class}");
         }
+    }
+
+    #[test]
+    fn single_byte_range_parses_open_closed_and_suffix_specs() {
+        assert_eq!(single_byte_range("0-", 10), Ok((0, 9)));
+        assert_eq!(single_byte_range("2-5", 10), Ok((2, 5)));
+        assert_eq!(single_byte_range("-100", 10), Ok((0, 9))); // suffix clamps to total
+        assert_eq!(single_byte_range("-3", 10), Ok((7, 9)));
+        assert_eq!(single_byte_range("8-99", 10), Ok((8, 9))); // end clamps
+        assert_eq!(single_byte_range("5-3", 10), Err(()));
+        assert_eq!(single_byte_range("99-", 10), Err(()));
+        assert_eq!(single_byte_range("-0", 10), Err(()));
+        assert_eq!(single_byte_range("0-0", 0), Err(()));
     }
 }

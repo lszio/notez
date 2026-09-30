@@ -523,6 +523,49 @@ pub fn render_dynamic_blocks(text: &str) -> String {
     render_janet_blocks(&out)
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+pub fn render_dynamic_blocks_with_context(
+    text: &str,
+    context: &imp::JanetQueryContext,
+) -> String {
+    let is_org = text.lines().any(|line| line.trim_start().to_ascii_lowercase().starts_with("#+begin_src"));
+    let blocks = if is_org { notez_core::document::parse_org_notez_blocks(text) } else { notez_core::document::parse_markdown_notez_blocks(text) };
+    if blocks.is_empty() {
+        return render_janet_blocks(text);
+    }
+    if is_org {
+        let mut out = text.to_string();
+        let mut cursor = 0usize;
+        for block in blocks {
+            let lower = out[cursor..].to_ascii_lowercase();
+            let Some(open_rel) = lower.find("#+begin_src") else { break; };
+            let open = cursor + open_rel;
+            let Some(end_rel) = out[open..].to_ascii_lowercase().find("#+end_src") else { break; };
+            let end = open + end_rel + "#+end_src".len();
+            let outcome = match imp::eval_janet_with_context(&block.program, std::time::Duration::from_millis(block.declared_timeout_ms().unwrap_or(2_000)), Some(context), MAX_RESULT_BYTES) {
+                Ok(value) => notez_core::document::CardOutput::from_value(&value).map_err(|e| JanetScriptError::Runtime(e.to_string())),
+                Err(error) => Err(error),
+            };
+            let card_html = render_card_html(&ExecutedCard { block, outcome });
+            let card_len = card_html.len();
+            out.replace_range(open..end, &card_html);
+            cursor = open + card_len;
+        }
+        return out;
+    }
+    let mut out = text.to_string();
+    for block in blocks.iter().rev() {
+        let outcome = match imp::eval_janet_with_context(&block.program, std::time::Duration::from_millis(block.declared_timeout_ms().unwrap_or(2_000)), Some(context), MAX_RESULT_BYTES) {
+            Ok(value) => notez_core::document::CardOutput::from_value(&value).map_err(|e| JanetScriptError::Runtime(e.to_string())),
+            Err(error) => Err(error),
+        };
+        let card = ExecutedCard { block: block.clone(), outcome };
+        let (start, end) = block.span;
+        out.replace_range(start..end, &render_card_html(&card));
+    }
+    out
+}
+
 #[cfg(target_arch = "wasm32")]
 pub fn render_dynamic_blocks(text: &str) -> String {
     render_janet_blocks(text)
@@ -716,5 +759,17 @@ mod tests {
         assert!(out.contains("let x = 1;"), "non-janet block lost: {out}");
         assert!(out.contains("janet-block-error"), "error pre missing: {out}");
         assert!(out.contains("data-kind=\"forbidden-api\""), "category tag missing: {out}");
+    }
+
+    #[test]
+    fn renders_notez_block_with_query_context() {
+        let body = "Before\n\n```notez id=demo output=list\n{:type \"list\" :items (notez/objects)}\n```\n\nAfter";
+        let context = imp::JanetQueryContext {
+            objects: serde_json::json!([{"locator": "projects/demo/index.org", "kind": "document"}]),
+            ..Default::default()
+        };
+        let out = render_dynamic_blocks_with_context(body, &context);
+        assert!(out.contains("projects/demo/index.org"), "missing query result: {out}");
+        assert!(out.contains("Before") && out.contains("After"), "context lost: {out}");
     }
 }
