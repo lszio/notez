@@ -29,7 +29,19 @@
    - External host: =https://notez.lszio.space=。
    - 记下 slug（下称 =<provider-slug>=）与 client id（=<client-id>=）。
 2. *Application*：绑到上面的 provider，slug 建议 =notez=。
-3. 访问控制在 Application 的 Policy / Group 绑定上做（不绑 = 所有 authentik 用户可见）。
+3. *Outpost 收录（关键坑）*：embedded outpost 的 providers 是*显式列表*，
+   新建 provider *不会自动收录*——症状是所有请求被 forward-auth 以 404
+   透传（authentik 日志：=/outpost.goauthentik.io/auth/traefik= → 404）。
+   修法：Applications → Outposts → embedded outpost → 编辑，把 notez 的
+   Provider 勾进列表。API 等价操作：
+   #+begin_example
+   PATCH /api/v3/outposts/instances/<embedded-uuid>/
+   {"providers": [<hello-pk>, <notez-pk>]}
+   #+end_example
+   注意 =/api/v3/outposts/instances/proxy/= 在 2026.2 返回 404，要用
+   通用的 =/outposts/instances/= 找 embedded outpost 的 uuid。等下一轮
+   5 分钟刷新日志出现 =Loaded application ... notez= 即生效。
+4. 访问控制在 Application 的 Policy / Group 绑定上做（不绑 = 所有 authentik 用户可见）。
 
 * dokploy 部署
 
@@ -65,4 +77,5 @@ curl -s -o /dev/null -w '%{http_code}\n' https://notez.lszio.space/api/v1/dispat
 - *起不来：refusing to serve without authentication* → OIDC 两个变量没进容器（检查 Environment 作用域）。
 - *302 循环 / 403* → Proxy Provider 的 External host 与 =notez.lszio.space= 不一致，或 outpost 未含该 application。
 - *forward-auth 502* → Traefik 到 =infra-authentik-kzthsk-server-1:9000= 不可达（容器名变了：以 authentik compose 的实际 server 容器为准）。
+- *forward-auth 后 404（authentik 页面）* → 新 provider 未被 embedded outpost 收录，见上文「Outpost 收录（关键坑）」。
 - *API 401 但浏览器正常* → audience 不配：=NOTEZ_API_OIDC_AUDIENCE= 必须 = provider client id。
